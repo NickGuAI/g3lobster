@@ -1,0 +1,10 @@
+name: example
+enabled: true
+transport:
+  type: sse
+  url: ${MCP_EXAMPLE_URL}
+  headers:
+    Authorization: Bearer ${MCP_EXAMPLE_TOKEN}
+description: Example MCP server configuration
+tool_patterns:
+  - mcp__example__*

@@ -1,0 +1,25 @@
+agents:
+  data_dir: ./data
+  summarize_threshold: 20
+  context_messages: 12
+  health_check_interval_s: 30
+  stuck_timeout_s: 300
+gemini:
+  command: gemini
+  args:
+  - -y
+  workspace_dir: .
+  response_timeout_s: 120
+  idle_read_window_s: 0.6
+mcp:
+  config_dir: ./config/mcp
+  default_servers:
+  - '*'
+chat:
+  enabled: true
+  space_id: spaces/YOUR_SPACE_ID
+  space_name: your-space-name
+  poll_interval_s: 2
+server:
+  host: 0.0.0.0
+  port: 40000
