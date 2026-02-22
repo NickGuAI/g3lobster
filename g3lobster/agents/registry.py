@@ -4,15 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from g3lobster.agents.persona import AgentPersona, agent_dir, list_personas, load_persona
-from g3lobster.memory.context import ContextBuilder
+from g3lobster.agents.subagent_registry import SubagentRegistry, SubagentRun
+from g3lobster.memory.context import ContextBuilder, summarize_agent_soul
 from g3lobster.memory.global_memory import GlobalMemoryManager
 from g3lobster.memory.manager import MemoryManager
 from g3lobster.pool.health import HealthInspector
+from g3lobster.tasks.types import Task, TaskStatus
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -80,6 +86,7 @@ class AgentRegistry:
         gemini_timeout_s: float = 45.0,
         gemini_cwd: Optional[str] = None,
         global_memory_manager: Optional[GlobalMemoryManager] = None,
+        subagent_registry: Optional[SubagentRegistry] = None,
         # Legacy parameter; ignored.
         summarize_threshold: int = 20,
     ):
@@ -97,6 +104,7 @@ class AgentRegistry:
         self.health_check_interval_s = health_check_interval_s
         self.stuck_timeout_s = stuck_timeout_s
         self.global_memory_manager = global_memory_manager
+        self.subagent_registry = subagent_registry or SubagentRegistry(Path(self.data_dir))
         self.agent_factory = agent_factory
 
         self.health = HealthInspector()
@@ -151,6 +159,8 @@ class AgentRegistry:
             message_limit=self.context_messages,
             system_preamble=persona.soul,
             global_memory_manager=self.global_memory_manager,
+            agent_id=persona.id,
+            delegation_agents_provider=lambda current_agent_id=persona.id: self._delegation_agents(current_agent_id),
         )
         agent = self.agent_factory(persona, memory, context)
         await agent.start(mcp_servers=persona.mcp_servers)
@@ -225,6 +235,70 @@ class AgentRegistry:
 
         return {"agents": items}
 
+    def _delegation_agents(self, current_agent_id: str) -> List[tuple[str, str]]:
+        peers: List[tuple[str, str]] = []
+        for persona in list_personas(self.data_dir):
+            if not persona.enabled:
+                continue
+            if persona.id == current_agent_id:
+                continue
+            peers.append((persona.id, summarize_agent_soul(persona.soul)))
+        return peers
+
+    async def delegate_task(
+        self,
+        parent_agent_id: str,
+        child_agent_id: str,
+        task_prompt: str,
+        parent_session_id: str,
+        timeout_s: float = 300.0,
+    ) -> SubagentRun:
+        """Delegate a task from one agent to another and wait for the result."""
+        run = self.subagent_registry.register_run(
+            parent_agent_id=parent_agent_id,
+            child_agent_id=child_agent_id,
+            task=task_prompt,
+            parent_session_id=parent_session_id,
+            timeout_s=timeout_s,
+        )
+
+        child = self.get_agent(child_agent_id)
+        if not child:
+            started = await self.start_agent(child_agent_id)
+            if not started:
+                failed = self.subagent_registry.fail_run(run.run_id, f"Failed to start agent {child_agent_id}")
+                return failed or run
+            child = self.get_agent(child_agent_id)
+            if not child:
+                failed = self.subagent_registry.fail_run(
+                    run.run_id,
+                    f"Agent {child_agent_id} started but runtime was unavailable",
+                )
+                return failed or run
+
+        self.subagent_registry.mark_running(run.run_id)
+
+        delegated_task = Task(
+            prompt=str(task_prompt),
+            session_id=run.session_id,
+            timeout_s=max(1.0, float(timeout_s)),
+        )
+        try:
+            result_task = await child.assign(delegated_task)
+        except Exception as exc:
+            failed = self.subagent_registry.fail_run(run.run_id, str(exc))
+            return failed or run
+
+        if result_task.status == TaskStatus.COMPLETED and result_task.result is not None:
+            completed = self.subagent_registry.complete_run(run.run_id, result_task.result)
+            return completed or run
+
+        failed = self.subagent_registry.fail_run(
+            run.run_id,
+            result_task.error or "Delegated task failed",
+        )
+        return failed or run
+
     async def _health_loop(self) -> None:
         while not self._stopping:
             await asyncio.sleep(self.health_check_interval_s)
@@ -237,3 +311,12 @@ class AgentRegistry:
                 if issue.agent_id not in self._agents:
                     continue
                 await self.restart_agent(issue.agent_id)
+
+            timed_out = self.subagent_registry.check_timeouts()
+            for run in timed_out:
+                logger.warning(
+                    "Delegation run %s timed out (%s -> %s)",
+                    run.run_id,
+                    run.parent_agent_id,
+                    run.child_agent_id,
+                )

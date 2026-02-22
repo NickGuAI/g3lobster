@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Callable, List, Optional, Sequence, Tuple
 
 from g3lobster.memory.global_memory import GlobalMemoryManager
 from g3lobster.memory.manager import MemoryManager
@@ -19,12 +19,16 @@ class ContextBuilder:
         system_preamble: str = "",
         global_memory_manager: Optional[GlobalMemoryManager] = None,
         procedure_limit: int = 3,
+        agent_id: Optional[str] = None,
+        delegation_agents_provider: Optional[Callable[[], Sequence[Tuple[str, str]]]] = None,
     ):
         self.memory_manager = memory_manager
         self.message_limit = message_limit
         self.system_preamble = system_preamble.strip()
         self.global_memory_manager = global_memory_manager
         self.procedure_limit = max(1, int(procedure_limit))
+        self.agent_id = str(agent_id).strip() if agent_id else None
+        self.delegation_agents_provider = delegation_agents_provider
 
     def build(self, session_id: str, prompt: str) -> str:
         memory_text = self.memory_manager.read_memory().strip()
@@ -54,11 +58,16 @@ class ContextBuilder:
             history_lines.append(f"{role}: {content}")
 
         parts = []
-        if self.system_preamble:
+        persona_preamble = self.system_preamble
+        delegation_section = self._format_delegation_agents()
+        if delegation_section:
+            persona_preamble = f"{persona_preamble}\n\n{delegation_section}".strip()
+
+        if persona_preamble:
             parts.extend(
                 [
                     "# Agent Persona",
-                    self.system_preamble,
+                    persona_preamble,
                     "",
                 ]
             )
@@ -100,3 +109,45 @@ class ContextBuilder:
                 lines.append(f"{index}. {step}")
             lines.append("")
         return "\n".join(lines).rstrip()
+
+    def _format_delegation_agents(self) -> str:
+        if not self.delegation_agents_provider:
+            return ""
+
+        raw_items = self.delegation_agents_provider() or []
+        peers: List[Tuple[str, str]] = []
+        for item in raw_items:
+            if not item or len(item) < 1:
+                continue
+            agent_id = str(item[0]).strip()
+            if not agent_id:
+                continue
+            if self.agent_id and agent_id == self.agent_id:
+                continue
+            description = str(item[1]).strip() if len(item) > 1 else ""
+            peers.append((agent_id, description or "No description provided."))
+
+        lines = [
+            "## Available Agents for Delegation",
+            "You can delegate tasks to other agents using the delegate_to_agent tool.",
+        ]
+        if not peers:
+            lines.append("Available agents: (none)")
+            return "\n".join(lines)
+
+        lines.append("Available agents:")
+        for agent_id, description in sorted(peers):
+            lines.append(f"- {agent_id}: {description}")
+        return "\n".join(lines)
+
+
+def summarize_agent_soul(soul_text: str, max_length: int = 140) -> str:
+    """Extract a short one-line summary from SOUL.md-like text."""
+    for raw_line in str(soul_text or "").splitlines():
+        candidate = raw_line.strip()
+        if not candidate:
+            continue
+        candidate = candidate.lstrip("#").strip()
+        if candidate:
+            return candidate[:max_length]
+    return "No description provided."

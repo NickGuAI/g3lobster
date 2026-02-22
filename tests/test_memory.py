@@ -30,3 +30,24 @@ def test_memory_manager_and_context_builder_with_persona_preamble(tmp_path) -> N
     assert "# User Preferences" in prompt
     assert "User prefers concise replies." in prompt
     assert "What next?" in prompt
+
+
+def test_context_builder_includes_delegation_section(tmp_path) -> None:
+    memory = MemoryManager(data_dir=str(tmp_path / "data"), compact_threshold=20)
+    builder = ContextBuilder(
+        memory_manager=memory,
+        message_limit=2,
+        system_preamble="You are Athena.",
+        agent_id="athena",
+        delegation_agents_provider=lambda: [
+            ("athena", "planner"),
+            ("hephaestus", "code specialist"),
+        ],
+    )
+
+    prompt = builder.build("thread-a", "Plan this project")
+
+    assert "## Available Agents for Delegation" in prompt
+    assert "delegate_to_agent" in prompt
+    assert "- hephaestus: code specialist" in prompt
+    assert "- athena:" not in prompt

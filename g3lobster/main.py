@@ -10,6 +10,7 @@ from typing import Optional, Sequence
 import uvicorn
 
 from g3lobster.agents.registry import AgentRegistry
+from g3lobster.agents.subagent_registry import SubagentRegistry
 from g3lobster.api.server import create_app
 from g3lobster.chat.bridge import ChatBridge
 from g3lobster.cli.process import GeminiProcess
@@ -28,6 +29,7 @@ def build_runtime(config: AppConfig):
     mcp_loader = MCPConfigLoader(config_dir=config.mcp.config_dir)
     mcp_manager = MCPManager(loader=mcp_loader)
     global_memory_manager = GlobalMemoryManager(config.agents.data_dir)
+    subagent_registry = SubagentRegistry(Path(config.agents.data_dir))
 
     def process_factory(model_name: str) -> GeminiProcess:
         args = list(config.gemini.args)
@@ -67,6 +69,7 @@ def build_runtime(config: AppConfig):
         health_check_interval_s=config.agents.health_check_interval_s,
         stuck_timeout_s=config.agents.stuck_timeout_s,
         global_memory_manager=global_memory_manager,
+        subagent_registry=subagent_registry,
         agent_factory=agent_factory,
     )
 
