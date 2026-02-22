@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from g3lobster.memory.global_memory import GlobalMemoryManager
 from g3lobster.memory.manager import MemoryManager
@@ -19,12 +19,14 @@ class ContextBuilder:
         system_preamble: str = "",
         global_memory_manager: Optional[GlobalMemoryManager] = None,
         procedure_limit: int = 3,
+        agent_list_provider: Optional[Callable[[], List[Dict[str, Any]]]] = None,
     ):
         self.memory_manager = memory_manager
         self.message_limit = message_limit
         self.system_preamble = system_preamble.strip()
         self.global_memory_manager = global_memory_manager
         self.procedure_limit = max(1, int(procedure_limit))
+        self.agent_list_provider = agent_list_provider
 
     def build(self, session_id: str, prompt: str) -> str:
         memory_text = self.memory_manager.read_memory().strip()
@@ -63,6 +65,17 @@ class ContextBuilder:
                 ]
             )
 
+        delegation_section = self._format_available_agents()
+        if delegation_section:
+            parts.extend(
+                [
+                    "# Available Agents for Delegation",
+                    "You can delegate tasks to other agents using the delegate_to_agent tool.",
+                    delegation_section,
+                    "",
+                ]
+            )
+
         parts.extend(
             [
                 "# User Preferences",
@@ -85,6 +98,29 @@ class ContextBuilder:
             ]
         )
         return "\n".join(parts).strip() + "\n"
+
+    def _format_available_agents(self) -> str:
+        """Format the list of available sibling agents for the preamble."""
+        if not self.agent_list_provider:
+            return ""
+        try:
+            agents = self.agent_list_provider()
+        except Exception:
+            return ""
+        if not agents:
+            return ""
+
+        lines: List[str] = []
+        for agent in agents:
+            agent_id = agent.get("id", "unknown")
+            name = agent.get("name", agent_id)
+            emoji = agent.get("emoji", "")
+            description = agent.get("description", "")
+            entry = f"- {emoji} **{name}** (id: `{agent_id}`)"
+            if description:
+                entry += f": {description}"
+            lines.append(entry)
+        return "\n".join(lines)
 
     @staticmethod
     def _format_procedures(procedures: List[Procedure]) -> str:
