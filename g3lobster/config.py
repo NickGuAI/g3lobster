@@ -44,6 +44,7 @@ class ChatConfig:
     space_id: Optional[str] = None
     space_name: Optional[str] = None
     poll_interval_s: float = 2.0
+    event_auth_audience: Optional[str] = None
 
 
 @dataclass
@@ -167,6 +168,7 @@ def save_chat_config(chat: ChatConfig, config_path: str) -> None:
         "space_id": chat.space_id,
         "space_name": chat.space_name,
         "poll_interval_s": chat.poll_interval_s,
+        "event_auth_audience": chat.event_auth_audience,
     }
 
     path.parent.mkdir(parents=True, exist_ok=True)
