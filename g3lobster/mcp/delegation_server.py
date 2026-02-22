@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 from typing import Dict, List
 from urllib import error, request
@@ -44,7 +45,16 @@ class DelegationAPIClient:
             "parent_session_id": self.parent_session_id,
             "timeout_s": normalized_timeout_s,
         }
-        return self._request_json("POST", "/delegation/run", payload)
+        request_timeout_s = max(5.0, normalized_timeout_s + 15.0)
+        return self._request_json("POST", "/delegation/run", payload, timeout_s=request_timeout_s)
+
+    async def delegate_to_agent_async(self, agent_id: str, task: str, timeout_s: float = 300.0) -> Dict[str, object]:
+        return await asyncio.to_thread(
+            self.delegate_to_agent,
+            agent_id=agent_id,
+            task=task,
+            timeout_s=timeout_s,
+        )
 
     def list_agents(self) -> List[Dict[str, str]]:
         agents_payload = self._request_json("GET", "/agents")
@@ -77,7 +87,16 @@ class DelegationAPIClient:
             )
         return results
 
-    def _request_json(self, method: str, path: str, body: Dict[str, object] = None):
+    async def list_agents_async(self) -> List[Dict[str, str]]:
+        return await asyncio.to_thread(self.list_agents)
+
+    def _request_json(
+        self,
+        method: str,
+        path: str,
+        body: Dict[str, object] = None,
+        timeout_s: float = 30.0,
+    ):
         req_body = None
         headers = {"Accept": "application/json"}
         if body is not None:
@@ -91,7 +110,7 @@ class DelegationAPIClient:
             method=method,
         )
         try:
-            with request.urlopen(req, timeout=30.0) as response:
+            with request.urlopen(req, timeout=float(timeout_s)) as response:
                 raw = response.read().decode("utf-8")
         except error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
@@ -118,14 +137,14 @@ def create_mcp_server(base_url: str, parent_agent_id: str, parent_session_id: st
     server = FastMCP("g3lobster-delegation")
 
     @server.tool()
-    def delegate_to_agent(agent_id: str, task: str, timeout_s: float = 300.0) -> Dict[str, object]:
+    async def delegate_to_agent(agent_id: str, task: str, timeout_s: float = 300.0) -> Dict[str, object]:
         """Delegate a task to another g3lobster agent and return the run result."""
-        return client.delegate_to_agent(agent_id=agent_id, task=task, timeout_s=timeout_s)
+        return await client.delegate_to_agent_async(agent_id=agent_id, task=task, timeout_s=timeout_s)
 
     @server.tool()
-    def list_agents() -> List[Dict[str, str]]:
+    async def list_agents() -> List[Dict[str, str]]:
         """List available g3lobster agents and short capability summaries."""
-        return client.list_agents()
+        return await client.list_agents_async()
 
     return server
 

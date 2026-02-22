@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 
 import pytest
@@ -157,6 +158,33 @@ def test_rejects_self_delegation(tmp_path) -> None:
         )
 
 
+def test_rejects_transitive_cycle(tmp_path) -> None:
+    registry = SubagentRegistry(tmp_path)
+    run_a_to_b = registry.register_run(
+        parent_agent_id="athena",
+        child_agent_id="hephaestus",
+        task="step 1",
+        parent_session_id="thread-1",
+    )
+    registry.mark_running(run_a_to_b.run_id)
+
+    run_b_to_c = registry.register_run(
+        parent_agent_id="hephaestus",
+        child_agent_id="poseidon",
+        task="step 2",
+        parent_session_id="thread-2",
+    )
+    registry.mark_running(run_b_to_c.run_id)
+
+    with pytest.raises(ValueError, match="Circular delegation"):
+        registry.register_run(
+            parent_agent_id="poseidon",
+            child_agent_id="athena",
+            task="step 3",
+            parent_session_id="thread-3",
+        )
+
+
 def test_rejects_blank_task_and_parent_session(tmp_path) -> None:
     registry = SubagentRegistry(tmp_path)
     with pytest.raises(ValueError, match="task is required"):
@@ -236,5 +264,56 @@ async def test_delegate_task_auto_starts_child(tmp_path) -> None:
     assert run.parent_session_id == "thread-123"
     assert run.session_id.startswith("delegation-")
     assert registry.get_agent("hephaestus") is not None
+
+    await registry.stop_all()
+
+
+@pytest.mark.asyncio
+async def test_delegate_task_times_out_when_child_is_slow(tmp_path) -> None:
+    class SlowFakeAgent(FakeAgent):
+        async def assign(self, task):
+            await asyncio.sleep(0.3)
+            return await super().assign(task)
+
+    data_dir = str(tmp_path / "data")
+    save_persona(
+        data_dir,
+        AgentPersona(
+            id="athena",
+            name="Athena",
+            soul="Research specialist.",
+            enabled=True,
+        ),
+    )
+    save_persona(
+        data_dir,
+        AgentPersona(
+            id="hephaestus",
+            name="Hephaestus",
+            soul="Build specialist.",
+            enabled=True,
+        ),
+    )
+
+    registry = AgentRegistry(
+        data_dir=data_dir,
+        context_messages=6,
+        health_check_interval_s=3600,
+        stuck_timeout_s=60,
+        agent_factory=lambda persona, _memory, _context: SlowFakeAgent(persona.id),
+    )
+
+    await registry.start_agent("athena")
+    run = await registry.delegate_task(
+        parent_agent_id="athena",
+        child_agent_id="hephaestus",
+        task_prompt="slow delegated task",
+        parent_session_id="thread-timeout",
+        timeout_s=0.1,
+    )
+    assert run.status == RunStatus.TIMED_OUT
+    assert run.result is None
+    assert run.error is not None
+    assert "timed out after" in run.error.lower()
 
     await registry.stop_all()

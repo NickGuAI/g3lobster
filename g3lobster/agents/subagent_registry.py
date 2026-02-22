@@ -9,7 +9,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,8 @@ class SubagentRun:
 class SubagentRegistry:
     """Stores subagent delegation run metadata with JSON persistence."""
 
+    _ACTIVE_STATUSES = {RunStatus.REGISTERED, RunStatus.RUNNING}
+
     def __init__(self, data_dir: Path):
         self._data_dir = Path(data_dir).expanduser().resolve()
         self._runs: Dict[str, SubagentRun] = {}
@@ -71,6 +73,8 @@ class SubagentRegistry:
         if normalized_timeout_s <= 0:
             raise ValueError("timeout_s must be greater than 0")
         if normalized_parent == normalized_child:
+            raise ValueError("Circular delegation is not allowed")
+        if self._would_create_cycle(normalized_parent, normalized_child):
             raise ValueError("Circular delegation is not allowed")
 
         run = SubagentRun(
@@ -117,6 +121,16 @@ class SubagentRegistry:
             return None
         run.status = RunStatus.FAILED
         run.error = str(error).strip() or "Unknown failure"
+        run.completed_at = time.time()
+        self._save_to_disk()
+        return run
+
+    def timeout_run(self, run_id: str, error: Optional[str] = None) -> Optional[SubagentRun]:
+        run = self._runs.get(run_id)
+        if not run:
+            return None
+        run.status = RunStatus.TIMED_OUT
+        run.error = str(error).strip() if error else f"Timed out after {run.timeout_s:.1f}s"
         run.completed_at = time.time()
         self._save_to_disk()
         return run
@@ -193,3 +207,25 @@ class SubagentRegistry:
                 continue
 
         self._runs = loaded
+
+    def _would_create_cycle(self, parent_agent_id: str, child_agent_id: str) -> bool:
+        """Return True when parent -> child would close a delegation cycle."""
+        if parent_agent_id == child_agent_id:
+            return True
+
+        frontier = [child_agent_id]
+        seen: Set[str] = set()
+        while frontier:
+            current = frontier.pop()
+            if current == parent_agent_id:
+                return True
+            if current in seen:
+                continue
+            seen.add(current)
+            for run in self._runs.values():
+                if run.status not in self._ACTIVE_STATUSES:
+                    continue
+                if run.parent_agent_id != current:
+                    continue
+                frontier.append(run.child_agent_id)
+        return False

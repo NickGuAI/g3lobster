@@ -14,8 +14,8 @@ class StubDelegationClient(DelegationAPIClient):
         )
         self.calls = []
 
-    def _request_json(self, method: str, path: str, body=None):
-        self.calls.append((method, path, body))
+    def _request_json(self, method: str, path: str, body=None, timeout_s: float = 30.0):
+        self.calls.append((method, path, body, timeout_s))
         if method == "POST" and path == "/delegation/run":
             return {"run_id": "run-1", "status": "completed", "result": "ok", "error": None}
         if method == "GET" and path == "/agents":
@@ -33,9 +33,10 @@ def test_delegate_client_preserves_timeout_value() -> None:
     assert payload["status"] == "completed"
     post_calls = [call for call in client.calls if call[0] == "POST"]
     assert post_calls
-    _method, _path, body = post_calls[0]
+    _method, _path, body, timeout_s = post_calls[0]
     assert body is not None
     assert body["timeout_s"] == 0.25
+    assert timeout_s == pytest.approx(15.25)
 
 
 def test_delegate_client_rejects_non_positive_timeout() -> None:
@@ -67,3 +68,12 @@ def test_list_agents_supports_dict_agents_payload() -> None:
             "description": "Build specialist.",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_delegate_client_async_wrapper() -> None:
+    client = StubDelegationClient()
+
+    payload = await client.delegate_to_agent_async(agent_id="hephaestus", task="build", timeout_s=0.25)
+
+    assert payload["status"] == "completed"

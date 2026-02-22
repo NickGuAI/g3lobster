@@ -284,7 +284,10 @@ class AgentRegistry:
             timeout_s=run.timeout_s,
         )
         try:
-            result_task = await child.assign(delegated_task)
+            result_task = await asyncio.wait_for(child.assign(delegated_task), timeout=run.timeout_s)
+        except asyncio.TimeoutError:
+            timed_out = self.subagent_registry.timeout_run(run.run_id)
+            return timed_out or run
         except Exception as exc:
             failed = self.subagent_registry.fail_run(run.run_id, str(exc))
             return failed or run
