@@ -122,6 +122,17 @@ export function updateAgentMemory(agentId, content) {
   });
 }
 
+export function getAgentProcedures(agentId) {
+  return request(`/agents/${encodeURIComponent(agentId)}/procedures`, { method: "GET" });
+}
+
+export function updateAgentProcedures(agentId, content) {
+  return request(`/agents/${encodeURIComponent(agentId)}/procedures`, {
+    method: "PUT",
+    body: JSON.stringify({ content }),
+  });
+}
+
 export function listAgentSessions(agentId) {
   return request(`/agents/${encodeURIComponent(agentId)}/sessions`, { method: "GET" });
 }
@@ -131,6 +142,32 @@ export function getAgentSession(agentId, sessionId) {
     `/agents/${encodeURIComponent(agentId)}/sessions/${encodeURIComponent(sessionId)}`,
     { method: "GET" },
   );
+}
+
+export function getGlobalUserMemory() {
+  return request("/agents/_global/user-memory", { method: "GET" });
+}
+
+export function updateGlobalUserMemory(content) {
+  return request("/agents/_global/user-memory", {
+    method: "PUT",
+    body: JSON.stringify({ content }),
+  });
+}
+
+export function getGlobalProcedures() {
+  return request("/agents/_global/procedures", { method: "GET" });
+}
+
+export function updateGlobalProcedures(content) {
+  return request("/agents/_global/procedures", {
+    method: "PUT",
+    body: JSON.stringify({ content }),
+  });
+}
+
+export function listGlobalKnowledge() {
+  return request("/agents/_global/knowledge", { method: "GET" });
 }
 
 export function linkAgentBot(agentId, botUserId) {

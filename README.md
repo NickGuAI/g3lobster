@@ -1,10 +1,12 @@
 # g3lobster
 
-Google Chat-first multi-agent service with named personas, per-agent memory, and FastAPI control APIs.
+Google Chat-first multi-agent service with named personas, layered memory, and FastAPI control APIs.
 
 ## Highlights
 
-- Named agents with persistent identity (`agent.json`, `SOUL.md`, `MEMORY.md`, `sessions/*.jsonl`)
+- Named agents with persistent identity (`agent.json`, `SOUL.md`, `.memory/*`, `sessions/*.jsonl`)
+- Memory v2: auto-compaction of long sessions + procedural memory extraction
+- Global user memory at `data/.memory` (shared preferences, procedures, and knowledge files)
 - One Google Chat bot per agent (`bot_user_id` link + mention routing)
 - Guided setup wizard at `/ui` for OAuth credentials, space setup, first agent, and launch
 - Agent lifecycle APIs (`start`, `stop`, `restart`, memory/session inspection)
@@ -14,8 +16,11 @@ Google Chat-first multi-agent service with named personas, per-agent memory, and
 - `g3lobster/agents/persona.py`: persona data model + filesystem CRUD
 - `g3lobster/agents/registry.py`: named-agent runtime registry
 - `g3lobster/chat/bridge.py`: Google Chat polling and mention-to-agent routing
-- `g3lobster/api/routes_agents.py`: agent CRUD/lifecycle/memory/session routes
+- `g3lobster/api/routes_agents.py`: agent/global memory CRUD + lifecycle/session routes
 - `g3lobster/api/routes_setup.py`: setup and bridge control routes
+- `g3lobster/memory/compactor.py`: message-count based auto-compaction
+- `g3lobster/memory/procedures.py`: procedural memory extraction and matching
+- `g3lobster/memory/global_memory.py`: global `.memory` manager
 - `g3lobster/static/`: setup wizard + agent management UI
 
 ## Prerequisites
@@ -56,8 +61,15 @@ G3LOBSTER_GEMINI_COMMAND=gemini # path to Gemini CLI
 data/agents/{agent_id}/
   agent.json
   SOUL.md
-  memory/MEMORY.md
+  .memory/MEMORY.md
+  .memory/PROCEDURES.md
+  .memory/daily/*.md
   sessions/*.jsonl
+
+data/.memory/
+  USER.md
+  PROCEDURES.md
+  knowledge/*
 ```
 
 ## API Quick Checks

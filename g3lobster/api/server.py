@@ -23,6 +23,7 @@ def create_app(
     config: Optional[AppConfig] = None,
     config_path: Optional[str] = None,
     chat_auth_dir: Optional[str] = None,
+    global_memory_manager: Optional[object] = None,
 ) -> FastAPI:
     runtime_config = config or AppConfig()
     runtime_config_path = str(Path(config_path or "config.yaml").expanduser().resolve())
@@ -47,6 +48,8 @@ def create_app(
     app.state.config_path = runtime_config_path
     app.state.bridge_lock = asyncio.Lock()
     app.state.chat_auth_dir = chat_auth_dir
+    app.state.global_memory_manager = global_memory_manager
+    app.state._stopped_memory_managers = {}
 
     app.include_router(health_router)
     app.include_router(agents_router)

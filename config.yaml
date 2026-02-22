@@ -1,6 +1,10 @@
 agents:
   data_dir: ./data
-  summarize_threshold: 20
+  compact_threshold: 40
+  compact_keep_ratio: 0.25
+  compact_chunk_size: 10
+  procedure_min_frequency: 3
+  memory_max_sections: 50
   context_messages: 12
   health_check_interval_s: 30
   stuck_timeout_s: 300
@@ -17,8 +21,8 @@ mcp:
   - '*'
 chat:
   enabled: true
-  space_id: spaces/YOUR_SPACE_ID
-  space_name: your-space-name
+  space_id: spaces/AAQAuxoTw1w
+  space_name: my-space
   poll_interval_s: 2
 server:
   host: 0.0.0.0

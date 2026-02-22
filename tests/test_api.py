@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from g3lobster.agents.registry import AgentRegistry
 from g3lobster.api.server import create_app
 from g3lobster.config import AppConfig
+from g3lobster.memory.global_memory import GlobalMemoryManager
 from g3lobster.pool.types import AgentState
 from g3lobster.tasks.types import TaskStatus
 
@@ -88,7 +89,11 @@ def _write_test_config(path: Path) -> None:
     payload = {
         "agents": {
             "data_dir": "./data",
-            "summarize_threshold": 4,
+            "compact_threshold": 8,
+            "compact_keep_ratio": 0.25,
+            "compact_chunk_size": 4,
+            "procedure_min_frequency": 3,
+            "memory_max_sections": 50,
             "context_messages": 6,
             "health_check_interval_s": 3600,
             "stuck_timeout_s": 120,
@@ -112,7 +117,10 @@ def _build_test_app(tmp_path: Path):
 
     config = AppConfig()
     config.agents.data_dir = str(data_dir)
-    config.agents.summarize_threshold = 4
+    config.agents.compact_threshold = 8
+    config.agents.compact_keep_ratio = 0.25
+    config.agents.compact_chunk_size = 4
+    config.agents.procedure_min_frequency = 3
     config.agents.context_messages = 6
     config.agents.health_check_interval_s = 3600
     config.agents.stuck_timeout_s = 120
@@ -123,7 +131,11 @@ def _build_test_app(tmp_path: Path):
 
     registry = AgentRegistry(
         data_dir=str(data_dir),
-        summarize_threshold=config.agents.summarize_threshold,
+        compact_threshold=config.agents.compact_threshold,
+        compact_keep_ratio=config.agents.compact_keep_ratio,
+        compact_chunk_size=config.agents.compact_chunk_size,
+        procedure_min_frequency=config.agents.procedure_min_frequency,
+        memory_max_sections=config.agents.memory_max_sections,
         context_messages=config.agents.context_messages,
         health_check_interval_s=config.agents.health_check_interval_s,
         stuck_timeout_s=config.agents.stuck_timeout_s,
@@ -149,6 +161,7 @@ def _build_test_app(tmp_path: Path):
         config=config,
         config_path=str(config_path),
         chat_auth_dir=str(chat_auth_dir),
+        global_memory_manager=GlobalMemoryManager(str(data_dir)),
     )
     return app, bridge_instances, config_path
 
@@ -204,9 +217,58 @@ def test_agents_routes_crud_and_memory(tmp_path):
         assert read_memory.status_code == 200
         assert "Remember this" in read_memory.json()["content"]
 
+        write_procedures = client.put(
+            f"/agents/{agent_id}/procedures",
+            json={
+                "content": (
+                    "# PROCEDURES\n\n"
+                    "## Deploy\n"
+                    "Trigger: deploy\n\n"
+                    "Steps:\n"
+                    "1. Check git status\n"
+                    "2. Run tests\n"
+                    "3. Deploy\n"
+                )
+            },
+        )
+        assert write_procedures.status_code == 200
+
+        bad_procedures = client.put(
+            f"/agents/{agent_id}/procedures",
+            json={"content": "# PROCEDURES\n\nthis is unstructured text\n"},
+        )
+        assert bad_procedures.status_code == 422
+
+        read_procedures = client.get(f"/agents/{agent_id}/procedures")
+        assert read_procedures.status_code == 200
+        assert "Deploy" in read_procedures.json()["content"]
+
         sessions = client.get(f"/agents/{agent_id}/sessions")
         assert sessions.status_code == 200
         assert sessions.json() == {"sessions": []}
+
+        set_global = client.put(
+            "/agents/_global/user-memory",
+            json={"content": "# USER\n\nUse terse answers."},
+        )
+        assert set_global.status_code == 200
+
+        get_global = client.get("/agents/_global/user-memory")
+        assert get_global.status_code == 200
+        assert "Use terse answers" in get_global.json()["content"]
+
+        legacy_global = client.get("/agents/global/user-memory")
+        assert legacy_global.status_code == 404
+
+        set_global_procedures = client.put(
+            "/agents/_global/procedures",
+            json={"content": "# PROCEDURES\n\n## Deploy\nTrigger: deploy app\n"},
+        )
+        assert set_global_procedures.status_code == 200
+
+        get_global_knowledge = client.get("/agents/_global/knowledge")
+        assert get_global_knowledge.status_code == 200
+        assert get_global_knowledge.json() == {"items": []}
 
         link = client.post(f"/agents/{agent_id}/link-bot", json={"bot_user_id": "users/777"})
         assert link.status_code == 200
@@ -223,6 +285,34 @@ def test_agents_routes_crud_and_memory(tmp_path):
         ui = client.get("/ui")
         assert ui.status_code == 200
         assert "Google Chat Agent Console" in ui.text
+
+
+def test_create_agent_rejects_reserved_global_id(tmp_path):
+    app, _bridge_instances, _config_path = _build_test_app(tmp_path)
+
+    with TestClient(app) as client:
+        create = client.post(
+            "/agents",
+            json={
+                "name": "Global",
+                "emoji": "🌐",
+                "soul": "Reserved id probe.",
+                "model": "gemini",
+                "mcp_servers": ["*"],
+            },
+        )
+        assert create.status_code == 422
+        assert "reserved" in create.json()["detail"].lower()
+
+        set_global = client.put(
+            "/agents/_global/user-memory",
+            json={"content": "# USER\n\nUse terse answers."},
+        )
+        assert set_global.status_code == 200
+
+        get_global = client.get("/agents/_global/user-memory")
+        assert get_global.status_code == 200
+        assert "Use terse answers" in get_global.json()["content"]
 
 
 def test_setup_routes_bridge_lifecycle(monkeypatch, tmp_path):
@@ -259,7 +349,7 @@ def test_setup_routes_bridge_lifecycle(monkeypatch, tmp_path):
 
         space = client.post("/setup/space", json={"space_id": "spaces/new", "space_name": "Ops"})
         assert space.status_code == 200
-        assert space.json() == {"configured": True}
+        assert space.json() == {"configured": True, "space_id": "spaces/new"}
 
         create_agent = client.post(
             "/agents",

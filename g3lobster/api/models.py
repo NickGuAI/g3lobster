@@ -58,6 +58,10 @@ class SessionListResponse(BaseModel):
     sessions: List[str]
 
 
+class KnowledgeListResponse(BaseModel):
+    items: List[str]
+
+
 class LinkBotRequest(BaseModel):
     bot_user_id: str = Field(min_length=1)
 

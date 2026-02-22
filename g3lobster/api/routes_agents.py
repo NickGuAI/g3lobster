@@ -11,6 +11,7 @@ from g3lobster.agents.persona import (
     agent_dir,
     delete_persona,
     ensure_unique_agent_id,
+    is_reserved_agent_id,
     load_persona,
     save_persona,
     slugify_agent_id,
@@ -20,12 +21,14 @@ from g3lobster.api.models import (
     AgentDetailResponse,
     AgentResponse,
     AgentUpdateRequest,
+    KnowledgeListResponse,
     LinkBotRequest,
     MemoryResponse,
     MemoryUpdateRequest,
     SessionListResponse,
     TestAgentRequest,
 )
+from g3lobster.memory.global_memory import GlobalMemoryManager
 from g3lobster.memory.manager import MemoryManager
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -47,12 +50,30 @@ def _memory_manager(request: Request, agent_id: str) -> MemoryManager:
     if runtime:
         return runtime.memory_manager
 
+    # Cache managers for stopped agents so concurrent requests share
+    # the same SessionStore (and its locks) instead of each getting an
+    # independent instance that could corrupt JSONL files.
+    cache: dict = request.app.state._stopped_memory_managers
+    cached = cache.get(agent_id)
+    if cached is not None:
+        return cached
+
     config = request.app.state.config
     data_dir = str(agent_dir(config.agents.data_dir, agent_id))
-    return MemoryManager(
+    manager = MemoryManager(
         data_dir=data_dir,
-        summarize_threshold=config.agents.summarize_threshold,
+        compact_threshold=config.agents.compact_threshold,
+        compact_keep_ratio=config.agents.compact_keep_ratio,
+        compact_chunk_size=config.agents.compact_chunk_size,
+        procedure_min_frequency=config.agents.procedure_min_frequency,
+        memory_max_sections=config.agents.memory_max_sections,
+        gemini_command=config.gemini.command,
+        gemini_args=config.gemini.args,
+        gemini_timeout_s=config.gemini.response_timeout_s,
+        gemini_cwd=config.gemini.workspace_dir,
     )
+    cache[agent_id] = manager
+    return manager
 
 
 def _ensure_persona(data_dir: str, agent_id: str) -> AgentPersona:
@@ -65,6 +86,13 @@ def _ensure_persona(data_dir: str, agent_id: str) -> AgentPersona:
     return persona
 
 
+def _global_memory_manager(request: Request) -> GlobalMemoryManager:
+    manager = request.app.state.global_memory_manager
+    if manager is None:
+        raise RuntimeError("GlobalMemoryManager is not initialized on app state")
+    return manager
+
+
 @router.get("", response_model=List[AgentResponse])
 async def list_agents(request: Request) -> List[AgentResponse]:
     items = await _status_map(request)
@@ -75,7 +103,12 @@ async def list_agents(request: Request) -> List[AgentResponse]:
 async def create_agent(payload: AgentCreateRequest, request: Request) -> AgentDetailResponse:
     config = request.app.state.config
     base_id = slugify_agent_id(payload.name)
-    agent_id = ensure_unique_agent_id(config.agents.data_dir, base_id)
+    if is_reserved_agent_id(base_id):
+        raise HTTPException(status_code=422, detail=f"Agent id '{base_id}' is reserved")
+    try:
+        agent_id = ensure_unique_agent_id(config.agents.data_dir, base_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     persona = AgentPersona(
         id=agent_id,
@@ -108,6 +141,41 @@ async def create_agent(payload: AgentCreateRequest, request: Request) -> AgentDe
         created_at=saved.created_at,
         updated_at=saved.updated_at,
     )
+
+
+@router.get("/_global/user-memory", response_model=MemoryResponse)
+async def get_global_user_memory(request: Request) -> MemoryResponse:
+    manager = _global_memory_manager(request)
+    return MemoryResponse(content=manager.read_user_memory())
+
+
+@router.put("/_global/user-memory")
+async def update_global_user_memory(payload: MemoryUpdateRequest, request: Request) -> dict:
+    manager = _global_memory_manager(request)
+    manager.write_user_memory(payload.content)
+    return {"updated": True}
+
+
+@router.get("/_global/procedures", response_model=MemoryResponse)
+async def get_global_procedures(request: Request) -> MemoryResponse:
+    manager = _global_memory_manager(request)
+    return MemoryResponse(content=manager.read_procedures())
+
+
+@router.put("/_global/procedures")
+async def update_global_procedures(payload: MemoryUpdateRequest, request: Request) -> dict:
+    manager = _global_memory_manager(request)
+    try:
+        manager.write_procedures(payload.content)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"updated": True}
+
+
+@router.get("/_global/knowledge", response_model=KnowledgeListResponse)
+async def list_global_knowledge(request: Request) -> KnowledgeListResponse:
+    manager = _global_memory_manager(request)
+    return KnowledgeListResponse(items=manager.list_knowledge())
 
 
 @router.get("/{agent_id}", response_model=AgentDetailResponse)
@@ -245,6 +313,28 @@ async def update_memory(agent_id: str, payload: MemoryUpdateRequest, request: Re
 
     manager = _memory_manager(request, agent_id)
     manager.write_memory(payload.content)
+    return {"updated": True}
+
+
+@router.get("/{agent_id}/procedures", response_model=MemoryResponse)
+async def get_agent_procedures(agent_id: str, request: Request) -> MemoryResponse:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+
+    manager = _memory_manager(request, agent_id)
+    return MemoryResponse(content=manager.read_procedures())
+
+
+@router.put("/{agent_id}/procedures")
+async def update_agent_procedures(agent_id: str, payload: MemoryUpdateRequest, request: Request) -> dict:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+
+    manager = _memory_manager(request, agent_id)
+    try:
+        manager.write_procedures(payload.content)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"updated": True}
 
 

@@ -10,7 +10,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from g3lobster.memory.migration import migrate_agent_memory_layout
+
 AGENT_ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+RESERVED_AGENT_IDS = frozenset({"global"})
 
 
 @dataclass
@@ -31,7 +34,7 @@ class AgentPersona:
     def __post_init__(self) -> None:
         if not is_valid_agent_id(self.id):
             raise ValueError(
-                "Agent id must be a slug using lowercase letters, numbers, and dashes"
+                "Agent id must be a slug using lowercase letters, numbers, and dashes, and it cannot be reserved"
             )
         self.id = self.id.strip()
         self.name = self.name.strip() or self.id
@@ -63,7 +66,12 @@ def _utc_now() -> str:
 
 
 def is_valid_agent_id(agent_id: str) -> bool:
-    return bool(AGENT_ID_PATTERN.fullmatch(str(agent_id or "").strip()))
+    normalized = str(agent_id or "").strip()
+    return bool(AGENT_ID_PATTERN.fullmatch(normalized)) and normalized not in RESERVED_AGENT_IDS
+
+
+def is_reserved_agent_id(agent_id: str) -> bool:
+    return str(agent_id or "").strip() in RESERVED_AGENT_IDS
 
 
 def slugify_agent_id(value: str) -> str:
@@ -74,6 +82,8 @@ def slugify_agent_id(value: str) -> str:
 
 def ensure_unique_agent_id(data_dir: str, preferred: str) -> str:
     base = preferred if is_valid_agent_id(preferred) else slugify_agent_id(preferred)
+    if not is_valid_agent_id(base):
+        raise ValueError(f"Invalid or reserved agent id: {base}")
     root = _agents_root(data_dir)
 
     if not (root / base).exists():
@@ -96,21 +106,39 @@ def agent_dir(data_dir: str, agent_id: str) -> Path:
     return _agents_root(data_dir) / agent_id
 
 
+def _maybe_migrate_agent_memory(path: Path) -> None:
+    legacy_memory_dir = path / "memory"
+    current_memory_dir = path / ".memory"
+    if legacy_memory_dir.exists() or not current_memory_dir.exists():
+        migrate_agent_memory_layout(str(path))
+
+
 def _ensure_agent_layout(path: Path) -> None:
-    (path / "memory").mkdir(parents=True, exist_ok=True)
+    # Migrate before creating defaults so legacy MEMORY.md/PROCEDURES.md content
+    # is copied instead of being shadowed by fresh files.
+    _maybe_migrate_agent_memory(path)
+
+    (path / ".memory").mkdir(parents=True, exist_ok=True)
+    (path / ".memory" / "daily").mkdir(parents=True, exist_ok=True)
     (path / "sessions").mkdir(parents=True, exist_ok=True)
 
-    memory_file = path / "memory" / "MEMORY.md"
+    memory_file = path / ".memory" / "MEMORY.md"
     if not memory_file.exists():
         memory_file.write_text("# MEMORY\n\n", encoding="utf-8")
+    procedures_file = path / ".memory" / "PROCEDURES.md"
+    if not procedures_file.exists():
+        procedures_file.write_text("# PROCEDURES\n\n", encoding="utf-8")
 
 
-def load_persona(data_dir: str, agent_id: str) -> Optional[AgentPersona]:
+def load_persona(data_dir: str, agent_id: str, *, skip_migration: bool = False) -> Optional[AgentPersona]:
     """Load an agent persona from disk, returning None when it does not exist."""
     path = agent_dir(data_dir, agent_id)
     agent_json = path / "agent.json"
     if not agent_json.exists():
         return None
+
+    if not skip_migration:
+        _maybe_migrate_agent_memory(path)
 
     payload = json.loads(agent_json.read_text(encoding="utf-8"))
     soul_file = path / "SOUL.md"
@@ -165,7 +193,12 @@ def save_persona(data_dir: str, persona: AgentPersona) -> AgentPersona:
 
 
 def list_personas(data_dir: str) -> List[AgentPersona]:
-    """List all valid persona directories under data/agents."""
+    """List all valid persona directories under data/agents.
+
+    Skips migration checks to avoid O(agents) filesystem I/O on every
+    call.  Migration runs on explicit ``load_persona`` / ``save_persona``
+    and on agent startup so it is not needed for listing.
+    """
     root = _agents_root(data_dir)
     root.mkdir(parents=True, exist_ok=True)
 
@@ -176,7 +209,7 @@ def list_personas(data_dir: str) -> List[AgentPersona]:
         agent_id = path.name
         if not is_valid_agent_id(agent_id):
             continue
-        persona = load_persona(data_dir, agent_id)
+        persona = load_persona(data_dir, agent_id, skip_migration=True)
         if persona:
             personas.append(persona)
     return personas

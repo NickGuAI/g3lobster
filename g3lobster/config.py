@@ -13,7 +13,11 @@ import yaml
 @dataclass
 class AgentsConfig:
     data_dir: str = "./data"
-    summarize_threshold: int = 20
+    compact_threshold: int = 40
+    compact_keep_ratio: float = 0.25
+    compact_chunk_size: int = 10
+    procedure_min_frequency: int = 3
+    memory_max_sections: int = 50
     context_messages: int = 12
     health_check_interval_s: int = 30
     stuck_timeout_s: int = 300
@@ -100,7 +104,11 @@ def _legacy_agents_section(data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
 
     return {
         "data_dir": memory.get("data_dir", "./data"),
-        "summarize_threshold": memory.get("summarize_threshold", 20),
+        "compact_threshold": memory.get("compact_threshold", 40),
+        "compact_keep_ratio": memory.get("compact_keep_ratio", 0.25),
+        "compact_chunk_size": memory.get("compact_chunk_size", 10),
+        "procedure_min_frequency": memory.get("procedure_min_frequency", 3),
+        "memory_max_sections": memory.get("memory_max_sections", 50),
         "context_messages": memory.get("context_messages", 12),
         "health_check_interval_s": pool.get("health_check_interval_s", 30),
         "stuck_timeout_s": pool.get("stuck_timeout_s", 300),

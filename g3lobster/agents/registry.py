@@ -10,6 +10,7 @@ from typing import Callable, Dict, List, Optional
 
 from g3lobster.agents.persona import AgentPersona, agent_dir, list_personas, load_persona
 from g3lobster.memory.context import ContextBuilder
+from g3lobster.memory.global_memory import GlobalMemoryManager
 from g3lobster.memory.manager import MemoryManager
 from g3lobster.pool.health import HealthInspector
 
@@ -65,17 +66,37 @@ class AgentRegistry:
     def __init__(
         self,
         data_dir: str,
-        summarize_threshold: int,
         context_messages: int,
         health_check_interval_s: int,
         stuck_timeout_s: int,
         agent_factory: Callable[[AgentPersona, MemoryManager, ContextBuilder], object],
+        compact_threshold: int = 40,
+        compact_keep_ratio: float = 0.25,
+        compact_chunk_size: int = 10,
+        procedure_min_frequency: int = 3,
+        memory_max_sections: int = 50,
+        gemini_command: str = "gemini",
+        gemini_args: Optional[List[str]] = None,
+        gemini_timeout_s: float = 45.0,
+        gemini_cwd: Optional[str] = None,
+        global_memory_manager: Optional[GlobalMemoryManager] = None,
+        # Legacy parameter; ignored.
+        summarize_threshold: int = 20,
     ):
         self.data_dir = data_dir
-        self.summarize_threshold = summarize_threshold
+        self.compact_threshold = compact_threshold
+        self.compact_keep_ratio = compact_keep_ratio
+        self.compact_chunk_size = compact_chunk_size
+        self.procedure_min_frequency = procedure_min_frequency
+        self.memory_max_sections = memory_max_sections
+        self.gemini_command = gemini_command
+        self.gemini_args = list(gemini_args) if gemini_args is not None else ["-y"]
+        self.gemini_timeout_s = gemini_timeout_s
+        self.gemini_cwd = gemini_cwd
         self.context_messages = context_messages
         self.health_check_interval_s = health_check_interval_s
         self.stuck_timeout_s = stuck_timeout_s
+        self.global_memory_manager = global_memory_manager
         self.agent_factory = agent_factory
 
         self.health = HealthInspector()
@@ -113,11 +134,23 @@ class AgentRegistry:
             return False
 
         runtime_dir = str(agent_dir(self.data_dir, agent_id))
-        memory = MemoryManager(data_dir=runtime_dir, summarize_threshold=self.summarize_threshold)
+        memory = MemoryManager(
+            data_dir=runtime_dir,
+            compact_threshold=self.compact_threshold,
+            compact_keep_ratio=self.compact_keep_ratio,
+            compact_chunk_size=self.compact_chunk_size,
+            procedure_min_frequency=self.procedure_min_frequency,
+            memory_max_sections=self.memory_max_sections,
+            gemini_command=self.gemini_command,
+            gemini_args=self.gemini_args,
+            gemini_timeout_s=self.gemini_timeout_s,
+            gemini_cwd=self.gemini_cwd,
+        )
         context = ContextBuilder(
             memory_manager=memory,
             message_limit=self.context_messages,
             system_preamble=persona.soul,
+            global_memory_manager=self.global_memory_manager,
         )
         agent = self.agent_factory(persona, memory, context)
         await agent.start(mcp_servers=persona.mcp_servers)

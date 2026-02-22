@@ -62,7 +62,6 @@ async def test_registry_lifecycle_and_status(tmp_path) -> None:
 
     registry = AgentRegistry(
         data_dir=data_dir,
-        summarize_threshold=4,
         context_messages=6,
         health_check_interval_s=3600,
         stuck_timeout_s=60,

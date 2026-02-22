@@ -41,7 +41,7 @@ def mcp_manager(tmp_path: Path, mcp_config_dir: Path) -> MCPManager:
 
 @pytest.fixture
 def memory_manager(tmp_path: Path) -> MemoryManager:
-    return MemoryManager(data_dir=str(tmp_path / "data"), summarize_threshold=4)
+    return MemoryManager(data_dir=str(tmp_path / "data"), compact_threshold=40)
 
 
 @pytest.fixture
