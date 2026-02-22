@@ -71,6 +71,8 @@ def _memory_manager(request: Request, agent_id: str) -> MemoryManager:
         gemini_args=config.gemini.args,
         gemini_timeout_s=config.gemini.response_timeout_s,
         gemini_cwd=config.gemini.workspace_dir,
+        emitter=getattr(request.app.state, "emitter", None),
+        agent_id=agent_id,
     )
     cache[agent_id] = manager
     return manager

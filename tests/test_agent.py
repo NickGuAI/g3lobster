@@ -18,7 +18,7 @@ class FakeProcess:
         self.alive = True
         self.spawned_with.append(mcp_server_names)
 
-    async def ask(self, prompt: str, timeout: float = 120.0) -> str:
+    async def ask(self, prompt: str, timeout: float = 120.0, event_hook=None) -> str:
         self.prompts.append(prompt)
         return self.response
 

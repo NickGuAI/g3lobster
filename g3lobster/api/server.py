@@ -11,9 +11,11 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from g3lobster.api.routes_agents import router as agents_router
+from g3lobster.api.routes_events import router as events_router
 from g3lobster.api.routes_health import router as health_router
 from g3lobster.api.routes_setup import router as setup_router
 from g3lobster.config import AppConfig
+from g3lobster.infra.events import AgentEventEmitter
 
 
 def create_app(
@@ -24,6 +26,7 @@ def create_app(
     config_path: Optional[str] = None,
     chat_auth_dir: Optional[str] = None,
     global_memory_manager: Optional[object] = None,
+    emitter: Optional[AgentEventEmitter] = None,
 ) -> FastAPI:
     runtime_config = config or AppConfig()
     runtime_config_path = str(Path(config_path or "config.yaml").expanduser().resolve())
@@ -50,9 +53,11 @@ def create_app(
     app.state.chat_auth_dir = chat_auth_dir
     app.state.global_memory_manager = global_memory_manager
     app.state._stopped_memory_managers = {}
+    app.state.emitter = emitter or AgentEventEmitter()
 
     app.include_router(health_router)
     app.include_router(agents_router)
+    app.include_router(events_router)
     app.include_router(setup_router)
 
     static_dir = Path(__file__).resolve().parent.parent / "static"

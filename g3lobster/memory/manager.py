@@ -8,6 +8,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from g3lobster.infra.events import AgentEventEmitter
 from g3lobster.memory.compactor import CompactionEngine
 from g3lobster.memory.procedures import (
     CandidateStore,
@@ -34,6 +35,8 @@ class MemoryManager:
         gemini_args: Optional[List[str]] = None,
         gemini_timeout_s: float = 45.0,
         gemini_cwd: Optional[str] = None,
+        emitter: Optional[AgentEventEmitter] = None,
+        agent_id: Optional[str] = None,
         # Legacy parameter kept for backward compatibility; ignored.
         summarize_threshold: int = 20,
     ):
@@ -51,6 +54,8 @@ class MemoryManager:
         self.memory_max_sections = max(5, int(memory_max_sections))
         self.procedure_extract_interval = max(2, int(procedure_extract_interval))
         self._memory_lock = threading.Lock()
+        self.emitter = emitter
+        self.agent_id = str(agent_id) if agent_id else None
 
         self.memory_dir.mkdir(parents=True, exist_ok=True)
         self.daily_dir.mkdir(parents=True, exist_ok=True)
@@ -176,6 +181,15 @@ class MemoryManager:
         with self.sessions.session_lock(session_id):
             self.sessions.append_message(session_id, role, content, metadata=metadata)
             count = self.sessions.message_count(session_id)
+            self._emit_memory_event(
+                event_type="memory.session.appended",
+                session_id=session_id,
+                data={
+                    "session_id": session_id,
+                    "role": role,
+                    "content_length": len(content or ""),
+                },
+            )
             compacted = self._maybe_compact(session_id, message_count=count)
             if not compacted:
                 # Extract procedure candidates periodically (every N turns).
@@ -225,6 +239,17 @@ class MemoryManager:
         )
 
     def _maybe_compact(self, session_id: str, message_count: Optional[int] = None) -> bool:
+        current_count = self.sessions.message_count(session_id) if message_count is None else int(message_count)
+        if current_count >= self.compact_threshold:
+            self._emit_memory_event(
+                event_type="memory.compaction.triggered",
+                session_id=session_id,
+                data={
+                    "session_id": session_id,
+                    "message_count": current_count,
+                },
+            )
+
         def _flush_compacted_messages(messages: List[Dict[str, object]]) -> None:
             highlights: List[str] = []
             for entry in messages:
@@ -243,8 +268,32 @@ class MemoryManager:
             if highlights:
                 self.append_memory_section(f"Compaction {session_id}", "\n".join(highlights[:8]))
 
-        return self.compactor.maybe_compact(
+        compacted = self.compactor.maybe_compact(
             session_id,
             after_compact=_flush_compacted_messages,
             message_count=message_count,
+        )
+        if compacted:
+            latest = self.sessions.read_latest_compaction(session_id) or {}
+            summary = str(latest.get("summary", "") or "")
+            self._emit_memory_event(
+                event_type="memory.compaction.completed",
+                session_id=session_id,
+                data={
+                    "session_id": session_id,
+                    "summary_length": len(summary),
+                },
+            )
+        return compacted
+
+    def _emit_memory_event(self, event_type: str, session_id: str, data: Dict[str, Any]) -> None:
+        if not self.emitter or not self.agent_id:
+            return
+        self.emitter.emit(
+            agent_id=self.agent_id,
+            run_id=session_id or self.agent_id,
+            stream="memory",
+            event_type=event_type,
+            data=data,
+            session_id=session_id,
         )

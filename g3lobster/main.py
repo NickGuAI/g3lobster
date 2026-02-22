@@ -14,6 +14,7 @@ from g3lobster.api.server import create_app
 from g3lobster.chat.bridge import ChatBridge
 from g3lobster.cli.process import GeminiProcess
 from g3lobster.config import AppConfig, load_config
+from g3lobster.infra.events import AgentEventEmitter
 from g3lobster.memory.context import ContextBuilder
 from g3lobster.memory.global_memory import GlobalMemoryManager
 from g3lobster.memory.manager import MemoryManager
@@ -28,6 +29,7 @@ def build_runtime(config: AppConfig):
     mcp_loader = MCPConfigLoader(config_dir=config.mcp.config_dir)
     mcp_manager = MCPManager(loader=mcp_loader)
     global_memory_manager = GlobalMemoryManager(config.agents.data_dir)
+    emitter = AgentEventEmitter(events_dir=Path(config.agents.data_dir) / "agents")
 
     def process_factory(model_name: str) -> GeminiProcess:
         args = list(config.gemini.args)
@@ -50,6 +52,7 @@ def build_runtime(config: AppConfig):
             memory_manager=memory_manager,
             context_builder=context_builder,
             default_mcp_servers=persona.mcp_servers or config.mcp.default_servers,
+            emitter=emitter,
         )
 
     registry = AgentRegistry(
@@ -68,6 +71,7 @@ def build_runtime(config: AppConfig):
         stuck_timeout_s=config.agents.stuck_timeout_s,
         global_memory_manager=global_memory_manager,
         agent_factory=agent_factory,
+        emitter=emitter,
     )
 
     chat_auth_dir = str(Path(config.agents.data_dir) / "chat_auth")
@@ -90,13 +94,13 @@ def build_runtime(config: AppConfig):
 
     chat_bridge = chat_bridge_factory() if config.chat.enabled else None
 
-    return registry, chat_bridge, chat_bridge_factory, chat_auth_dir, global_memory_manager
+    return registry, chat_bridge, chat_bridge_factory, chat_auth_dir, global_memory_manager, emitter
 
 
 def build_app(config_path: Optional[str] = None):
     resolved_config_path = Path(config_path or "config.yaml").expanduser().resolve()
     config = load_config(str(resolved_config_path))
-    registry, chat_bridge, chat_bridge_factory, chat_auth_dir, global_memory_manager = build_runtime(config)
+    registry, chat_bridge, chat_bridge_factory, chat_auth_dir, global_memory_manager, emitter = build_runtime(config)
     app = create_app(
         registry=registry,
         chat_bridge=chat_bridge,
@@ -105,6 +109,7 @@ def build_app(config_path: Optional[str] = None):
         config_path=str(resolved_config_path),
         chat_auth_dir=chat_auth_dir,
         global_memory_manager=global_memory_manager,
+        emitter=emitter,
     )
     return app, config
 

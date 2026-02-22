@@ -8,6 +8,33 @@ import pytest
 from g3lobster.cli.process import ALLOWED_MCP_SERVER_NAMES_FLAG, PROMPT_FLAG, GeminiProcess
 
 
+class DummyStream:
+    def __init__(self, payload: bytes):
+        self._payload = payload
+        self._consumed = False
+
+    async def read(self, _n: int = -1) -> bytes:
+        if self._consumed:
+            return b""
+        self._consumed = True
+        return self._payload
+
+
+class DummyProcess:
+    def __init__(self, *, returncode: int = 0, stdout: bytes = b"ok", stderr: bytes = b"", pid: int = 1001):
+        self.returncode = returncode
+        self.stdout = DummyStream(stdout)
+        self.stderr = DummyStream(stderr)
+        self.pid = pid
+
+    async def wait(self):
+        return self.returncode
+
+    def kill(self):
+        if self.returncode is None:
+            self.returncode = -9
+
+
 @pytest.mark.asyncio
 async def test_gemini_process_roundtrip(tmp_path: Path) -> None:
     """Each ask() spawns a fresh process with -p and returns stdout."""
@@ -28,13 +55,6 @@ async def test_gemini_process_roundtrip(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_ask_includes_mcp_server_names(monkeypatch) -> None:
     captured = {}
-
-    class DummyProcess:
-        returncode = 0
-        async def communicate(self):
-            return (b"ok", b"")
-        async def wait(self):
-            pass
 
     async def fake_exec(*cmd, **kwargs):
         captured["cmd"] = list(cmd)
@@ -62,13 +82,6 @@ async def test_ask_includes_mcp_server_names(monkeypatch) -> None:
 async def test_ask_skips_mcp_flag_for_all_servers(monkeypatch) -> None:
     captured = {}
 
-    class DummyProcess:
-        returncode = 0
-        async def communicate(self):
-            return (b"ok", b"")
-        async def wait(self):
-            pass
-
     async def fake_exec(*cmd, **kwargs):
         captured["cmd"] = list(cmd)
         return DummyProcess()
@@ -85,15 +98,8 @@ async def test_ask_skips_mcp_flag_for_all_servers(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_ask_raises_on_nonzero_exit(monkeypatch) -> None:
-    class DummyProcess:
-        returncode = 1
-        async def communicate(self):
-            return (b"", b"error")
-        async def wait(self):
-            pass
-
     async def fake_exec(*cmd, **kwargs):
-        return DummyProcess()
+        return DummyProcess(returncode=1, stdout=b"", stderr=b"error")
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
 

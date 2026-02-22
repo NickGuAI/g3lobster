@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
 
 from g3lobster.agents.persona import AgentPersona, agent_dir, list_personas, load_persona
+from g3lobster.infra.events import AgentEventEmitter
 from g3lobster.memory.context import ContextBuilder
 from g3lobster.memory.global_memory import GlobalMemoryManager
 from g3lobster.memory.manager import MemoryManager
@@ -80,6 +82,7 @@ class AgentRegistry:
         gemini_timeout_s: float = 45.0,
         gemini_cwd: Optional[str] = None,
         global_memory_manager: Optional[GlobalMemoryManager] = None,
+        emitter: Optional[AgentEventEmitter] = None,
         # Legacy parameter; ignored.
         summarize_threshold: int = 20,
     ):
@@ -98,9 +101,11 @@ class AgentRegistry:
         self.stuck_timeout_s = stuck_timeout_s
         self.global_memory_manager = global_memory_manager
         self.agent_factory = agent_factory
+        self.emitter = emitter
 
         self.health = HealthInspector()
         self._agents: Dict[str, RegisteredAgent] = {}
+        self._restart_counts = defaultdict(int)
 
         self._health_task: Optional[asyncio.Task] = None
         self._stopping = False
@@ -123,7 +128,7 @@ class AgentRegistry:
             self._health_task = None
 
         for agent_id in list(self._agents.keys()):
-            await self.stop_agent(agent_id)
+            await self.stop_agent(agent_id, reason="shutdown")
 
     async def start_agent(self, agent_id: str) -> bool:
         if agent_id in self._agents:
@@ -145,6 +150,8 @@ class AgentRegistry:
             gemini_args=self.gemini_args,
             gemini_timeout_s=self.gemini_timeout_s,
             gemini_cwd=self.gemini_cwd,
+            emitter=self.emitter,
+            agent_id=persona.id,
         )
         context = ContextBuilder(
             memory_manager=memory,
@@ -161,19 +168,52 @@ class AgentRegistry:
             memory_manager=memory,
             context_builder=context,
         )
+        if self.emitter:
+            self.emitter.emit(
+                agent_id=agent_id,
+                run_id=agent_id,
+                stream="lifecycle",
+                event_type="agent.started",
+                data={
+                    "model": persona.model,
+                    "mcp_servers": list(persona.mcp_servers),
+                },
+            )
         return True
 
-    async def stop_agent(self, agent_id: str) -> bool:
+    async def stop_agent(self, agent_id: str, reason: str = "manual") -> bool:
         runtime = self._agents.pop(agent_id, None)
         if not runtime:
             return False
         await runtime.agent.stop()
+        if self.emitter:
+            self.emitter.emit(
+                agent_id=agent_id,
+                run_id=agent_id,
+                stream="lifecycle",
+                event_type="agent.stopped",
+                data={"reason": reason},
+            )
         return True
 
-    async def restart_agent(self, agent_id: str) -> bool:
-        if agent_id in self._agents:
-            await self.stop_agent(agent_id)
-        return await self.start_agent(agent_id)
+    async def restart_agent(self, agent_id: str, reason: str = "manual") -> bool:
+        was_running = agent_id in self._agents
+        if was_running:
+            await self.stop_agent(agent_id, reason=reason)
+        started = await self.start_agent(agent_id)
+        if started and was_running and self.emitter:
+            self._restart_counts[agent_id] += 1
+            self.emitter.emit(
+                agent_id=agent_id,
+                run_id=agent_id,
+                stream="lifecycle",
+                event_type="agent.restarted",
+                data={
+                    "reason": reason,
+                    "restart_count": self._restart_counts[agent_id],
+                },
+            )
+        return started
 
     def get_agent(self, agent_id: str) -> Optional[RegisteredAgent]:
         return self._agents.get(agent_id)
@@ -231,9 +271,25 @@ class AgentRegistry:
 
             active = list(self._agents.values())
             issues = self.health.inspect([item.agent for item in active], self.stuck_timeout_s)
+            issue_by_agent = {issue.agent_id: issue.issue for issue in issues}
+
+            if self.emitter:
+                now = time.time()
+                for runtime in active:
+                    self.emitter.emit(
+                        agent_id=runtime.id,
+                        run_id=runtime.id,
+                        stream="lifecycle",
+                        event_type="agent.health_check",
+                        data={
+                            "status": issue_by_agent.get(runtime.id, "ok"),
+                            "uptime_s": int(now - runtime.started_at),
+                        },
+                    )
+
             for issue in issues:
                 if issue.issue not in {"dead", "stuck"}:
                     continue
                 if issue.agent_id not in self._agents:
                     continue
-                await self.restart_agent(issue.agent_id)
+                await self.restart_agent(issue.agent_id, reason="health_check_failure")
