@@ -12,6 +12,8 @@ from typing import Callable, Dict, Iterable, List, Optional
 
 ALLOWED_MCP_SERVER_NAMES_FLAG = "--allowed-mcp-server-names"
 PROMPT_FLAG = "-p"
+PROMPT_LONG_FLAG = "--prompt"
+REDACTED_ARG = "<redacted>"
 logger = logging.getLogger(__name__)
 
 ProcessEventHook = Callable[[str, dict], None]
@@ -55,6 +57,24 @@ class GeminiProcess:
         except Exception:
             logger.exception("Gemini process event hook failed")
 
+    @staticmethod
+    def _sanitize_cmd_args_for_event(cmd: List[str]) -> List[str]:
+        """Redact prompt content before exposing command args in observability events."""
+        redacted: List[str] = []
+        redact_next = False
+
+        for arg in cmd:
+            if redact_next:
+                redacted.append(REDACTED_ARG)
+                redact_next = False
+                continue
+
+            redacted.append(arg)
+            if arg in {PROMPT_FLAG, PROMPT_LONG_FLAG}:
+                redact_next = True
+
+        return redacted
+
     async def _read_stream(self, stream, chunks: List[bytes]) -> None:
         if stream is None:
             return
@@ -95,7 +115,7 @@ class GeminiProcess:
                 "gemini.process.spawned",
                 {
                     "pid": proc.pid,
-                    "cmd_args": cmd,
+                    "cmd_args": self._sanitize_cmd_args_for_event(cmd),
                     "mcp_servers": list(self._mcp_server_names or []),
                 },
             )

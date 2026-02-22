@@ -85,7 +85,17 @@ class AgentEventEmitter:
                 logger.exception("Event listener error")
 
         if self._events_dir:
-            self._persist_event(event)
+            try:
+                self._persist_event(event)
+            except Exception:
+                logger.exception(
+                    "Failed to persist event",
+                    extra={
+                        "agent_id": event.agent_id,
+                        "run_id": event.run_id,
+                        "event_type": event.event_type,
+                    },
+                )
 
         return event
 

@@ -5,7 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from g3lobster.cli.process import ALLOWED_MCP_SERVER_NAMES_FLAG, PROMPT_FLAG, GeminiProcess
+from g3lobster.cli.process import (
+    ALLOWED_MCP_SERVER_NAMES_FLAG,
+    PROMPT_FLAG,
+    REDACTED_ARG,
+    GeminiProcess,
+)
 
 
 class DummyStream:
@@ -108,6 +113,29 @@ async def test_ask_raises_on_nonzero_exit(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="exited with code 1"):
         await proc.ask("fail", timeout=5.0)
+
+
+@pytest.mark.asyncio
+async def test_spawn_event_redacts_prompt_from_cmd_args(monkeypatch) -> None:
+    emitted = []
+
+    async def fake_exec(*cmd, **kwargs):
+        return DummyProcess()
+
+    def event_hook(event_type: str, data: dict) -> None:
+        emitted.append((event_type, data))
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    proc = GeminiProcess(command="gemini", args=["-y"])
+    await proc.spawn()
+
+    prompt = "super secret prompt content"
+    await proc.ask(prompt, timeout=5.0, event_hook=event_hook)
+
+    spawned_payload = next(data for event_type, data in emitted if event_type == "gemini.process.spawned")
+    assert spawned_payload["cmd_args"] == ["gemini", "-y", PROMPT_FLAG, REDACTED_ARG]
+    assert prompt not in " ".join(spawned_payload["cmd_args"])
 
 
 @pytest.mark.asyncio

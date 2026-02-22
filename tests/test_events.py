@@ -88,3 +88,20 @@ def test_filter_by_stream() -> None:
 
     assert len(recent) == 1
     assert recent[0].stream == "gemini"
+
+
+def test_emit_ignores_persist_errors(tmp_path: Path, monkeypatch) -> None:
+    events_dir = tmp_path / "agents"
+    emitter = AgentEventEmitter(events_dir=events_dir)
+    seen = []
+    emitter.on_event(seen.append)
+
+    def fail_persist(_event) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(emitter, "_persist_event", fail_persist)
+
+    emitted = emitter.emit("alpha", "run-1", "lifecycle", "agent.started", {"model": "gemini"})
+    assert emitted.seq == 1
+    assert len(seen) == 1
+    assert emitter.recent_events(limit=1)[0].event_id == emitted.event_id
