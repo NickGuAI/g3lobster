@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from g3lobster.api.routes_agents import router as agents_router
+from g3lobster.api.routes_chat_events import router as chat_events_router
 from g3lobster.api.routes_health import router as health_router
 from g3lobster.api.routes_setup import router as setup_router
 from g3lobster.config import AppConfig
@@ -53,6 +54,7 @@ def create_app(
 
     app.include_router(health_router)
     app.include_router(agents_router)
+    app.include_router(chat_events_router)
     app.include_router(setup_router)
 
     static_dir = Path(__file__).resolve().parent.parent / "static"
