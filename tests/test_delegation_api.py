@@ -183,3 +183,19 @@ def test_create_delegation_rejects_self_target(tmp_path) -> None:
         )
         assert response.status_code == 422
         assert "circular delegation" in response.json()["detail"].lower()
+
+
+def test_create_delegation_rejects_blank_task(tmp_path) -> None:
+    app = _build_app(tmp_path)
+    with TestClient(app) as client:
+        response = client.post(
+            "/delegation/run",
+            json={
+                "parent_agent_id": "athena",
+                "child_agent_id": "hephaestus",
+                "task": "   ",
+                "parent_session_id": "thread-4",
+            },
+        )
+        assert response.status_code == 422
+        assert "task is required" in response.json()["detail"].lower()

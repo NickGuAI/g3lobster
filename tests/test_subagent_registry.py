@@ -157,6 +157,38 @@ def test_rejects_self_delegation(tmp_path) -> None:
         )
 
 
+def test_rejects_blank_task_and_parent_session(tmp_path) -> None:
+    registry = SubagentRegistry(tmp_path)
+    with pytest.raises(ValueError, match="task is required"):
+        registry.register_run(
+            parent_agent_id="athena",
+            child_agent_id="hephaestus",
+            task="   ",
+            parent_session_id="thread-1",
+        )
+
+    with pytest.raises(ValueError, match="parent_session_id is required"):
+        registry.register_run(
+            parent_agent_id="athena",
+            child_agent_id="hephaestus",
+            task="build dashboard",
+            parent_session_id="   ",
+        )
+
+
+def test_preserves_subsecond_timeout(tmp_path) -> None:
+    registry = SubagentRegistry(tmp_path)
+    run = registry.register_run(
+        parent_agent_id="athena",
+        child_agent_id="hephaestus",
+        task="quick check",
+        parent_session_id="thread-1",
+        timeout_s=0.25,
+    )
+
+    assert run.timeout_s == 0.25
+
+
 @pytest.mark.asyncio
 async def test_delegate_task_auto_starts_child(tmp_path) -> None:
     data_dir = str(tmp_path / "data")

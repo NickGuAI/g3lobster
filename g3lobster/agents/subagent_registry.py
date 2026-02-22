@@ -57,10 +57,19 @@ class SubagentRegistry:
     ) -> SubagentRun:
         normalized_parent = str(parent_agent_id).strip()
         normalized_child = str(child_agent_id).strip()
+        normalized_task = str(task).strip()
+        normalized_parent_session_id = str(parent_session_id).strip()
+        normalized_timeout_s = float(timeout_s)
         if not normalized_parent:
             raise ValueError("parent_agent_id is required")
         if not normalized_child:
             raise ValueError("child_agent_id is required")
+        if not normalized_task:
+            raise ValueError("task is required")
+        if not normalized_parent_session_id:
+            raise ValueError("parent_session_id is required")
+        if normalized_timeout_s <= 0:
+            raise ValueError("timeout_s must be greater than 0")
         if normalized_parent == normalized_child:
             raise ValueError("Circular delegation is not allowed")
 
@@ -68,10 +77,10 @@ class SubagentRegistry:
             run_id=str(uuid.uuid4()),
             parent_agent_id=normalized_parent,
             child_agent_id=normalized_child,
-            task=str(task).strip(),
+            task=normalized_task,
             session_id=f"delegation-{uuid.uuid4().hex[:8]}",
-            parent_session_id=str(parent_session_id).strip() or "delegation-parent",
-            timeout_s=max(1.0, float(timeout_s)),
+            parent_session_id=normalized_parent_session_id,
+            timeout_s=normalized_timeout_s,
         )
         self._runs[run.run_id] = run
         self._save_to_disk()

@@ -22,19 +22,39 @@ class DelegationAPIClient:
         self.base_url = base_url.rstrip("/")
         self.parent_agent_id = str(parent_agent_id).strip()
         self.parent_session_id = str(parent_session_id).strip()
+        if not self.parent_agent_id:
+            raise ValueError("parent_agent_id is required")
+        if not self.parent_session_id:
+            raise ValueError("parent_session_id is required")
 
     def delegate_to_agent(self, agent_id: str, task: str, timeout_s: float = 300.0) -> Dict[str, object]:
+        normalized_agent_id = str(agent_id).strip()
+        normalized_task = str(task).strip()
+        normalized_timeout_s = float(timeout_s)
+        if not normalized_agent_id:
+            raise ValueError("agent_id is required")
+        if not normalized_task:
+            raise ValueError("task is required")
+        if normalized_timeout_s <= 0:
+            raise ValueError("timeout_s must be greater than 0")
         payload = {
             "parent_agent_id": self.parent_agent_id,
-            "child_agent_id": str(agent_id).strip(),
-            "task": str(task).strip(),
+            "child_agent_id": normalized_agent_id,
+            "task": normalized_task,
             "parent_session_id": self.parent_session_id,
-            "timeout_s": max(1.0, float(timeout_s)),
+            "timeout_s": normalized_timeout_s,
         }
         return self._request_json("POST", "/delegation/run", payload)
 
     def list_agents(self) -> List[Dict[str, str]]:
-        agents = self._request_json("GET", "/agents")
+        agents_payload = self._request_json("GET", "/agents")
+        if isinstance(agents_payload, dict):
+            agents = agents_payload.get("agents", [])
+        elif isinstance(agents_payload, list):
+            agents = agents_payload
+        else:
+            agents = []
+
         results: List[Dict[str, str]] = []
         for item in agents:
             if not isinstance(item, dict):
@@ -79,7 +99,10 @@ class DelegationAPIClient:
         except error.URLError as exc:
             raise RuntimeError(f"Delegation API unavailable: {exc.reason}") from exc
 
-        return json.loads(raw or "{}")
+        try:
+            return json.loads(raw or "{}")
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("Delegation API returned invalid JSON") from exc
 
 
 def create_mcp_server(base_url: str, parent_agent_id: str, parent_session_id: str):

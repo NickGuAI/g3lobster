@@ -281,7 +281,7 @@ class AgentRegistry:
         delegated_task = Task(
             prompt=str(task_prompt),
             session_id=run.session_id,
-            timeout_s=max(1.0, float(timeout_s)),
+            timeout_s=run.timeout_s,
         )
         try:
             result_task = await child.assign(delegated_task)
