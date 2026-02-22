@@ -111,3 +111,20 @@ def test_agent_event_history_from_disk(tmp_path: Path) -> None:
     assert len(payload) == 2
     assert payload[0]["agent_id"] == "alpha"
     assert payload[1]["event_type"] == "agent.stopped"
+
+
+def test_agent_event_history_rejects_path_traversal(tmp_path: Path) -> None:
+    app, emitter = _build_test_app(tmp_path)
+
+    # This file sits outside the configured events_dir and must not be reachable.
+    outside_file = Path(emitter.events_dir).parent / "events.jsonl"
+    outside_file.write_text(
+        json.dumps({"agent_id": "leak", "event_type": "stolen"}) + "\n",
+        encoding="utf-8",
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/agents/%2E%2E/events/history", params={"limit": 100})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid agent id"

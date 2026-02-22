@@ -21,6 +21,20 @@ def _resolve_emitter(request: Request):
     return emitter
 
 
+def _resolve_agent_events_file(events_dir: Path, agent_id: str) -> Path:
+    """Resolve and validate an agent events path within the configured events root."""
+    base_dir = Path(events_dir).expanduser().resolve(strict=False)
+    try:
+        events_file = (base_dir / agent_id / "events.jsonl").resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid agent id") from exc
+
+    if not events_file.is_relative_to(base_dir):
+        raise HTTPException(status_code=400, detail="Invalid agent id")
+
+    return events_file
+
+
 @router.get("/events")
 async def stream_events(
     request: Request,
@@ -99,7 +113,7 @@ async def get_agent_event_history(
     if not events_dir:
         return []
 
-    events_file = Path(events_dir) / agent_id / "events.jsonl"
+    events_file = _resolve_agent_events_file(Path(events_dir), agent_id)
     if not events_file.exists():
         return []
 
