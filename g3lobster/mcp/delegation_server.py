@@ -135,6 +135,18 @@ class DelegationMCPHandler:
                 "isError": True,
             })
 
+        if not self.parent_agent_id:
+            return self._respond(req_id, {
+                "content": [{
+                    "type": "text",
+                    "text": (
+                        "Error: parent_agent_id is not configured. "
+                        "Launch the delegation MCP server with --parent-agent-id <id>."
+                    ),
+                }],
+                "isError": True,
+            })
+
         # Build the REST API request payload
         payload = {
             "parent_agent_id": self.parent_agent_id,
@@ -186,7 +198,11 @@ class DelegationMCPHandler:
                 name = agent.get("name", agent_id)
                 emoji = agent.get("emoji", "")
                 state = agent.get("state", "unknown")
-                lines.append(f"- {emoji} {name} (id: {agent_id}, state: {state})")
+                description = agent.get("description", "")
+                entry = f"- {emoji} {name} (id: {agent_id}, state: {state})"
+                if description:
+                    entry += f" — {description}"
+                lines.append(entry)
 
             return self._respond(req_id, {
                 "content": [{"type": "text", "text": "\n".join(lines)}],
@@ -242,7 +258,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--parent-agent-id",
-        default="",
+        required=True,
         help="Agent ID of the parent (calling) agent",
     )
     return parser.parse_args(argv)

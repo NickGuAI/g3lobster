@@ -201,8 +201,8 @@ class AgentRegistry:
         return self._agents.get(agent_id)
 
     def list_enabled_personas(self) -> list:
-        """Return personas for all currently running agents (no disk I/O)."""
-        return [rt.persona for rt in self._agents.values() if rt.persona.enabled]
+        """Return personas for all enabled agents (includes stopped agents)."""
+        return [p for p in list_personas(self.data_dir) if p.enabled]
 
     def load_persona(self, agent_id: str) -> Optional[AgentPersona]:
         return load_persona(self.data_dir, agent_id)
@@ -243,7 +243,7 @@ class AgentRegistry:
         self.subagent_registry._save_to_disk()
 
         # Assign task to child agent
-        child_task = Task(prompt=task_prompt, session_id=run.session_id)
+        child_task = Task(prompt=task_prompt, session_id=run.session_id, timeout_s=timeout_s)
         result_task = await child.assign(child_task)
 
         # Record result
@@ -256,11 +256,21 @@ class AgentRegistry:
 
         return self.subagent_registry.get_run(run.run_id)
 
+    @staticmethod
+    def _soul_summary(soul: str) -> str:
+        """Return the first non-empty line of the SOUL.md as a brief description."""
+        for line in (soul or "").splitlines():
+            stripped = line.strip().lstrip("#").strip()
+            if stripped:
+                return stripped
+        return ""
+
     async def status(self) -> Dict[str, object]:
         now = time.time()
         items: List[Dict[str, object]] = []
 
         for persona in list_personas(self.data_dir):
+            description = self._soul_summary(persona.soul)
             runtime = self._agents.get(persona.id)
             if runtime:
                 raw_state = runtime.state
@@ -277,6 +287,7 @@ class AgentRegistry:
                     "uptime_s": int(now - runtime.started_at),
                     "current_task": runtime.current_task.id if runtime.current_task else None,
                     "pending_assignments": runtime.pending_assignments,
+                    "description": description,
                 }
             else:
                 item = {
@@ -291,6 +302,7 @@ class AgentRegistry:
                     "uptime_s": 0,
                     "current_task": None,
                     "pending_assignments": 0,
+                    "description": description,
                 }
             items.append(item)
 
