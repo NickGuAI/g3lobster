@@ -22,12 +22,14 @@ class GeminiProcess:
         env: Optional[Dict[str, str]] = None,
         cwd: Optional[str] = None,
         idle_read_window_s: float = 0.6,
+        agent_id: Optional[str] = None,
     ):
         self.command = command
         self.args = list(args or [])
         self.env = dict(env or {})
         self.cwd = cwd
         self.idle_read_window_s = idle_read_window_s
+        self.agent_id = agent_id
         self._mcp_server_names: Optional[List[str]] = None
         self._ready = False
         self._active_process: Optional[asyncio.subprocess.Process] = None
@@ -41,7 +43,7 @@ class GeminiProcess:
     def is_alive(self) -> bool:
         return self._ready
 
-    async def ask(self, prompt: str, timeout: float = 120.0) -> str:
+    async def ask(self, prompt: str, timeout: float = 120.0, session_id: Optional[str] = None) -> str:
         if not self._ready:
             raise RuntimeError("GeminiProcess has not been initialised (call spawn first)")
 
@@ -52,6 +54,12 @@ class GeminiProcess:
 
             env = os.environ.copy()
             env.update(self.env)
+
+            # Inject agent identity so MCP tools (e.g. delegation) know the caller
+            if self.agent_id:
+                env["G3LOBSTER_AGENT_ID"] = self.agent_id
+            if session_id:
+                env["G3LOBSTER_SESSION_ID"] = session_id
 
             proc = await asyncio.create_subprocess_exec(
                 *cmd,

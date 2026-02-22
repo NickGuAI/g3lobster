@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from typing import Any, Dict, Optional, Sequence
 
@@ -75,7 +76,8 @@ class DelegationMCPHandler:
 
     def __init__(self, base_url: str = DEFAULT_BASE_URL, parent_agent_id: str = ""):
         self.base_url = base_url.rstrip("/")
-        self.parent_agent_id = parent_agent_id
+        # CLI flag takes precedence; fall back to env var set by GeminiProcess
+        self.parent_agent_id = parent_agent_id or os.environ.get("G3LOBSTER_AGENT_ID", "")
 
     def handle_request(self, request: Dict[str, Any]) -> Dict[str, Any]:
         """Process a single JSON-RPC request and return a response."""
@@ -122,6 +124,14 @@ class DelegationMCPHandler:
 
         return self._error(req_id, -32602, f"Unknown tool: {tool_name}")
 
+    def _resolve_parent_agent_id(self) -> str:
+        """Resolve the parent agent ID from init value or environment."""
+        return self.parent_agent_id or os.environ.get("G3LOBSTER_AGENT_ID", "")
+
+    def _resolve_parent_session_id(self) -> str:
+        """Resolve the parent session ID from environment."""
+        return os.environ.get("G3LOBSTER_SESSION_ID", "default")
+
     def _delegate_to_agent(
         self, req_id: Any, arguments: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -135,24 +145,27 @@ class DelegationMCPHandler:
                 "isError": True,
             })
 
-        if not self.parent_agent_id:
+        parent_id = self._resolve_parent_agent_id()
+        if not parent_id:
             return self._respond(req_id, {
                 "content": [{
                     "type": "text",
                     "text": (
                         "Error: parent_agent_id is not configured. "
-                        "Launch the delegation MCP server with --parent-agent-id <id>."
+                        "Set G3LOBSTER_AGENT_ID env var or launch with --parent-agent-id <id>."
                     ),
                 }],
                 "isError": True,
             })
 
+        parent_session = self._resolve_parent_session_id()
+
         # Build the REST API request payload
         payload = {
-            "parent_agent_id": self.parent_agent_id,
+            "parent_agent_id": parent_id,
             "child_agent_id": agent_id,
             "task": task,
-            "parent_session_id": "default",
+            "parent_session_id": parent_session,
             "timeout_s": timeout_s,
         }
 
@@ -258,8 +271,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--parent-agent-id",
-        required=True,
-        help="Agent ID of the parent (calling) agent",
+        default="",
+        help="Agent ID of the parent (calling) agent. Falls back to G3LOBSTER_AGENT_ID env var.",
     )
     return parser.parse_args(argv)
 

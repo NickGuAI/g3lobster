@@ -29,7 +29,7 @@ def build_runtime(config: AppConfig):
     mcp_manager = MCPManager(loader=mcp_loader)
     global_memory_manager = GlobalMemoryManager(config.agents.data_dir)
 
-    def process_factory(model_name: str) -> GeminiProcess:
+    def process_factory(model_name: str, agent_id: str = "") -> GeminiProcess:
         args = list(config.gemini.args)
         normalized_model = (model_name or "").strip()
         if normalized_model and normalized_model.lower() != "gemini" and "--model" not in args:
@@ -40,12 +40,13 @@ def build_runtime(config: AppConfig):
             args=args,
             cwd=config.gemini.workspace_dir,
             idle_read_window_s=config.gemini.idle_read_window_s,
+            agent_id=agent_id or None,
         )
 
     def agent_factory(persona, memory_manager: MemoryManager, context_builder: ContextBuilder) -> GeminiAgent:
         return GeminiAgent(
             agent_id=persona.id,
-            process_factory=lambda: process_factory(persona.model),
+            process_factory=lambda: process_factory(persona.model, agent_id=persona.id),
             mcp_manager=mcp_manager,
             memory_manager=memory_manager,
             context_builder=context_builder,
