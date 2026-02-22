@@ -4,15 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from g3lobster.agents.persona import AgentPersona, agent_dir, list_personas, load_persona
+from g3lobster.agents.subagent_registry import RunStatus, SubagentRegistry, SubagentRun
 from g3lobster.memory.context import ContextBuilder
 from g3lobster.memory.global_memory import GlobalMemoryManager
 from g3lobster.memory.manager import MemoryManager
 from g3lobster.pool.health import HealthInspector
+from g3lobster.tasks.types import Task, TaskStatus
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -101,6 +107,7 @@ class AgentRegistry:
 
         self.health = HealthInspector()
         self._agents: Dict[str, RegisteredAgent] = {}
+        self.subagent_registry = SubagentRegistry(Path(data_dir))
 
         self._health_task: Optional[asyncio.Task] = None
         self._stopping = False
@@ -146,11 +153,25 @@ class AgentRegistry:
             gemini_timeout_s=self.gemini_timeout_s,
             gemini_cwd=self.gemini_cwd,
         )
+        def _sibling_provider(current_id: str = agent_id):
+            """Return sibling agent info for context injection."""
+            return [
+                {
+                    "id": rt.persona.id,
+                    "name": rt.persona.name,
+                    "emoji": rt.persona.emoji,
+                    "soul": rt.persona.soul,
+                }
+                for rt in self._agents.values()
+                if rt.persona.id != current_id and rt.persona.enabled
+            ]
+
         context = ContextBuilder(
             memory_manager=memory,
             message_limit=self.context_messages,
             system_preamble=persona.soul,
             global_memory_manager=self.global_memory_manager,
+            sibling_agents_provider=_sibling_provider,
         )
         agent = self.agent_factory(persona, memory, context)
         await agent.start(mcp_servers=persona.mcp_servers)
@@ -225,6 +246,56 @@ class AgentRegistry:
 
         return {"agents": items}
 
+    async def delegate_task(
+        self,
+        parent_agent_id: str,
+        child_agent_id: str,
+        task_prompt: str,
+        parent_session_id: str,
+        timeout_s: float = 300.0,
+    ) -> SubagentRun:
+        """Parent agent delegates a task to child agent.
+
+        Auto-starts the child agent if not already running.  Blocks until the
+        child finishes or the delegation fails.
+        """
+        run = self.subagent_registry.register_run(
+            parent_agent_id=parent_agent_id,
+            child_agent_id=child_agent_id,
+            task=task_prompt,
+            parent_session_id=parent_session_id,
+            timeout_s=timeout_s,
+        )
+
+        # Ensure child agent is running
+        child = self.get_agent(child_agent_id)
+        if not child:
+            started = await self.start_agent(child_agent_id)
+            if not started:
+                self.subagent_registry.fail_run(
+                    run.run_id, f"Failed to start agent {child_agent_id}"
+                )
+                return self.subagent_registry.get_run(run.run_id)
+            child = self.get_agent(child_agent_id)
+
+        # Mark as running
+        run.status = RunStatus.RUNNING
+        self.subagent_registry._save_to_disk()
+
+        # Assign task to child agent
+        child_task = Task(prompt=task_prompt, session_id=run.session_id)
+        result_task = await child.assign(child_task)
+
+        # Record result
+        if result_task.status == TaskStatus.COMPLETED and result_task.result:
+            self.subagent_registry.complete_run(run.run_id, result_task.result)
+        else:
+            self.subagent_registry.fail_run(
+                run.run_id, result_task.error or "Unknown failure"
+            )
+
+        return self.subagent_registry.get_run(run.run_id)
+
     async def _health_loop(self) -> None:
         while not self._stopping:
             await asyncio.sleep(self.health_check_interval_s)
@@ -237,3 +308,13 @@ class AgentRegistry:
                 if issue.agent_id not in self._agents:
                     continue
                 await self.restart_agent(issue.agent_id)
+
+            # Sweep timed-out delegation runs
+            timed_out = self.subagent_registry.check_timeouts()
+            for run in timed_out:
+                logger.warning(
+                    "Delegation run %s timed out (%s -> %s)",
+                    run.run_id,
+                    run.parent_agent_id,
+                    run.child_agent_id,
+                )

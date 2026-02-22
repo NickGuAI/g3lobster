@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from g3lobster.memory.global_memory import GlobalMemoryManager
 from g3lobster.memory.manager import MemoryManager
@@ -19,12 +19,14 @@ class ContextBuilder:
         system_preamble: str = "",
         global_memory_manager: Optional[GlobalMemoryManager] = None,
         procedure_limit: int = 3,
+        sibling_agents_provider: Optional[Callable[[], List[Dict[str, Any]]]] = None,
     ):
         self.memory_manager = memory_manager
         self.message_limit = message_limit
         self.system_preamble = system_preamble.strip()
         self.global_memory_manager = global_memory_manager
         self.procedure_limit = max(1, int(procedure_limit))
+        self._sibling_agents_provider = sibling_agents_provider
 
     def build(self, session_id: str, prompt: str) -> str:
         memory_text = self.memory_manager.read_memory().strip()
@@ -59,6 +61,17 @@ class ContextBuilder:
                 [
                     "# Agent Persona",
                     self.system_preamble,
+                    "",
+                ]
+            )
+
+        agents_section = self._format_available_agents()
+        if agents_section:
+            parts.extend(
+                [
+                    "# Available Agents for Delegation",
+                    "You can delegate tasks to other agents using the delegate_to_agent tool.",
+                    agents_section,
                     "",
                 ]
             )
@@ -100,3 +113,24 @@ class ContextBuilder:
                 lines.append(f"{index}. {step}")
             lines.append("")
         return "\n".join(lines).rstrip()
+
+    def _format_available_agents(self) -> str:
+        """Return a markdown list of sibling agents, or empty string if none."""
+        if not self._sibling_agents_provider:
+            return ""
+        try:
+            agents = self._sibling_agents_provider()
+        except Exception:
+            return ""
+        if not agents:
+            return ""
+        lines: List[str] = []
+        for agent in agents:
+            agent_id = agent.get("id", "unknown")
+            name = agent.get("name", agent_id)
+            emoji = agent.get("emoji", "")
+            soul = str(agent.get("soul", "")).strip()
+            # Use first line of SOUL.md as brief description
+            brief = soul.split("\n", 1)[0].strip() if soul else "(no description)"
+            lines.append(f"- **{emoji} {name}** (`{agent_id}`): {brief}")
+        return "\n".join(lines)
