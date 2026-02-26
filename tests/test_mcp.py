@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
+import os
+
 import pytest
 
+from g3lobster.mcp.delegation_server import DEFAULT_BASE_URL, DelegationMCPHandler
 from g3lobster.mcp.loader import MCPConfigLoader
 from g3lobster.mcp.manager import MCPManager
 
@@ -67,3 +71,188 @@ transport:
     assert manager.resolve_server_names(["calendar", "gmail"]) == ["calendar", "gmail"]
     with pytest.raises(ValueError, match="Unknown MCP server"):
         manager.resolve_server_names(["unknown"])
+
+
+# --- DelegationMCPHandler tests ---
+
+
+def test_delegation_handler_uses_cli_parent_id() -> None:
+    """P0: CLI --parent-agent-id takes precedence over env var."""
+    handler = DelegationMCPHandler(parent_agent_id="athena")
+    assert handler.parent_agent_id == "athena"
+    assert handler._resolve_parent_agent_id() == "athena"
+
+
+def test_delegation_handler_falls_back_to_env_var(monkeypatch) -> None:
+    """P0: Falls back to G3LOBSTER_AGENT_ID env var when CLI flag is empty."""
+    monkeypatch.setenv("G3LOBSTER_AGENT_ID", "hermes")
+    handler = DelegationMCPHandler(parent_agent_id="")
+    # __init__ reads env immediately
+    assert handler.parent_agent_id == "hermes"
+
+
+def test_delegation_handler_env_fallback_in_resolve(monkeypatch) -> None:
+    """P0: _resolve_parent_agent_id reads env at call time."""
+    handler = DelegationMCPHandler(parent_agent_id="")
+    monkeypatch.setenv("G3LOBSTER_AGENT_ID", "zeus")
+    assert handler._resolve_parent_agent_id() == "zeus"
+
+
+def test_delegation_handler_no_identity_error() -> None:
+    """P0: Error when neither CLI flag nor env var provides agent ID."""
+    handler = DelegationMCPHandler(parent_agent_id="")
+    # Ensure env var is not set in the handler
+    response = handler._delegate_to_agent(
+        req_id=1,
+        arguments={"agent_id": "hephaestus", "task": "do work"},
+    )
+    result = response["result"]
+    assert result["isError"] is True
+    assert "G3LOBSTER_AGENT_ID" in result["content"][0]["text"]
+
+
+def test_delegation_handler_session_id_from_env(monkeypatch) -> None:
+    """P1: _resolve_parent_session_id reads G3LOBSTER_SESSION_ID."""
+    monkeypatch.setenv("G3LOBSTER_SESSION_ID", "session-42")
+    handler = DelegationMCPHandler(parent_agent_id="athena")
+    assert handler._resolve_parent_session_id() == "session-42"
+
+
+def test_delegation_handler_session_id_defaults_to_default(monkeypatch) -> None:
+    """P1: Falls back to 'default' when env var is not set."""
+    monkeypatch.delenv("G3LOBSTER_SESSION_ID", raising=False)
+    handler = DelegationMCPHandler(parent_agent_id="athena")
+    assert handler._resolve_parent_session_id() == "default"
+
+
+def test_delegation_handler_initialize_response() -> None:
+    handler = DelegationMCPHandler(parent_agent_id="athena")
+    resp = handler.handle_request({"method": "initialize", "id": 1})
+    assert resp["result"]["protocolVersion"] == "2024-11-05"
+    assert resp["result"]["serverInfo"]["name"] == "g3lobster-delegation"
+
+
+def test_delegation_handler_tools_list() -> None:
+    handler = DelegationMCPHandler(parent_agent_id="athena")
+    resp = handler.handle_request({"method": "tools/list", "id": 2})
+    tool_names = [t["name"] for t in resp["result"]["tools"]]
+    assert "delegate_to_agent" in tool_names
+    assert "list_agents" in tool_names
+
+
+def test_delegation_handler_unknown_method() -> None:
+    handler = DelegationMCPHandler(parent_agent_id="athena")
+    resp = handler.handle_request({"method": "unknown/method", "id": 3})
+    assert "error" in resp
+    assert resp["error"]["code"] == -32601
+
+
+def test_delegation_handler_missing_args() -> None:
+    """delegate_to_agent with missing required args returns tool error."""
+    handler = DelegationMCPHandler(parent_agent_id="athena")
+    resp = handler.handle_request({
+        "method": "tools/call",
+        "id": 4,
+        "params": {"name": "delegate_to_agent", "arguments": {}},
+    })
+    result = resp["result"]
+    assert result["isError"] is True
+    assert "required" in result["content"][0]["text"].lower()
+
+
+def test_delegation_handler_parse_args_optional_parent_id() -> None:
+    """--parent-agent-id is optional (not required) for env-var fallback."""
+    from g3lobster.mcp.delegation_server import parse_args
+    args = parse_args(["--base-url", "http://localhost:9999"])
+    assert args.parent_agent_id == ""
+    assert args.base_url == "http://localhost:9999"
+
+
+# --- P1: DEFAULT_BASE_URL ---
+
+
+def test_default_base_url_matches_server_config_default() -> None:
+    """P1: DEFAULT_BASE_URL must match ServerConfig.port default (20001)."""
+    assert DEFAULT_BASE_URL == "http://localhost:20001"
+
+
+# --- P0: delegation YAML & auto-registration ---
+
+
+def test_delegation_yaml_loadable(tmp_path) -> None:
+    """P0: delegation.yaml is valid and loadable by MCPConfigLoader."""
+    config_dir = tmp_path / "mcp"
+    config_dir.mkdir()
+    (config_dir / "delegation.yaml").write_text(
+        """\
+name: g3lobster-delegation
+enabled: true
+transport:
+  type: stdio
+  command: python
+  args:
+    - -m
+    - g3lobster.mcp.delegation_server
+description: Agent-to-agent delegation via g3lobster REST API
+tool_patterns:
+  - delegate_to_agent
+  - list_agents
+""",
+        encoding="utf-8",
+    )
+
+    loader = MCPConfigLoader(str(config_dir))
+    configs = loader.load_all()
+
+    assert "g3lobster-delegation" in configs
+    assert configs["g3lobster-delegation"]["transport"]["type"] == "stdio"
+    patterns = loader.get_tool_patterns()
+    assert "g3lobster-delegation" in patterns
+    assert "delegate_to_agent" in patterns["g3lobster-delegation"]
+    assert "list_agents" in patterns["g3lobster-delegation"]
+
+
+def test_ensure_delegation_mcp_config_creates_settings(tmp_path) -> None:
+    """P0: Auto-registration creates correct Gemini CLI settings."""
+    from g3lobster.main import _ensure_delegation_mcp_config
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    _ensure_delegation_mcp_config(workspace_dir=str(workspace), server_port=40000)
+
+    settings_path = workspace / ".gemini" / "settings.json"
+    assert settings_path.exists()
+
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert "g3lobster-delegation" in settings["mcpServers"]
+
+    server_config = settings["mcpServers"]["g3lobster-delegation"]
+    assert server_config["args"][-1] == "http://127.0.0.1:40000"
+    assert "--base-url" in server_config["args"]
+
+
+def test_ensure_delegation_mcp_config_preserves_existing(tmp_path) -> None:
+    """P0: Auto-registration merges with existing settings, not overwrites."""
+    from g3lobster.main import _ensure_delegation_mcp_config
+
+    gemini_dir = tmp_path / ".gemini"
+    gemini_dir.mkdir()
+    settings_path = gemini_dir / "settings.json"
+    settings_path.write_text(
+        json.dumps({
+            "mcpServers": {"my-custom-server": {"command": "node", "args": ["server.js"]}},
+            "otherSetting": True,
+        }),
+        encoding="utf-8",
+    )
+
+    _ensure_delegation_mcp_config(workspace_dir=str(tmp_path), server_port=20001)
+
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    # Existing entries preserved
+    assert "my-custom-server" in settings["mcpServers"]
+    assert settings["otherSetting"] is True
+    # Delegation entry added
+    assert "g3lobster-delegation" in settings["mcpServers"]
+    assert settings["mcpServers"]["g3lobster-delegation"]["args"][-1] == "http://127.0.0.1:20001"

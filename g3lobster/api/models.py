@@ -38,6 +38,7 @@ class AgentResponse(BaseModel):
     uptime_s: int
     current_task: Optional[str] = None
     pending_assignments: int = 0
+    description: str = ""
 
 
 class AgentDetailResponse(AgentResponse):

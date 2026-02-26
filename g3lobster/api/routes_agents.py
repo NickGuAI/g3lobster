@@ -134,6 +134,7 @@ async def create_agent(payload: AgentCreateRequest, request: Request) -> AgentDe
         "uptime_s": 0,
         "current_task": None,
         "pending_assignments": 0,
+        "description": (saved.soul.split("\n")[0].strip().lstrip("#").strip() if saved.soul else ""),
     }
     return AgentDetailResponse(
         **current,
@@ -196,6 +197,7 @@ async def get_agent(agent_id: str, request: Request) -> AgentDetailResponse:
         "uptime_s": 0,
         "current_task": None,
         "pending_assignments": 0,
+        "description": (persona.soul.split("\n")[0].strip().lstrip("#").strip() if persona.soul else ""),
     }
     return AgentDetailResponse(
         **current,

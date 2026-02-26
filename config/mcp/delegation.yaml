@@ -1,0 +1,12 @@
+name: g3lobster-delegation
+enabled: true
+transport:
+  type: stdio
+  command: python
+  args:
+    - -m
+    - g3lobster.mcp.delegation_server
+description: Agent-to-agent delegation via g3lobster REST API
+tool_patterns:
+  - delegate_to_agent
+  - list_agents
