@@ -4,15 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from g3lobster.agents.persona import AgentPersona, agent_dir, list_personas, load_persona
+from g3lobster.agents.subagent_registry import RunStatus, SubagentRegistry, SubagentRun
 from g3lobster.memory.context import ContextBuilder
 from g3lobster.memory.global_memory import GlobalMemoryManager
 from g3lobster.memory.manager import MemoryManager
 from g3lobster.pool.health import HealthInspector
+from g3lobster.tasks.types import Task, TaskStatus
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -100,6 +106,7 @@ class AgentRegistry:
         self.agent_factory = agent_factory
 
         self.health = HealthInspector()
+        self.subagent_registry = SubagentRegistry(Path(data_dir))
         self._agents: Dict[str, RegisteredAgent] = {}
 
         self._health_task: Optional[asyncio.Task] = None
@@ -146,11 +153,26 @@ class AgentRegistry:
             gemini_timeout_s=self.gemini_timeout_s,
             gemini_cwd=self.gemini_cwd,
         )
+        current_agent_id = agent_id
+
+        def _agent_list_provider():
+            return [
+                {
+                    "id": p.id,
+                    "name": p.name,
+                    "emoji": p.emoji,
+                    "description": (p.soul.split("\n")[0].strip() if p.soul else ""),
+                }
+                for p in self.list_enabled_personas()
+                if p.id != current_agent_id
+            ]
+
         context = ContextBuilder(
             memory_manager=memory,
             message_limit=self.context_messages,
             system_preamble=persona.soul,
             global_memory_manager=self.global_memory_manager,
+            agent_list_provider=_agent_list_provider,
         )
         agent = self.agent_factory(persona, memory, context)
         await agent.start(mcp_servers=persona.mcp_servers)
@@ -179,17 +201,76 @@ class AgentRegistry:
         return self._agents.get(agent_id)
 
     def list_enabled_personas(self) -> list:
-        """Return personas for all currently running agents (no disk I/O)."""
-        return [rt.persona for rt in self._agents.values() if rt.persona.enabled]
+        """Return personas for all enabled agents (includes stopped agents)."""
+        return [p for p in list_personas(self.data_dir) if p.enabled]
 
     def load_persona(self, agent_id: str) -> Optional[AgentPersona]:
         return load_persona(self.data_dir, agent_id)
+
+    async def delegate_task(
+        self,
+        parent_agent_id: str,
+        child_agent_id: str,
+        task_prompt: str,
+        parent_session_id: str,
+        timeout_s: float = 300.0,
+    ) -> SubagentRun:
+        """Parent agent delegates a task to child agent."""
+        if parent_agent_id == child_agent_id:
+            raise ValueError("Circular delegation is not allowed: agent cannot delegate to itself")
+
+        run = self.subagent_registry.register_run(
+            parent_agent_id=parent_agent_id,
+            child_agent_id=child_agent_id,
+            task=task_prompt,
+            parent_session_id=parent_session_id,
+            timeout_s=timeout_s,
+        )
+
+        # Ensure child agent is running
+        child = self.get_agent(child_agent_id)
+        if not child:
+            started = await self.start_agent(child_agent_id)
+            if not started:
+                self.subagent_registry.fail_run(
+                    run.run_id, f"Failed to start agent {child_agent_id}"
+                )
+                return self.subagent_registry.get_run(run.run_id)
+            child = self.get_agent(child_agent_id)
+
+        # Mark as running
+        run.status = RunStatus.RUNNING
+        self.subagent_registry._save_to_disk()
+
+        # Assign task to child agent
+        child_task = Task(prompt=task_prompt, session_id=run.session_id, timeout_s=timeout_s)
+        result_task = await child.assign(child_task)
+
+        # Record result
+        if result_task.status == TaskStatus.COMPLETED and result_task.result:
+            self.subagent_registry.complete_run(run.run_id, result_task.result)
+        else:
+            self.subagent_registry.fail_run(
+                run.run_id, result_task.error or "Unknown failure"
+            )
+
+        return self.subagent_registry.get_run(run.run_id)
+
+    @staticmethod
+    def _soul_summary(soul: str) -> str:
+        """Return the first non-empty line of the SOUL.md as a brief description."""
+        for line in (soul or "").splitlines():
+            stripped = line.strip().lstrip("#").strip()
+            if stripped:
+                return stripped
+        return ""
 
     async def status(self) -> Dict[str, object]:
         now = time.time()
         items: List[Dict[str, object]] = []
 
         for persona in list_personas(self.data_dir):
+            description = self._soul_summary(persona.soul)
             runtime = self._agents.get(persona.id)
             if runtime:
                 raw_state = runtime.state
@@ -206,6 +287,7 @@ class AgentRegistry:
                     "uptime_s": int(now - runtime.started_at),
                     "current_task": runtime.current_task.id if runtime.current_task else None,
                     "pending_assignments": runtime.pending_assignments,
+                    "description": description,
                 }
             else:
                 item = {
@@ -220,6 +302,7 @@ class AgentRegistry:
                     "uptime_s": 0,
                     "current_task": None,
                     "pending_assignments": 0,
+                    "description": description,
                 }
             items.append(item)
 
@@ -237,3 +320,13 @@ class AgentRegistry:
                 if issue.agent_id not in self._agents:
                     continue
                 await self.restart_agent(issue.agent_id)
+
+            # Sweep timed-out delegation runs
+            timed_out = self.subagent_registry.check_timeouts()
+            for run in timed_out:
+                logger.warning(
+                    "Delegation run %s timed out (%s -> %s)",
+                    run.run_id,
+                    run.parent_agent_id,
+                    run.child_agent_id,
+                )

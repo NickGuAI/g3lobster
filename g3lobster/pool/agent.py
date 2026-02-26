@@ -72,7 +72,7 @@ class GeminiAgent:
         try:
             prompt = self.context_builder.build(task.session_id, task.prompt)
             self.memory_manager.append_message(task.session_id, "user", task.prompt, {"task_id": task.id})
-            raw_output = await self.process.ask(prompt, timeout=task.timeout_s)
+            raw_output = await self.process.ask(prompt, timeout=task.timeout_s, session_id=task.session_id)
             parsed = strip_reasoning(clean_text(raw_output))
             task.result = parsed
             task.status = TaskStatus.COMPLETED
