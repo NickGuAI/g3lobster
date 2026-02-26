@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 import os
 
 import pytest
 
-from g3lobster.mcp.delegation_server import DelegationMCPHandler
+from g3lobster.mcp.delegation_server import DEFAULT_BASE_URL, DelegationMCPHandler
 from g3lobster.mcp.loader import MCPConfigLoader
 from g3lobster.mcp.manager import MCPManager
 
@@ -165,3 +166,93 @@ def test_delegation_handler_parse_args_optional_parent_id() -> None:
     args = parse_args(["--base-url", "http://localhost:9999"])
     assert args.parent_agent_id == ""
     assert args.base_url == "http://localhost:9999"
+
+
+# --- P1: DEFAULT_BASE_URL ---
+
+
+def test_default_base_url_matches_server_config_default() -> None:
+    """P1: DEFAULT_BASE_URL must match ServerConfig.port default (20001)."""
+    assert DEFAULT_BASE_URL == "http://localhost:20001"
+
+
+# --- P0: delegation YAML & auto-registration ---
+
+
+def test_delegation_yaml_loadable(tmp_path) -> None:
+    """P0: delegation.yaml is valid and loadable by MCPConfigLoader."""
+    config_dir = tmp_path / "mcp"
+    config_dir.mkdir()
+    (config_dir / "delegation.yaml").write_text(
+        """\
+name: g3lobster-delegation
+enabled: true
+transport:
+  type: stdio
+  command: python
+  args:
+    - -m
+    - g3lobster.mcp.delegation_server
+description: Agent-to-agent delegation via g3lobster REST API
+tool_patterns:
+  - delegate_to_agent
+  - list_agents
+""",
+        encoding="utf-8",
+    )
+
+    loader = MCPConfigLoader(str(config_dir))
+    configs = loader.load_all()
+
+    assert "g3lobster-delegation" in configs
+    assert configs["g3lobster-delegation"]["transport"]["type"] == "stdio"
+    patterns = loader.get_tool_patterns()
+    assert "g3lobster-delegation" in patterns
+    assert "delegate_to_agent" in patterns["g3lobster-delegation"]
+    assert "list_agents" in patterns["g3lobster-delegation"]
+
+
+def test_ensure_delegation_mcp_config_creates_settings(tmp_path) -> None:
+    """P0: Auto-registration creates correct Gemini CLI settings."""
+    from g3lobster.main import _ensure_delegation_mcp_config
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    _ensure_delegation_mcp_config(workspace_dir=str(workspace), server_port=40000)
+
+    settings_path = workspace / ".gemini" / "settings.json"
+    assert settings_path.exists()
+
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert "g3lobster-delegation" in settings["mcpServers"]
+
+    server_config = settings["mcpServers"]["g3lobster-delegation"]
+    assert server_config["args"][-1] == "http://127.0.0.1:40000"
+    assert "--base-url" in server_config["args"]
+
+
+def test_ensure_delegation_mcp_config_preserves_existing(tmp_path) -> None:
+    """P0: Auto-registration merges with existing settings, not overwrites."""
+    from g3lobster.main import _ensure_delegation_mcp_config
+
+    gemini_dir = tmp_path / ".gemini"
+    gemini_dir.mkdir()
+    settings_path = gemini_dir / "settings.json"
+    settings_path.write_text(
+        json.dumps({
+            "mcpServers": {"my-custom-server": {"command": "node", "args": ["server.js"]}},
+            "otherSetting": True,
+        }),
+        encoding="utf-8",
+    )
+
+    _ensure_delegation_mcp_config(workspace_dir=str(tmp_path), server_port=20001)
+
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    # Existing entries preserved
+    assert "my-custom-server" in settings["mcpServers"]
+    assert settings["otherSetting"] is True
+    # Delegation entry added
+    assert "g3lobster-delegation" in settings["mcpServers"]
+    assert settings["mcpServers"]["g3lobster-delegation"]["args"][-1] == "http://127.0.0.1:20001"

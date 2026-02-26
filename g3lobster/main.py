@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
+import sys
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -24,7 +26,53 @@ from g3lobster.pool.agent import GeminiAgent
 logger = logging.getLogger(__name__)
 
 
+def _ensure_delegation_mcp_config(workspace_dir: str, server_port: int) -> None:
+    """Auto-register the delegation MCP server in Gemini CLI workspace settings.
+
+    Writes (or merges) a ``g3lobster-delegation`` entry into
+    ``<workspace>/.gemini/settings.json`` so that Gemini CLI can launch the
+    delegation stdio server with the correct ``--base-url``.
+    """
+    gemini_dir = Path(workspace_dir) / ".gemini"
+    gemini_dir.mkdir(parents=True, exist_ok=True)
+    settings_path = gemini_dir / "settings.json"
+
+    settings: dict = {}
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    mcp_servers = settings.setdefault("mcpServers", {})
+    base_url = f"http://127.0.0.1:{server_port}"
+
+    mcp_servers["g3lobster-delegation"] = {
+        "command": sys.executable,
+        "args": [
+            "-m",
+            "g3lobster.mcp.delegation_server",
+            "--base-url",
+            base_url,
+        ],
+    }
+
+    settings_path.write_text(
+        json.dumps(settings, indent=2) + "\n", encoding="utf-8"
+    )
+    logger.info(
+        "Registered delegation MCP server in %s (base_url=%s)",
+        settings_path,
+        base_url,
+    )
+
+
 def build_runtime(config: AppConfig):
+    _ensure_delegation_mcp_config(
+        workspace_dir=config.gemini.workspace_dir,
+        server_port=config.server.port,
+    )
+
     mcp_loader = MCPConfigLoader(config_dir=config.mcp.config_dir)
     mcp_manager = MCPManager(loader=mcp_loader)
     global_memory_manager = GlobalMemoryManager(config.agents.data_dir)

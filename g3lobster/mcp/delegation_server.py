@@ -5,7 +5,7 @@ runs, allowing Gemini CLI agents to delegate tasks to sibling agents via
 standard MCP tool calls.
 
 Usage (stdio transport):
-    python -m g3lobster.mcp.delegation_server --base-url http://localhost:8080
+    python -m g3lobster.mcp.delegation_server --base-url http://localhost:20001
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from typing import Any, Dict, Optional, Sequence
 logger = logging.getLogger(__name__)
 
 # Default base URL for the g3lobster API
-DEFAULT_BASE_URL = "http://localhost:8080"
+DEFAULT_BASE_URL = "http://localhost:20001"
 
 
 def _build_delegate_tool_schema() -> Dict[str, Any]:
