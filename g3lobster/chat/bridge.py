@@ -6,9 +6,13 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Optional, Set
+from typing import TYPE_CHECKING, Dict, Optional, Set
+
+if TYPE_CHECKING:
+    from g3lobster.cron.store import CronStore
 
 from g3lobster.chat.auth import get_authenticated_service
+from g3lobster.chat.commands import handle as handle_command
 from g3lobster.cli.parser import get_content_id
 from g3lobster.tasks.types import Task, TaskStatus
 
@@ -29,6 +33,7 @@ class ChatBridge:
         last_message_time: Optional[str] = None,
         seen_content: Optional[Set[str]] = None,
         auth_data_dir: Optional[str] = None,
+        cron_store: Optional["CronStore"] = None,
     ):
         self.registry = registry
         self.poll_interval_s = poll_interval_s
@@ -36,6 +41,7 @@ class ChatBridge:
         self.space_name = space_name
         self.spaces_config = Path(spaces_config or (Path.home() / ".gemini" / "chat_bridge_spaces.json"))
         self.auth_data_dir = auth_data_dir
+        self.cron_store = cron_store
 
         self.space_id = space_id
         self._poll_task: Optional[asyncio.Task] = None
@@ -189,7 +195,18 @@ class ChatBridge:
 
         persona = runtime.persona
         thread_id = message.get("thread", {}).get("name")
-        session_id = thread_id or sender.get("name") or "default"
+        user_id = sender.get("name") or "unknown"
+        session_id = f"{self.space_id}__{user_id}"
+
+        # Slash-command interception — handle locally without hitting the AI.
+        if self.cron_store is not None:
+            cmd_reply = handle_command(text, target_id, self.cron_store)
+            if cmd_reply is not None:
+                await self.send_message(
+                    f"{persona.emoji} {persona.name}: {cmd_reply}",
+                    thread_id=thread_id,
+                )
+                return
 
         task = Task(prompt=text, session_id=session_id)
 

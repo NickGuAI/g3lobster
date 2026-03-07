@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from g3lobster.api.routes_agents import router as agents_router
 from g3lobster.api.routes_chat_events import router as chat_events_router
+from g3lobster.api.routes_cron import router as cron_router
 from g3lobster.api.routes_delegation import router as delegation_router
 from g3lobster.api.routes_health import router as health_router
 from g3lobster.api.routes_setup import router as setup_router
@@ -26,6 +27,9 @@ def create_app(
     config_path: Optional[str] = None,
     chat_auth_dir: Optional[str] = None,
     global_memory_manager: Optional[object] = None,
+    cron_store: Optional[object] = None,
+    cron_manager: Optional[object] = None,
+    email_bridge: Optional[object] = None,
 ) -> FastAPI:
     runtime_config = config or AppConfig()
     runtime_config_path = str(Path(config_path or "config.yaml").expanduser().resolve())
@@ -33,13 +37,21 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await registry.start_all()
+        if app.state.cron_manager:
+            app.state.cron_manager.start()
         if app.state.chat_bridge:
             await app.state.chat_bridge.start()
+        if app.state.email_bridge:
+            await app.state.email_bridge.start()
         try:
             yield
         finally:
+            if app.state.email_bridge:
+                await app.state.email_bridge.stop()
             if app.state.chat_bridge:
                 await app.state.chat_bridge.stop()
+            if app.state.cron_manager:
+                app.state.cron_manager.stop()
             await registry.stop_all()
 
     app = FastAPI(title="g3lobster", lifespan=lifespan)
@@ -51,6 +63,9 @@ def create_app(
     app.state.bridge_lock = asyncio.Lock()
     app.state.chat_auth_dir = chat_auth_dir
     app.state.global_memory_manager = global_memory_manager
+    app.state.cron_store = cron_store
+    app.state.cron_manager = cron_manager
+    app.state.email_bridge = email_bridge
     app.state._stopped_memory_managers = {}
 
     app.include_router(health_router)
@@ -58,6 +73,7 @@ def create_app(
     app.include_router(setup_router)
     app.include_router(chat_events_router)
     app.include_router(delegation_router)
+    app.include_router(cron_router)
 
     static_dir = Path(__file__).resolve().parent.parent / "static"
     if static_dir.is_dir():

@@ -1,6 +1,8 @@
 import {
   createAgent,
+  createCronTask,
   deleteAgent,
+  deleteCronTask,
   getAgent,
   getAgentMemory,
   getAgentProcedures,
@@ -11,6 +13,7 @@ import {
   linkAgentBot,
   listAgentSessions,
   listAgents,
+  listCronTasks,
   listGlobalKnowledge,
   restartAgent,
   startAgent,
@@ -21,6 +24,7 @@ import {
   updateAgent,
   updateAgentMemory,
   updateAgentProcedures,
+  updateCronTask,
   updateGlobalProcedures,
   updateGlobalUserMemory,
 } from "./api.js";
@@ -66,6 +70,7 @@ export async function render(root, { onSetupChange }) {
   const proceduresCache = {};
   const sessionsCache = {};
   const transcriptCache = {};
+  const cronsCache = {};
 
   let globalUserMemory = "";
   let globalProcedures = "";
@@ -218,6 +223,36 @@ export async function render(root, { onSetupChange }) {
     `;
   }
 
+  function renderMessageContent(role, content) {
+    if (role === "assistant" && typeof window.marked !== "undefined" && typeof window.DOMPurify !== "undefined") {
+      const html = window.marked.parse(String(content || ""));
+      return window.DOMPurify.sanitize(html);
+    }
+    return `<p>${escapeHtml(String(content || ""))}</p>`;
+  }
+
+  function renderTranscript(cached) {
+    if (!cached || typeof cached !== "object") {
+      return "<p class='empty'>(select a session)</p>";
+    }
+    const entries = Array.isArray(cached.entries) ? cached.entries : [];
+    const messages = entries.filter((e) => e && e.type === "message" && e.message);
+    if (!messages.length) {
+      return "<p class='empty'>(no messages)</p>";
+    }
+    return messages
+      .map((e) => {
+        const role = String(e.message.role || "unknown");
+        const content = e.message.content || "";
+        const ts = e.timestamp ? `<span class="msg-ts">${escapeHtml(e.timestamp.replace("T", " ").slice(0, 19))}</span>` : "";
+        return `<div class="msg msg-${escapeHtml(role)}">
+          <div class="msg-header"><span class="msg-role">${escapeHtml(role)}</span>${ts}</div>
+          <div class="msg-body">${renderMessageContent(role, content)}</div>
+        </div>`;
+      })
+      .join("");
+  }
+
   function sessionsTabMarkup(agent) {
     const sessions = sessionsCache[agent.id] || [];
     const sessionOptions = sessions.length
@@ -235,7 +270,54 @@ export async function render(root, { onSetupChange }) {
         <button class="btn btn-secondary" data-action="load-sessions" data-agent-id="${escapeHtml(agent.id)}">Refresh Sessions</button>
         <button class="btn btn-secondary" data-action="load-session" data-agent-id="${escapeHtml(agent.id)}">Open Session</button>
       </div>
-      <pre class="transcript">${escapeHtml(transcriptCache[agent.id] || "(select a session)")}</pre>
+      <div class="chat-transcript">${renderTranscript(transcriptCache[agent.id])}</div>
+    `;
+  }
+
+  function cronsTabMarkup(agent) {
+    const tasks = cronsCache[agent.id] || [];
+    const taskRows = tasks.length
+      ? tasks.map((t) => {
+          const status = t.enabled ? "✅" : "⏸";
+          const last = t.last_run ? t.last_run.slice(0, 19).replace("T", " ") : "never";
+          return `
+            <tr>
+              <td>${status}</td>
+              <td><code>${escapeHtml(t.id.slice(0, 8))}</code></td>
+              <td><code>${escapeHtml(t.schedule)}</code></td>
+              <td>${escapeHtml(t.instruction)}</td>
+              <td>${escapeHtml(last)}</td>
+              <td class="actions">
+                <button class="btn btn-secondary" data-action="cron-toggle" data-agent-id="${escapeHtml(agent.id)}" data-task-id="${escapeHtml(t.id)}" data-enabled="${t.enabled ? "1" : "0"}">${t.enabled ? "Disable" : "Enable"}</button>
+                <button class="btn btn-danger" data-action="cron-delete" data-agent-id="${escapeHtml(agent.id)}" data-task-id="${escapeHtml(t.id)}">Delete</button>
+              </td>
+            </tr>`;
+        }).join("")
+      : `<tr><td colspan="6" class="empty">No cron tasks. Add one below.</td></tr>`;
+
+    return `
+      <div class="actions">
+        <button class="btn btn-secondary" data-action="load-crons" data-agent-id="${escapeHtml(agent.id)}">Refresh</button>
+      </div>
+      <table class="cron-table">
+        <thead><tr><th></th><th>ID</th><th>Schedule</th><th>Instruction</th><th>Last Run</th><th></th></tr></thead>
+        <tbody>${taskRows}</tbody>
+      </table>
+      <form class="cron-add-form" data-agent-id="${escapeHtml(agent.id)}">
+        <div class="form-grid">
+          <div class="field">
+            <label>Schedule (cron)</label>
+            <input name="schedule" placeholder="0 9 * * *" required />
+          </div>
+          <div class="field" style="grid-column: 1 / -1;">
+            <label>Instruction</label>
+            <input name="instruction" placeholder="Send morning briefing" required />
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn btn-primary" type="submit">Add Cron Task</button>
+        </div>
+      </form>
     `;
   }
 
@@ -248,6 +330,9 @@ export async function render(root, { onSetupChange }) {
     }
     if (activeTab === "sessions") {
       return sessionsTabMarkup(agent);
+    }
+    if (activeTab === "crons") {
+      return cronsTabMarkup(agent);
     }
     return personaTabMarkup(agent, detail);
   }
@@ -361,6 +446,7 @@ export async function render(root, { onSetupChange }) {
                   ${tabButtonMarkup("memory", activeTab, "Memory")}
                   ${tabButtonMarkup("procedures", activeTab, "Procedures")}
                   ${tabButtonMarkup("sessions", activeTab, "Sessions")}
+                  ${tabButtonMarkup("crons", activeTab, "Crons")}
                 </div>
                 <div class="tab-panel">${tabPanelMarkup(activeAgent, detail)}</div>
               </div>
@@ -473,6 +559,7 @@ export async function render(root, { onSetupChange }) {
             delete proceduresCache[agentId];
             delete sessionsCache[agentId];
             delete transcriptCache[agentId];
+            delete cronsCache[agentId];
             if (activeAgentId === agentId) {
               activeAgentId = null;
             }
@@ -511,9 +598,23 @@ export async function render(root, { onSetupChange }) {
               setNotice("error", "Select a session first.");
             } else {
               const payload = await getAgentSession(agentId, sessionId);
-              transcriptCache[agentId] = JSON.stringify(payload, null, 2);
+              transcriptCache[agentId] = payload;
               setNotice("info", `Loaded session ${sessionId}.`);
             }
+          } else if (action === "load-crons") {
+            cronsCache[agentId] = await listCronTasks(agentId);
+            setNotice("info", `Loaded cron tasks for ${agentId}.`);
+          } else if (action === "cron-toggle") {
+            const taskId = button.dataset.taskId;
+            const currentlyEnabled = button.dataset.enabled === "1";
+            await updateCronTask(agentId, taskId, { enabled: !currentlyEnabled });
+            cronsCache[agentId] = await listCronTasks(agentId);
+            setNotice("success", `Cron task ${currentlyEnabled ? "disabled" : "enabled"}.`);
+          } else if (action === "cron-delete") {
+            const taskId = button.dataset.taskId;
+            await deleteCronTask(agentId, taskId);
+            cronsCache[agentId] = await listCronTasks(agentId);
+            setNotice("info", "Cron task deleted.");
           } else if (action === "link-bot") {
             const input = formFieldForAgent(root, agentId, "bot_user_id");
             const botUserId = input?.value?.trim();
@@ -557,6 +658,33 @@ export async function render(root, { onSetupChange }) {
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           setNotice("error", `Failed to update ${agentId}: ${message}`);
+        }
+        rerender();
+      });
+    }
+  }
+
+    for (const form of root.querySelectorAll("form.cron-add-form")) {
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const agentId = form.dataset.agentId;
+        if (!agentId) return;
+        const data = new FormData(form);
+        const schedule = String(data.get("schedule") || "").trim();
+        const instruction = String(data.get("instruction") || "").trim();
+        if (!schedule || !instruction) {
+          setNotice("error", "Schedule and instruction are required.");
+          rerender();
+          return;
+        }
+        try {
+          await createCronTask(agentId, schedule, instruction);
+          cronsCache[agentId] = await listCronTasks(agentId);
+          setNotice("success", "Cron task added.");
+          form.reset();
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          setNotice("error", `Failed to add cron task: ${message}`);
         }
         rerender();
       });

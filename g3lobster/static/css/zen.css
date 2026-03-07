@@ -318,6 +318,132 @@ pre.transcript {
   gap: var(--space-3);
 }
 
+.chat-transcript {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-height: 480px;
+  overflow-y: auto;
+  padding: var(--space-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  background: #fafaf8;
+}
+
+.chat-transcript .empty {
+  color: var(--ink-soft);
+  font-style: italic;
+  text-align: center;
+  padding: var(--space-4);
+}
+
+.msg {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-width: 90%;
+}
+
+.msg-user {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.msg-assistant {
+  align-self: flex-start;
+  align-items: flex-start;
+}
+
+.msg-header {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.msg-role {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+}
+
+.msg-ts {
+  font-size: 0.68rem;
+  color: var(--ink-soft);
+}
+
+.msg-body {
+  padding: var(--space-2) var(--space-3);
+  border-radius: 10px;
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+
+.msg-user .msg-body {
+  background: var(--accent);
+  color: #fff;
+}
+
+.msg-assistant .msg-body {
+  background: var(--card);
+  border: 1px solid var(--edge);
+  color: var(--ink);
+}
+
+.msg-body p { margin: 0 0 0.4em; }
+.msg-body p:last-child { margin: 0; }
+.msg-body code {
+  font-family: "Courier New", monospace;
+  font-size: 0.84em;
+  background: rgba(0,0,0,0.07);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.msg-body pre {
+  background: rgba(0,0,0,0.07);
+  padding: var(--space-2) var(--space-3);
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.82em;
+}
+.msg-body ul, .msg-body ol {
+  margin: 0 0 0.4em;
+  padding-left: 1.4em;
+}
+
+.cron-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.cron-table th,
+.cron-table td {
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  border-bottom: 1px solid var(--edge);
+}
+
+.cron-table th {
+  font-weight: 600;
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cron-table td.actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.cron-add-form {
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--edge);
+}
+
 @media (max-width: 860px) {
   .shell {
     padding: var(--space-6) var(--space-4) var(--space-7);

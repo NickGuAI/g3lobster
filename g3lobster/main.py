@@ -14,8 +14,11 @@ import uvicorn
 from g3lobster.agents.registry import AgentRegistry
 from g3lobster.api.server import create_app
 from g3lobster.chat.bridge import ChatBridge
+from g3lobster.chat.email_bridge import EmailBridge
 from g3lobster.cli.process import GeminiProcess
 from g3lobster.config import AppConfig, load_config
+from g3lobster.cron.manager import CronManager
+from g3lobster.cron.store import CronStore
 from g3lobster.memory.context import ContextBuilder
 from g3lobster.memory.global_memory import GlobalMemoryManager
 from g3lobster.memory.manager import MemoryManager
@@ -120,6 +123,8 @@ def build_runtime(config: AppConfig):
     )
 
     chat_auth_dir = str(Path(config.agents.data_dir) / "chat_auth")
+    cron_store = CronStore(config.agents.data_dir)
+    cron_manager = CronManager(cron_store=cron_store, registry=registry) if config.cron.enabled else None
 
     def chat_bridge_factory(
         service=None,
@@ -135,17 +140,27 @@ def build_runtime(config: AppConfig):
             last_message_time=last_message_time,
             seen_content=seen_content,
             auth_data_dir=chat_auth_dir,
+            cron_store=cron_store,
         )
 
     chat_bridge = chat_bridge_factory() if config.chat.enabled else None
 
-    return registry, chat_bridge, chat_bridge_factory, chat_auth_dir, global_memory_manager
+    email_bridge: EmailBridge | None = None
+    if config.email.enabled and config.email.base_address:
+        email_bridge = EmailBridge(
+            registry=registry,
+            base_address=config.email.base_address,
+            poll_interval_s=config.email.poll_interval_s,
+            auth_data_dir=config.email.auth_data_dir,
+        )
+
+    return registry, chat_bridge, chat_bridge_factory, chat_auth_dir, global_memory_manager, cron_store, cron_manager, email_bridge
 
 
 def build_app(config_path: Optional[str] = None):
     resolved_config_path = Path(config_path or "config.yaml").expanduser().resolve()
     config = load_config(str(resolved_config_path))
-    registry, chat_bridge, chat_bridge_factory, chat_auth_dir, global_memory_manager = build_runtime(config)
+    registry, chat_bridge, chat_bridge_factory, chat_auth_dir, global_memory_manager, cron_store, cron_manager, email_bridge = build_runtime(config)
     app = create_app(
         registry=registry,
         chat_bridge=chat_bridge,
@@ -154,6 +169,9 @@ def build_app(config_path: Optional[str] = None):
         config_path=str(resolved_config_path),
         chat_auth_dir=chat_auth_dir,
         global_memory_manager=global_memory_manager,
+        cron_store=cron_store,
+        cron_manager=cron_manager,
+        email_bridge=email_bridge,
     )
     return app, config
 

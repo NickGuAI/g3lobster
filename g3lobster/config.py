@@ -47,6 +47,19 @@ class ChatConfig:
 
 
 @dataclass
+class EmailConfig:
+    enabled: bool = False
+    poll_interval_s: float = 30.0
+    base_address: str = ""   # e.g. "helper@example.com"
+    auth_data_dir: str = "./data/email_auth"
+
+
+@dataclass
+class CronConfig:
+    enabled: bool = True
+
+
+@dataclass
 class ServerConfig:
     host: str = "0.0.0.0"
     port: int = 20001
@@ -58,6 +71,8 @@ class AppConfig:
     gemini: GeminiConfig = field(default_factory=GeminiConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
     chat: ChatConfig = field(default_factory=ChatConfig)
+    email: EmailConfig = field(default_factory=EmailConfig)
+    cron: CronConfig = field(default_factory=CronConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
 
 
@@ -130,6 +145,8 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         gemini=GeminiConfig(**(data.get("gemini") or {})),
         mcp=MCPConfig(**(data.get("mcp") or {})),
         chat=ChatConfig(**(data.get("chat") or {})),
+        email=EmailConfig(**(data.get("email") or {})),
+        cron=CronConfig(**(data.get("cron") or {})),
         server=ServerConfig(**(data.get("server") or {})),
     )
 
@@ -137,11 +154,14 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     _apply_env_overrides("gemini", config.gemini)
     _apply_env_overrides("mcp", config.mcp)
     _apply_env_overrides("chat", config.chat)
+    _apply_env_overrides("email", config.email)
+    _apply_env_overrides("cron", config.cron)
     _apply_env_overrides("server", config.server)
 
     config.mcp.config_dir = _resolve_path(config.mcp.config_dir, path)
     config.agents.data_dir = _resolve_path(config.agents.data_dir, path)
     config.gemini.workspace_dir = _resolve_path(config.gemini.workspace_dir, path)
+    config.email.auth_data_dir = _resolve_path(config.email.auth_data_dir, path)
 
     return config
 

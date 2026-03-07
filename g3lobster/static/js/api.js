@@ -183,3 +183,27 @@ export function testAgent(agentId, text = "ping") {
     body: JSON.stringify({ text }),
   });
 }
+
+export function listCronTasks(agentId) {
+  return request(`/agents/${encodeURIComponent(agentId)}/crons`, { method: "GET" });
+}
+
+export function createCronTask(agentId, schedule, instruction) {
+  return request(`/agents/${encodeURIComponent(agentId)}/crons`, {
+    method: "POST",
+    body: JSON.stringify({ schedule, instruction }),
+  });
+}
+
+export function updateCronTask(agentId, taskId, payload) {
+  return request(`/agents/${encodeURIComponent(agentId)}/crons/${encodeURIComponent(taskId)}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteCronTask(agentId, taskId) {
+  return request(`/agents/${encodeURIComponent(agentId)}/crons/${encodeURIComponent(taskId)}`, {
+    method: "DELETE",
+  });
+}

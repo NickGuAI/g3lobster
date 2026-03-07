@@ -9,6 +9,22 @@ from g3lobster.memory.manager import MemoryManager
 from g3lobster.memory.procedures import Procedure
 
 
+_STRUCTURE_PREAMBLE_TEMPLATE = """\
+# G3Lobster Agent Environment
+You are an agent running inside g3lobster. Key file locations for your reference:
+- Agent data directory: {data_dir}
+- Session transcripts:  {data_dir}/sessions/<session_id>.jsonl
+- Agent memory:         {data_dir}/.memory/MEMORY.md
+- Agent procedures:     {data_dir}/.memory/PROCEDURES.md
+- Cron tasks:           {data_dir}/crons.json
+- Global memory dir:    {global_data_dir}/.memory/
+You can read these files to understand your own state. Cron tasks are JSON objects
+with fields: id, agent_id, schedule (cron expr), instruction, enabled, last_run, next_run.
+Slash-commands (/cron list, /cron add, /help) are handled directly by the bridge without
+reaching you — you do not need to implement them yourself.\
+"""
+
+
 class ContextBuilder:
     """Builds request context from MEMORY.md + recent transcript entries."""
 
@@ -27,6 +43,18 @@ class ContextBuilder:
         self.global_memory_manager = global_memory_manager
         self.procedure_limit = max(1, int(procedure_limit))
         self.agent_list_provider = agent_list_provider
+
+    def _structure_preamble(self) -> str:
+        data_dir = str(self.memory_manager.data_dir)
+        if self.global_memory_manager:
+            global_data_dir = str(self.global_memory_manager.data_dir)
+        else:
+            import os
+            global_data_dir = os.path.dirname(data_dir)
+        return _STRUCTURE_PREAMBLE_TEMPLATE.format(
+            data_dir=data_dir,
+            global_data_dir=global_data_dir,
+        )
 
     def build(self, session_id: str, prompt: str) -> str:
         memory_text = self.memory_manager.read_memory().strip()
@@ -55,7 +83,7 @@ class ContextBuilder:
                 continue
             history_lines.append(f"{role}: {content}")
 
-        parts = []
+        parts = [self._structure_preamble(), ""]
         if self.system_preamble:
             parts.extend(
                 [
