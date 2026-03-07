@@ -33,7 +33,11 @@ _PLUS_RE = re.compile(r"^[^+]+\+([a-zA-Z0-9_-]+)@", re.IGNORECASE)
 
 def _extract_agent_id(to_address: str) -> Optional[str]:
     """Return the agent ID encoded in a ``prefix+agent_id@domain`` address."""
-    m = _PLUS_RE.match(to_address.strip())
+    addr = to_address.strip()
+    # Strip display name: "John Doe <addr@example.com>" -> "addr@example.com"
+    if "<" in addr and ">" in addr:
+        addr = addr[addr.index("<") + 1 : addr.index(">")]
+    m = _PLUS_RE.match(addr)
     return m.group(1).lower() if m else None
 
 

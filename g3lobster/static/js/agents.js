@@ -662,7 +662,6 @@ export async function render(root, { onSetupChange }) {
         rerender();
       });
     }
-  }
 
     for (const form of root.querySelectorAll("form.cron-add-form")) {
       form.addEventListener("submit", async (event) => {
