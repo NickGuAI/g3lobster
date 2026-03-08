@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, Optional, Set
 
@@ -18,6 +19,22 @@ from g3lobster.tasks.types import Task, TaskStatus
 from g3lobster.utils import BoundedSet
 
 logger = logging.getLogger(__name__)
+
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _parse_ts(ts: str) -> datetime:
+    """Parse an ISO 8601 timestamp string returned by the Google Chat API.
+
+    Handles both ``Z`` suffix and ``+00:00`` offset forms, and varying
+    fractional-second precision.  Falls back to the Unix epoch on parse
+    failure so comparisons remain safe.
+    """
+    try:
+        # Python < 3.11 does not accept the trailing 'Z' in fromisoformat.
+        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return _EPOCH
 
 
 class ChatBridge:
@@ -123,14 +140,16 @@ class ChatBridge:
         messages = response.get("messages", [])
 
         if self._last_message_time is None:
-            self._last_message_time = messages[0].get("createTime") if messages else "0"
+            self._last_message_time = messages[0].get("createTime") if messages else ""
             return
 
+        last_dt = _parse_ts(self._last_message_time) if self._last_message_time else _EPOCH
         for message in reversed(messages):
-            create_time = message.get("createTime", "0")
-            if create_time <= self._last_message_time:
+            create_time = message.get("createTime", "")
+            if _parse_ts(create_time) <= last_dt:
                 continue
             self._last_message_time = create_time
+            last_dt = _parse_ts(create_time)
             await self.handle_message(message)
 
     def _resolve_target_agent(self, message: dict, text: str) -> Optional[str]:
