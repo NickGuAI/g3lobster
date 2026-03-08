@@ -15,6 +15,7 @@ from g3lobster.chat.auth import get_authenticated_service
 from g3lobster.chat.commands import handle as handle_command
 from g3lobster.cli.parser import get_content_id
 from g3lobster.tasks.types import Task, TaskStatus
+from g3lobster.utils import BoundedSet
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ class ChatBridge:
         seen_content: Optional[Set[str]] = None,
         auth_data_dir: Optional[str] = None,
         cron_store: Optional["CronStore"] = None,
+        seen_content_max_size: int = 10_000,
     ):
         self.registry = registry
         self.poll_interval_s = poll_interval_s
@@ -47,7 +49,10 @@ class ChatBridge:
         self._poll_task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
         self._last_message_time: Optional[str] = last_message_time
-        self._seen_content: Set[str] = seen_content or set()
+        self._seen_content: BoundedSet = BoundedSet(seen_content_max_size)
+        if seen_content:
+            for item in seen_content:
+                self._seen_content.add(item)
 
     async def start(self) -> None:
         if self.service is None:
