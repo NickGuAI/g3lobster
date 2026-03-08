@@ -27,3 +27,10 @@ chat:
 server:
   host: 0.0.0.0
   port: 40000
+alerts:
+  enabled: false
+  chat_space_id: ""
+  webhook_url: ""
+  email_address: ""
+  min_severity: warning
+  rate_limit_s: 300

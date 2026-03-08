@@ -66,6 +66,16 @@ class CronConfig:
 
 
 @dataclass
+class AlertsConfig:
+    enabled: bool = False
+    chat_space_id: str = ""
+    webhook_url: str = ""
+    email_address: str = ""  # admin email for alerts via EmailBridge
+    min_severity: str = "warning"  # warning | error | critical
+    rate_limit_s: int = 300  # 1 per agent per 5 minutes
+
+
+@dataclass
 class ServerConfig:
     host: str = "0.0.0.0"
     port: int = 20001
@@ -80,6 +90,7 @@ class AppConfig:
     email: EmailConfig = field(default_factory=EmailConfig)
     cron: CronConfig = field(default_factory=CronConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
+    alerts: AlertsConfig = field(default_factory=AlertsConfig)
 
 
 def _to_bool(value: str) -> bool:
@@ -163,6 +174,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         email=EmailConfig(**_filter_fields(EmailConfig, data.get("email") or {}, "email")),
         cron=CronConfig(**_filter_fields(CronConfig, data.get("cron") or {}, "cron")),
         server=ServerConfig(**_filter_fields(ServerConfig, data.get("server") or {}, "server")),
+        alerts=AlertsConfig(**_filter_fields(AlertsConfig, data.get("alerts") or {}, "alerts")),
     )
 
     _apply_env_overrides("agents", config.agents)
@@ -172,6 +184,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     _apply_env_overrides("email", config.email)
     _apply_env_overrides("cron", config.cron)
     _apply_env_overrides("server", config.server)
+    _apply_env_overrides("alerts", config.alerts)
 
     config.mcp.config_dir = _resolve_path(config.mcp.config_dir, path)
     config.agents.data_dir = _resolve_path(config.agents.data_dir, path)

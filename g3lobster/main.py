@@ -12,6 +12,7 @@ from typing import Optional, Sequence
 import uvicorn
 
 from g3lobster.agents.registry import AgentRegistry
+from g3lobster.alerts import AlertManager
 from g3lobster.api.server import create_app
 from g3lobster.chat.bridge import ChatBridge
 from g3lobster.chat.email_bridge import EmailBridge
@@ -104,6 +105,17 @@ def build_runtime(config: AppConfig):
             default_mcp_servers=persona.mcp_servers or config.mcp.default_servers,
         )
 
+    alert_manager = AlertManager(
+        enabled=config.alerts.enabled,
+        chat_space_id=config.alerts.chat_space_id,
+        webhook_url=config.alerts.webhook_url,
+        email_address=config.alerts.email_address,
+        min_severity=config.alerts.min_severity,
+        rate_limit_s=config.alerts.rate_limit_s,
+        server_host=config.server.host,
+        server_port=config.server.port,
+    )
+
     registry = AgentRegistry(
         data_dir=config.agents.data_dir,
         compact_threshold=config.agents.compact_threshold,
@@ -120,6 +132,7 @@ def build_runtime(config: AppConfig):
         stuck_timeout_s=config.agents.stuck_timeout_s,
         global_memory_manager=global_memory_manager,
         agent_factory=agent_factory,
+        alert_manager=alert_manager,
     )
 
     chat_auth_dir = str(Path(config.agents.data_dir) / "chat_auth")
@@ -153,6 +166,12 @@ def build_runtime(config: AppConfig):
             poll_interval_s=config.email.poll_interval_s,
             auth_data_dir=config.email.auth_data_dir,
         )
+
+    # Wire alert manager sinks that depend on runtime objects created above.
+    if email_bridge:
+        alert_manager.email_bridge = email_bridge
+    if chat_bridge:
+        registry.chat_bridge = chat_bridge
 
     return registry, chat_bridge, chat_bridge_factory, chat_auth_dir, global_memory_manager, cron_store, cron_manager, email_bridge
 

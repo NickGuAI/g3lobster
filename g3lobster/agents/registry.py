@@ -12,6 +12,7 @@ from typing import Callable, Dict, List, Optional
 
 from g3lobster.agents.persona import AgentPersona, agent_dir, list_personas, load_persona
 from g3lobster.agents.subagent_registry import RunStatus, SubagentRegistry, SubagentRun
+from g3lobster.alerts import AlertManager, make_event
 from g3lobster.memory.context import ContextBuilder
 from g3lobster.memory.global_memory import GlobalMemoryManager
 from g3lobster.memory.manager import MemoryManager
@@ -86,6 +87,8 @@ class AgentRegistry:
         gemini_timeout_s: float = 45.0,
         gemini_cwd: Optional[str] = None,
         global_memory_manager: Optional[GlobalMemoryManager] = None,
+        alert_manager: Optional[AlertManager] = None,
+        chat_bridge: Optional[object] = None,
         # Legacy parameter; ignored.
         summarize_threshold: int = 20,
     ):
@@ -103,6 +106,9 @@ class AgentRegistry:
         self.health_check_interval_s = health_check_interval_s
         self.stuck_timeout_s = stuck_timeout_s
         self.global_memory_manager = global_memory_manager
+        self.alert_manager = alert_manager
+        self.chat_bridge = chat_bridge
+        self._chat_bridge_was_running = False
         self.agent_factory = agent_factory
 
         self.health = HealthInspector()
@@ -318,7 +324,19 @@ class AgentRegistry:
                     continue
                 if issue.agent_id not in self._agents:
                     continue
-                await self.restart_agent(issue.agent_id)
+                if self.alert_manager:
+                    await self.alert_manager.send(make_event(
+                        event_type=f"agent_{issue.issue}",
+                        agent_id=issue.agent_id,
+                        detail=f"Agent {issue.agent_id} detected as {issue.issue}, restarting",
+                    ))
+                restarted = await self.restart_agent(issue.agent_id)
+                if restarted and self.alert_manager:
+                    await self.alert_manager.send(make_event(
+                        event_type="agent_restarted",
+                        agent_id=issue.agent_id,
+                        detail=f"Agent {issue.agent_id} successfully restarted",
+                    ))
 
             # Sweep timed-out delegation runs
             timed_out = self.subagent_registry.check_timeouts()
@@ -329,3 +347,20 @@ class AgentRegistry:
                     run.parent_agent_id,
                     run.child_agent_id,
                 )
+                if self.alert_manager:
+                    await self.alert_manager.send(make_event(
+                        event_type="delegation_timeout",
+                        agent_id=run.child_agent_id,
+                        detail=f"Delegation run {run.run_id} timed out ({run.parent_agent_id} -> {run.child_agent_id})",
+                    ))
+
+            # Monitor ChatBridge liveness
+            if self.chat_bridge and self.alert_manager:
+                bridge_running = getattr(self.chat_bridge, "is_running", False)
+                if self._chat_bridge_was_running and not bridge_running:
+                    await self.alert_manager.send(make_event(
+                        event_type="bridge_stopped",
+                        agent_id="chat_bridge",
+                        detail="ChatBridge polling has stopped unexpectedly",
+                    ))
+                self._chat_bridge_was_running = bridge_running
