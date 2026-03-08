@@ -31,5 +31,6 @@ alerts:
   enabled: false
   chat_space_id: ""
   webhook_url: ""
+  email_address: ""
   min_severity: warning
   rate_limit_s: 300

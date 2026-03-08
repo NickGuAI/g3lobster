@@ -109,8 +109,11 @@ def build_runtime(config: AppConfig):
         enabled=config.alerts.enabled,
         chat_space_id=config.alerts.chat_space_id,
         webhook_url=config.alerts.webhook_url,
+        email_address=config.alerts.email_address,
         min_severity=config.alerts.min_severity,
         rate_limit_s=config.alerts.rate_limit_s,
+        server_host=config.server.host,
+        server_port=config.server.port,
     )
 
     registry = AgentRegistry(
@@ -163,6 +166,12 @@ def build_runtime(config: AppConfig):
             poll_interval_s=config.email.poll_interval_s,
             auth_data_dir=config.email.auth_data_dir,
         )
+
+    # Wire alert manager sinks that depend on runtime objects created above.
+    if email_bridge:
+        alert_manager.email_bridge = email_bridge
+    if chat_bridge:
+        registry.chat_bridge = chat_bridge
 
     return registry, chat_bridge, chat_bridge_factory, chat_auth_dir, global_memory_manager, cron_store, cron_manager, email_bridge
 

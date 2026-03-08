@@ -65,16 +65,23 @@ class AlertManager:
         enabled: bool = False,
         chat_space_id: str = "",
         webhook_url: str = "",
+        email_address: str = "",
         min_severity: str = "warning",
         rate_limit_s: int = 300,
         chat_service: Any = None,
+        email_bridge: Any = None,
+        server_host: str = "0.0.0.0",
+        server_port: int = 20001,
     ):
         self.enabled = enabled
         self.chat_space_id = chat_space_id
         self.webhook_url = webhook_url
+        self.email_address = email_address
         self.min_severity = AlertSeverity.from_str(min_severity)
         self.rate_limit_s = rate_limit_s
         self.chat_service = chat_service
+        self.email_bridge = email_bridge
+        self._mgmt_url = f"http://{server_host}:{server_port}"
         self._last_alert: Dict[str, float] = {}  # key: "{event_type}:{agent_id}" -> timestamp
 
     def _rate_key(self, event: AlertEvent) -> str:
@@ -108,6 +115,8 @@ class AlertManager:
             tasks.append(self._send_chat(message))
         if self.webhook_url:
             tasks.append(self._send_webhook(event, message))
+        if self.email_address and self.email_bridge:
+            tasks.append(self._send_email(event, message))
 
         for coro in tasks:
             try:
@@ -121,7 +130,8 @@ class AlertManager:
             f"{icon} *g3lobster alert* \u2014 {event.event_type}\n"
             f"Agent: `{event.agent_id}`\n"
             f"Detail: {event.detail}\n"
-            f"Time: {event.timestamp}"
+            f"Time: {event.timestamp}\n"
+            f"Dashboard: {self._mgmt_url}/api/agents"
         )
 
     async def _send_chat(self, message: str) -> None:
@@ -147,6 +157,26 @@ class AlertManager:
             resp = await client.post(self.webhook_url, json=payload)
             resp.raise_for_status()
         logger.info("Alert sent to webhook %s", self.webhook_url)
+
+    async def _send_email(self, event: AlertEvent, message: str) -> None:
+        import base64
+
+        subject = f"g3lobster alert: {event.event_type} — {event.agent_id}"
+        raw = (
+            f"To: {self.email_address}\n"
+            f"Subject: {subject}\n"
+            f"Content-Type: text/plain; charset=utf-8\n"
+            f"\n{message}"
+        )
+        encoded = base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
+        send_body: dict = {"raw": encoded}
+        await asyncio.to_thread(
+            self.email_bridge.service.users()
+            .messages()
+            .send(userId="me", body=send_body)
+            .execute
+        )
+        logger.info("Alert sent via email to %s", self.email_address)
 
 
 def make_event(event_type: str, agent_id: str, detail: str) -> AlertEvent:

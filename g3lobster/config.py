@@ -70,6 +70,7 @@ class AlertsConfig:
     enabled: bool = False
     chat_space_id: str = ""
     webhook_url: str = ""
+    email_address: str = ""  # admin email for alerts via EmailBridge
     min_severity: str = "warning"  # warning | error | critical
     rate_limit_s: int = 300  # 1 per agent per 5 minutes
 

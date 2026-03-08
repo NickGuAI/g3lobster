@@ -88,6 +88,7 @@ class AgentRegistry:
         gemini_cwd: Optional[str] = None,
         global_memory_manager: Optional[GlobalMemoryManager] = None,
         alert_manager: Optional[AlertManager] = None,
+        chat_bridge: Optional[object] = None,
         # Legacy parameter; ignored.
         summarize_threshold: int = 20,
     ):
@@ -106,6 +107,8 @@ class AgentRegistry:
         self.stuck_timeout_s = stuck_timeout_s
         self.global_memory_manager = global_memory_manager
         self.alert_manager = alert_manager
+        self.chat_bridge = chat_bridge
+        self._chat_bridge_was_running = False
         self.agent_factory = agent_factory
 
         self.health = HealthInspector()
@@ -350,3 +353,14 @@ class AgentRegistry:
                         agent_id=run.child_agent_id,
                         detail=f"Delegation run {run.run_id} timed out ({run.parent_agent_id} -> {run.child_agent_id})",
                     ))
+
+            # Monitor ChatBridge liveness
+            if self.chat_bridge and self.alert_manager:
+                bridge_running = getattr(self.chat_bridge, "is_running", False)
+                if self._chat_bridge_was_running and not bridge_running:
+                    await self.alert_manager.send(make_event(
+                        event_type="bridge_stopped",
+                        agent_id="chat_bridge",
+                        detail="ChatBridge polling has stopped unexpectedly",
+                    ))
+                self._chat_bridge_was_running = bridge_running
