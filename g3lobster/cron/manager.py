@@ -54,11 +54,15 @@ class CronManager:
         if self._scheduler and self._scheduler.running:
             self._scheduler.shutdown(wait=False)
             logger.info("CronManager stopped")
+        self._scheduler = None
 
     def reload(self) -> None:
         """Re-read the store and re-sync all scheduled jobs."""
         scheduler = self._get_scheduler()
         if scheduler is None:
+            return
+        if not scheduler.running:
+            logger.debug("CronManager.reload() called before start() — skipping")
             return
         scheduler.remove_all_jobs()
         self._load_tasks()
