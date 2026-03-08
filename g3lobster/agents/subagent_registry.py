@@ -34,6 +34,7 @@ class SubagentRun:
     result: Optional[str] = None
     error: Optional[str] = None
     created_at: float = field(default_factory=time.time)
+    started_at: Optional[float] = None
     completed_at: Optional[float] = None
     timeout_s: float = 300.0  # 5 min default
 
@@ -74,6 +75,15 @@ class SubagentRegistry:
         )
         return run
 
+    def mark_running(self, run_id: str) -> None:
+        """Transition a registered run to RUNNING and record the start time."""
+        run = self._runs.get(run_id)
+        if not run:
+            return
+        run.status = RunStatus.RUNNING
+        run.started_at = time.time()
+        self._save_to_disk()
+
     def complete_run(self, run_id: str, result: str) -> None:
         run = self._runs.get(run_id)
         if not run:
@@ -97,7 +107,8 @@ class SubagentRegistry:
         timed_out = []
         now = time.time()
         for run in self._runs.values():
-            if run.status == RunStatus.RUNNING and (now - run.created_at) > run.timeout_s:
+            ref_time = run.started_at if run.started_at is not None else run.created_at
+            if run.status == RunStatus.RUNNING and (now - ref_time) > run.timeout_s:
                 run.status = RunStatus.TIMED_OUT
                 run.error = f"Timed out after {run.timeout_s}s"
                 run.completed_at = now
