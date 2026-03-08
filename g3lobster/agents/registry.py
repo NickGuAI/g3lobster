@@ -238,9 +238,8 @@ class AgentRegistry:
                 return self.subagent_registry.get_run(run.run_id)
             child = self.get_agent(child_agent_id)
 
-        # Mark as running
-        run.status = RunStatus.RUNNING
-        self.subagent_registry._save_to_disk()
+        # Mark as running (records started_at and persists)
+        self.subagent_registry.mark_running(run.run_id)
 
         # Assign task to child agent
         child_task = Task(prompt=task_prompt, session_id=run.session_id, timeout_s=timeout_s)
