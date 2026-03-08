@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import dataclasses
+import logging
 import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Type, TypeVar
+
+logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
 
 import yaml
 
@@ -108,6 +114,15 @@ def _resolve_path(path: str, config_path: Path) -> str:
     return str((config_path.parent / p).resolve())
 
 
+def _filter_fields(cls: Type[_T], raw: Dict[str, Any], section: str) -> Dict[str, Any]:
+    """Return only recognized fields from *raw*, logging a warning for unknown keys."""
+    known = {f.name for f in dataclasses.fields(cls)}  # type: ignore[arg-type]
+    unknown = set(raw) - known
+    if unknown:
+        logger.warning("Unknown config keys in [%s]: %s — ignoring", section, sorted(unknown))
+    return {k: v for k, v in raw.items() if k in known}
+
+
 def _legacy_agents_section(data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     if data.get("agents"):
         return data.get("agents") or {}
@@ -141,13 +156,13 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
                 data = loaded
 
     config = AppConfig(
-        agents=AgentsConfig(**_legacy_agents_section(data)),
-        gemini=GeminiConfig(**(data.get("gemini") or {})),
-        mcp=MCPConfig(**(data.get("mcp") or {})),
-        chat=ChatConfig(**(data.get("chat") or {})),
-        email=EmailConfig(**(data.get("email") or {})),
-        cron=CronConfig(**(data.get("cron") or {})),
-        server=ServerConfig(**(data.get("server") or {})),
+        agents=AgentsConfig(**_filter_fields(AgentsConfig, _legacy_agents_section(data), "agents")),
+        gemini=GeminiConfig(**_filter_fields(GeminiConfig, data.get("gemini") or {}, "gemini")),
+        mcp=MCPConfig(**_filter_fields(MCPConfig, data.get("mcp") or {}, "mcp")),
+        chat=ChatConfig(**_filter_fields(ChatConfig, data.get("chat") or {}, "chat")),
+        email=EmailConfig(**_filter_fields(EmailConfig, data.get("email") or {}, "email")),
+        cron=CronConfig(**_filter_fields(CronConfig, data.get("cron") or {}, "cron")),
+        server=ServerConfig(**_filter_fields(ServerConfig, data.get("server") or {}, "server")),
     )
 
     _apply_env_overrides("agents", config.agents)
