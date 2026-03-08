@@ -25,6 +25,8 @@ import re
 from pathlib import Path
 from typing import Optional, Set
 
+from g3lobster.utils import BoundedSet
+
 logger = logging.getLogger(__name__)
 
 # Matches the local-part "prefix+agent_id" from a recipient address.
@@ -99,6 +101,7 @@ class EmailBridge:
         poll_interval_s: float = 30.0,
         auth_data_dir: Optional[str] = None,
         service=None,
+        seen_ids_max_size: int = 10_000,
     ) -> None:
         self.registry = registry
         self.base_address = base_address
@@ -108,7 +111,7 @@ class EmailBridge:
 
         self._poll_task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
-        self._seen_message_ids: Set[str] = set()
+        self._seen_message_ids: BoundedSet = BoundedSet(seen_ids_max_size)
 
     async def start(self) -> None:
         if self.service is None:
