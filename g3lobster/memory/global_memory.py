@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import threading
 from pathlib import Path
 from typing import List
@@ -50,6 +51,24 @@ class GlobalMemoryManager:
         """Thread-safe wrapper around ProcedureStore.upsert_procedures."""
         with self._procedures_lock:
             self.procedures.upsert_procedures(procedures)
+
+    def _user_memory_dir(self, user_id: str) -> Path:
+        safe_id = re.sub(r"[^a-zA-Z0-9_.-]", "_", user_id) or "default"
+        return self.memory_dir / "users" / safe_id
+
+    def read_user_memory_for(self, user_id: str) -> str:
+        """Read per-user USER.md, falling back to shared USER.md."""
+        user_dir = self._user_memory_dir(user_id)
+        user_file = user_dir / "USER.md"
+        if user_file.exists():
+            return user_file.read_text(encoding="utf-8")
+        return self.read_user_memory()
+
+    def write_user_memory_for(self, user_id: str, content: str) -> None:
+        """Write per-user USER.md."""
+        user_dir = self._user_memory_dir(user_id)
+        user_dir.mkdir(parents=True, exist_ok=True)
+        (user_dir / "USER.md").write_text(content, encoding="utf-8")
 
     def list_knowledge(self) -> List[str]:
         return sorted(str(path.relative_to(self.knowledge_dir)) for path in self.knowledge_dir.rglob("*") if path.is_file())

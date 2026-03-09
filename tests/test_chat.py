@@ -121,7 +121,7 @@ async def test_chat_bridge_routes_to_named_agent_by_bot_user_id(tmp_path) -> Non
 
 @pytest.mark.asyncio
 async def test_chat_bridge_session_key_is_space_and_user(tmp_path) -> None:
-    """Messages from the same user in different threads share one session key."""
+    """Messages from the same user in different threads get isolated session keys."""
     data_dir = str(tmp_path / "data")
     persona = save_persona(
         data_dir,
@@ -175,11 +175,13 @@ async def test_chat_bridge_session_key_is_space_and_user(tmp_path) -> None:
     await bridge.handle_message(msg2)
 
     assert len(captured_session_ids) == 2
-    assert captured_session_ids[0] == captured_session_ids[1], (
-        "Same user in same space must produce the same session_id regardless of thread"
+    assert captured_session_ids[0] != captured_session_ids[1], (
+        "Different threads must produce different session_ids for per-thread isolation"
     )
     assert "spaces/test" in captured_session_ids[0]
     assert "users/123" in captured_session_ids[0]
+    assert "threads_aaa" in captured_session_ids[0]
+    assert "threads_bbb" in captured_session_ids[1]
 
 
 @pytest.mark.asyncio

@@ -220,7 +220,8 @@ class ChatBridge:
         persona = runtime.persona
         thread_id = message.get("thread", {}).get("name")
         user_id = sender.get("name") or "unknown"
-        session_id = f"{self.space_id}__{user_id}"
+        thread_id_safe = (thread_id or "no-thread").replace("/", "_")
+        session_id = f"{self.space_id}__{user_id}__{thread_id_safe}"
 
         # Slash-command interception — handle locally without hitting the AI.
         if self.cron_store is not None:
