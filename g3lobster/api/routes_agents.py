@@ -157,6 +157,19 @@ async def update_global_user_memory(payload: MemoryUpdateRequest, request: Reque
     return {"updated": True}
 
 
+@router.get("/_global/user-memory/{user_id}", response_model=MemoryResponse)
+async def get_per_user_memory(user_id: str, request: Request) -> MemoryResponse:
+    manager = _global_memory_manager(request)
+    return MemoryResponse(content=manager.read_user_memory_for(user_id))
+
+
+@router.put("/_global/user-memory/{user_id}")
+async def update_per_user_memory(user_id: str, payload: MemoryUpdateRequest, request: Request) -> dict:
+    manager = _global_memory_manager(request)
+    manager.write_user_memory_for(user_id, payload.content)
+    return {"updated": True}
+
+
 @router.get("/_global/procedures", response_model=MemoryResponse)
 async def get_global_procedures(request: Request) -> MemoryResponse:
     manager = _global_memory_manager(request)
