@@ -8,5 +8,6 @@ class AgentState(str, Enum):
     IDLE = "idle"
     BUSY = "busy"
     STUCK = "stuck"
+    SLEEPING = "sleeping"
     DEAD = "dead"
     STOPPED = "stopped"

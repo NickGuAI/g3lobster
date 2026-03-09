@@ -37,11 +37,15 @@ HELP_TEXT = """\
 • `/cron delete <id>` — delete a task by its ID
 • `/cron enable <id>` — enable a disabled task
 • `/cron disable <id>` — disable a task (keeps it)
+• `/sleep <seconds>` — put the agent to sleep for a duration
 """
 
 
 def detect_command(text: str) -> Optional[tuple[str, str]]:
-    """Return ``(command, rest)`` if text contains a ``/`` command, else ``None``."""
+    """Return ``(command, rest)`` if text contains a ``/`` command, else ``None``.
+
+    Recognised commands: ``help``, ``cron``, ``sleep``.
+    """
     m = _SLASH_RE.search(text)
     if not m:
         return None
@@ -68,8 +72,28 @@ def handle(text: str, agent_id: str, cron_store: "CronStore") -> Optional[str]:
     if cmd == "cron":
         return _handle_cron(rest, agent_id, cron_store)
 
+    if cmd == "sleep":
+        return _handle_sleep(rest, agent_id)
+
     # Unknown command — fall through to AI
     return None
+
+
+def _handle_sleep(args: str, agent_id: str) -> str:
+    """Handle /sleep command. Returns instruction text — actual sleep is triggered by the caller."""
+    args = args.strip()
+    if not args:
+        return "Usage: `/sleep <seconds>` — put agent to sleep.\nExample: `/sleep 3600` (sleep for 1 hour)"
+    try:
+        duration = float(args)
+    except ValueError:
+        return f"Invalid duration: `{args}`. Must be a number (seconds)."
+    if duration <= 0:
+        return "Duration must be positive."
+    if duration > 86400:
+        return "Maximum sleep duration is 86400 seconds (24 hours)."
+    # Return a special marker that the bridge will detect and act on
+    return f"__SLEEP__:{duration}:{agent_id}"
 
 
 def _handle_cron(args: str, agent_id: str, cron_store: "CronStore") -> str:

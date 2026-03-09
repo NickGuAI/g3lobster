@@ -67,6 +67,27 @@ def _build_list_agents_tool_schema() -> Dict[str, Any]:
     }
 
 
+def _build_sleep_tool_schema() -> Dict[str, Any]:
+    return {
+        "name": "sleep",
+        "description": (
+            "Put the current agent to sleep for a specified duration. "
+            "The agent will automatically wake up after the duration elapses. "
+            "Use this to schedule periodic inactivity or rate-limit yourself."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "duration_s": {
+                    "type": "number",
+                    "description": "Duration to sleep in seconds (max 86400 = 24h).",
+                },
+            },
+            "required": ["duration_s"],
+        },
+    }
+
+
 class DelegationMCPHandler:
     """Handles MCP JSON-RPC requests for agent delegation tools.
 
@@ -103,6 +124,7 @@ class DelegationMCPHandler:
                 "tools": [
                     _build_delegate_tool_schema(),
                     _build_list_agents_tool_schema(),
+                    _build_sleep_tool_schema(),
                 ],
             })
 
@@ -121,6 +143,8 @@ class DelegationMCPHandler:
             return self._delegate_to_agent(req_id, arguments)
         if tool_name == "list_agents":
             return self._list_agents(req_id)
+        if tool_name == "sleep":
+            return self._sleep(req_id, arguments)
 
         return self._error(req_id, -32602, f"Unknown tool: {tool_name}")
 
@@ -194,6 +218,43 @@ class DelegationMCPHandler:
         except Exception as exc:
             return self._respond(req_id, {
                 "content": [{"type": "text", "text": f"Delegation error: {exc}"}],
+                "isError": True,
+            })
+
+    def _sleep(self, req_id: Any, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        duration_s = float(arguments.get("duration_s", 0))
+        if duration_s <= 0 or duration_s > 86400:
+            return self._respond(req_id, {
+                "content": [{"type": "text", "text": "Error: duration_s must be between 0 and 86400"}],
+                "isError": True,
+            })
+
+        parent_id = self._resolve_parent_agent_id()
+        if not parent_id:
+            return self._respond(req_id, {
+                "content": [{"type": "text", "text": "Error: agent ID not configured"}],
+                "isError": True,
+            })
+
+        try:
+            import urllib.request
+            url = f"{self.base_url}/agents/{parent_id}/sleep"
+            data = json.dumps({"duration_s": duration_s}).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+
+            return self._respond(req_id, {
+                "content": [{"type": "text", "text": f"Agent {parent_id} going to sleep for {duration_s}s"}],
+            })
+        except Exception as exc:
+            return self._respond(req_id, {
+                "content": [{"type": "text", "text": f"Sleep error: {exc}"}],
                 "isError": True,
             })
 
