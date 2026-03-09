@@ -82,6 +82,14 @@ class ServerConfig:
 
 
 @dataclass
+class SubagentConfig:
+    enabled: bool = False
+    session_prefix: str = "g3lobster"
+    default_timeout_s: float = 300.0
+    stream_json: bool = True
+
+
+@dataclass
 class AppConfig:
     agents: AgentsConfig = field(default_factory=AgentsConfig)
     gemini: GeminiConfig = field(default_factory=GeminiConfig)
@@ -91,6 +99,7 @@ class AppConfig:
     cron: CronConfig = field(default_factory=CronConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
+    subagent: SubagentConfig = field(default_factory=SubagentConfig)
 
 
 def _to_bool(value: str) -> bool:
@@ -175,6 +184,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         cron=CronConfig(**_filter_fields(CronConfig, data.get("cron") or {}, "cron")),
         server=ServerConfig(**_filter_fields(ServerConfig, data.get("server") or {}, "server")),
         alerts=AlertsConfig(**_filter_fields(AlertsConfig, data.get("alerts") or {}, "alerts")),
+        subagent=SubagentConfig(**_filter_fields(SubagentConfig, data.get("subagent") or {}, "subagent")),
     )
 
     _apply_env_overrides("agents", config.agents)
@@ -185,6 +195,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     _apply_env_overrides("cron", config.cron)
     _apply_env_overrides("server", config.server)
     _apply_env_overrides("alerts", config.alerts)
+    _apply_env_overrides("subagent", config.subagent)
 
     config.mcp.config_dir = _resolve_path(config.mcp.config_dir, path)
     config.agents.data_dir = _resolve_path(config.agents.data_dir, path)

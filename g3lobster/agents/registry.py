@@ -17,6 +17,7 @@ from g3lobster.memory.context import ContextBuilder
 from g3lobster.memory.global_memory import GlobalMemoryManager
 from g3lobster.memory.manager import MemoryManager
 from g3lobster.pool.health import HealthInspector
+from g3lobster.pool.types import AgentState
 from g3lobster.tasks.types import Task, TaskStatus
 
 logger = logging.getLogger(__name__)
@@ -203,6 +204,47 @@ class AgentRegistry:
             await self.stop_agent(agent_id)
         return await self.start_agent(agent_id)
 
+    async def sleep_agent(self, agent_id: str, duration_s: float) -> bool:
+        """Put an agent to sleep for a specified duration.
+
+        The agent transitions to SLEEPING state and will automatically
+        wake up (restart) after the duration elapses.
+        """
+        runtime = self.get_agent(agent_id)
+        if not runtime:
+            return False
+
+        agent = runtime.agent
+        if hasattr(agent, 'state'):
+            agent.state = AgentState.SLEEPING
+
+        # Schedule wake-up
+        asyncio.get_event_loop().call_later(
+            duration_s,
+            lambda: asyncio.ensure_future(self._wake_agent(agent_id)),
+        )
+        return True
+
+    async def _wake_agent(self, agent_id: str) -> None:
+        """Wake a sleeping agent by restarting it."""
+        runtime = self.get_agent(agent_id)
+        if not runtime:
+            return
+
+        agent_state = getattr(runtime.agent, 'state', None)
+        if agent_state != AgentState.SLEEPING:
+            return  # Agent was manually restarted or stopped — skip wake
+
+        await self.restart_agent(agent_id)
+
+        if self.alert_manager:
+            from g3lobster.alerts import make_event
+            await self.alert_manager.send(make_event(
+                event_type="agent_woke",
+                agent_id=agent_id,
+                detail=f"Agent {agent_id} woke up from sleep",
+            ))
+
     def get_agent(self, agent_id: str) -> Optional[RegisteredAgent]:
         return self._agents.get(agent_id)
 
@@ -260,6 +302,57 @@ class AgentRegistry:
             )
 
         return self.subagent_registry.get_run(run.run_id)
+
+    async def delegate_task_stream(
+        self,
+        parent_agent_id: str,
+        child_agent_id: str,
+        task_prompt: str,
+        parent_session_id: str,
+        timeout_s: float = 300.0,
+    ):
+        """Delegate a task with streaming output. Yields StreamEvent objects."""
+        if parent_agent_id == child_agent_id:
+            raise ValueError("Circular delegation is not allowed")
+
+        run = self.subagent_registry.register_run(
+            parent_agent_id=parent_agent_id,
+            child_agent_id=child_agent_id,
+            task=task_prompt,
+            parent_session_id=parent_session_id,
+            timeout_s=timeout_s,
+        )
+
+        child = self.get_agent(child_agent_id)
+        if not child:
+            started = await self.start_agent(child_agent_id)
+            if not started:
+                self.subagent_registry.fail_run(
+                    run.run_id, f"Failed to start agent {child_agent_id}"
+                )
+                return
+            child = self.get_agent(child_agent_id)
+
+        self.subagent_registry.mark_running(run.run_id)
+
+        child_task = Task(prompt=task_prompt, session_id=run.session_id, timeout_s=timeout_s)
+
+        collected_text = []
+        try:
+            async for event in child.agent.assign_stream(child_task):
+                yield event
+                if hasattr(event, 'text') and event.text:
+                    collected_text.append(event.text)
+
+            if child_task.status == TaskStatus.COMPLETED and child_task.result:
+                self.subagent_registry.complete_run(run.run_id, child_task.result)
+            else:
+                self.subagent_registry.fail_run(
+                    run.run_id, child_task.error or "Unknown failure"
+                )
+        except Exception as exc:
+            self.subagent_registry.fail_run(run.run_id, str(exc))
+            raise
 
     @staticmethod
     def _soul_summary(soul: str) -> str:
@@ -323,6 +416,10 @@ class AgentRegistry:
                 if issue.issue not in {"dead", "stuck"}:
                     continue
                 if issue.agent_id not in self._agents:
+                    continue
+                # Skip sleeping agents — they are intentionally inactive
+                sleeping_runtime = self._agents.get(issue.agent_id)
+                if sleeping_runtime and getattr(sleeping_runtime.agent, 'state', None) == AgentState.SLEEPING:
                     continue
                 if self.alert_manager:
                     await self.alert_manager.send(make_event(

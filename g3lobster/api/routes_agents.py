@@ -26,6 +26,7 @@ from g3lobster.api.models import (
     MemoryResponse,
     MemoryUpdateRequest,
     SessionListResponse,
+    SleepAgentRequest,
     TestAgentRequest,
 )
 from g3lobster.memory.global_memory import GlobalMemoryManager
@@ -310,6 +311,18 @@ async def restart_agent(agent_id: str, request: Request) -> dict:
     if not restarted:
         raise HTTPException(status_code=404, detail="Agent not found")
     return {"restarted": True}
+
+
+@router.post("/{agent_id}/sleep")
+async def sleep_agent_route(agent_id: str, payload: SleepAgentRequest, request: Request) -> dict:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+
+    registry = request.app.state.registry
+    slept = await registry.sleep_agent(agent_id, payload.duration_s)
+    if not slept:
+        raise HTTPException(status_code=404, detail="Agent not found or not running")
+    return {"sleeping": True, "duration_s": payload.duration_s}
 
 
 @router.get("/{agent_id}/memory", response_model=MemoryResponse)

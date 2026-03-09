@@ -93,3 +93,62 @@ class GeminiAgent:
                 self.state = AgentState.DEAD
 
         return task
+
+    async def assign_stream(self, task: Task):
+        """Assign a task and yield streaming events as they arrive.
+
+        Only works when the underlying process supports ask_stream()
+        (i.e., TmuxSubagentProcess). Falls back to assign() for
+        standard GeminiProcess.
+        """
+        if not hasattr(self.process, "ask_stream"):
+            # Fallback: run non-streaming and yield a single result
+            result_task = await self.assign(task)
+            from g3lobster.cli.streaming import StreamEvent, StreamEventType
+            yield StreamEvent(
+                event_type=StreamEventType.RESULT,
+                data={"result": result_task.result or result_task.error or ""},
+            )
+            return
+
+        if self.state not in {AgentState.IDLE, AgentState.BUSY}:
+            raise RuntimeError(f"Agent {self.id} is not ready")
+
+        self.current_task = task
+        self.busy_since = time.time()
+        self.state = AgentState.BUSY
+
+        task.status = TaskStatus.RUNNING
+        task.agent_id = self.id
+        task.started_at = time.time()
+        task.add_event("started", {"agent_id": self.id})
+
+        try:
+            prompt = self.context_builder.build(task.session_id, task.prompt)
+            self.memory_manager.append_message(task.session_id, "user", task.prompt, {"task_id": task.id})
+
+            from g3lobster.cli.streaming import StreamEventType, accumulate_text
+
+            collected_events = []
+            async for event in self.process.ask_stream(prompt, timeout=task.timeout_s, session_id=task.session_id):
+                collected_events.append(event)
+                yield event
+
+            parsed = accumulate_text(collected_events)
+            task.result = parsed
+            task.status = TaskStatus.COMPLETED
+            task.completed_at = time.time()
+            task.add_event("completed", {"chars": len(parsed)})
+            self.memory_manager.append_message(task.session_id, "assistant", parsed, {"task_id": task.id})
+        except Exception as exc:
+            task.error = str(exc)
+            task.status = TaskStatus.FAILED
+            task.completed_at = time.time()
+            task.add_event("failed", {"error": task.error})
+        finally:
+            self.current_task = None
+            self.busy_since = None
+            if self.is_alive():
+                self.state = AgentState.IDLE
+            else:
+                self.state = AgentState.DEAD

@@ -94,3 +94,7 @@ class CompleteAuthRequest(BaseModel):
 class SpaceConfigRequest(BaseModel):
     space_id: str = Field(min_length=1)
     space_name: Optional[str] = None
+
+
+class SleepAgentRequest(BaseModel):
+    duration_s: float = Field(gt=0, le=86400, description="Sleep duration in seconds (max 24h)")
