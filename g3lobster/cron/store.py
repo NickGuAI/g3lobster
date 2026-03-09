@@ -18,6 +18,15 @@ from typing import List, Optional
 
 
 @dataclass
+class CronRunRecord:
+    task_id: str
+    fired_at: str
+    status: str  # "completed" | "failed"
+    duration_s: float
+    result_preview: str = ""
+
+
+@dataclass
 class CronTask:
     id: str
     agent_id: str
@@ -156,3 +165,53 @@ class CronStore:
             except ValueError:
                 continue
         return result
+
+    # ------------------------------------------------------------------
+    # Run history
+    # ------------------------------------------------------------------
+
+    def _history_file(self, agent_id: str) -> Path:
+        safe = _safe_agent_id(agent_id)
+        return self._data_dir / safe / "cron_history.json"
+
+    def _read_history(self, agent_id: str) -> dict:
+        """Returns {task_id: [records]}."""
+        path = self._history_file(agent_id)
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+    def _write_history(self, agent_id: str, history: dict) -> None:
+        path = self._history_file(agent_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent,
+            prefix=f"{path.name}.", suffix=".tmp", delete=False,
+        )
+        tmp_path = Path(tmp.name)
+        try:
+            with tmp:
+                tmp.write(json.dumps(history, indent=2, ensure_ascii=False) + "\n")
+                tmp.flush()
+                os.fsync(tmp.fileno())
+            os.replace(tmp_path, path)
+        except Exception:
+            if tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
+            raise
+
+    def record_run(self, agent_id: str, record: CronRunRecord) -> None:
+        """Append a run record, keeping last 20 per task."""
+        history = self._read_history(agent_id)
+        task_runs = history.get(record.task_id, [])
+        task_runs.append(asdict(record))
+        history[record.task_id] = task_runs[-20:]  # ring buffer
+        self._write_history(agent_id, history)
+
+    def get_history(self, agent_id: str, task_id: str) -> list:
+        """Return last N run records for a task."""
+        history = self._read_history(agent_id)
+        return history.get(task_id, [])

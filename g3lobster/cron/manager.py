@@ -12,7 +12,7 @@ import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from g3lobster.cron.store import CronStore
+from g3lobster.cron.store import CronRunRecord, CronStore
 from g3lobster.tasks.types import Task
 
 if TYPE_CHECKING:
@@ -97,6 +97,7 @@ class CronManager:
             logger.debug("Scheduled cron task %s (%s) for agent %s", task.id, task.schedule, task.agent_id)
 
     async def _fire(self, agent_id: str, task_id: str, instruction: str) -> None:
+        import time as time_mod
         logger.info("Firing cron task %s for agent %s", task_id, agent_id)
         now = datetime.now(tz=timezone.utc).isoformat()
         self._store.update_task(agent_id, task_id, last_run=now)
@@ -106,6 +107,10 @@ class CronManager:
             started = await self._registry.start_agent(agent_id)
             if not started:
                 logger.warning("Cron task %s: agent %s could not be started", task_id, agent_id)
+                self._store.record_run(agent_id, CronRunRecord(
+                    task_id=task_id, fired_at=now, status="failed",
+                    duration_s=0.0, result_preview="Agent could not be started",
+                ))
                 return
             runtime = self._registry.get_agent(agent_id)
             if not runtime:
@@ -113,8 +118,20 @@ class CronManager:
 
         session_id = f"cron__{agent_id}"
         task = Task(prompt=instruction, session_id=session_id)
+        start_time = time_mod.monotonic()
         try:
             result = await runtime.assign(task)
+            duration = round(time_mod.monotonic() - start_time, 1)
+            status = "completed" if result.status.value == "completed" else "failed"
+            preview = (result.result or result.error or "")[:200]
             logger.info("Cron task %s completed: status=%s", task_id, result.status)
         except Exception:
+            duration = round(time_mod.monotonic() - start_time, 1)
+            status = "failed"
+            preview = "Exception during execution"
             logger.exception("Cron task %s raised an exception", task_id)
+
+        self._store.record_run(agent_id, CronRunRecord(
+            task_id=task_id, fired_at=now, status=status,
+            duration_s=duration, result_preview=preview,
+        ))
