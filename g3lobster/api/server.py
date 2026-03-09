@@ -15,6 +15,7 @@ from g3lobster.api.routes_chat_events import router as chat_events_router
 from g3lobster.api.routes_cron import router as cron_router
 from g3lobster.api.routes_delegation import router as delegation_router
 from g3lobster.api.routes_health import router as health_router
+from g3lobster.api.routes_metrics import router as metrics_router
 from g3lobster.api.routes_setup import router as setup_router
 from g3lobster.config import AppConfig
 
@@ -73,6 +74,7 @@ def create_app(
     app.include_router(setup_router)
     app.include_router(chat_events_router)
     app.include_router(delegation_router)
+    app.include_router(metrics_router)
     app.include_router(cron_router)
 
     static_dir = Path(__file__).resolve().parent.parent / "static"
