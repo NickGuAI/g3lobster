@@ -18,6 +18,7 @@ class FakeCall:
 class FakeMessagesAPI:
     def __init__(self):
         self.created = []
+        self.updated = []
 
     def list(self, parent, pageSize, orderBy):
         return FakeCall({"messages": []})
@@ -27,6 +28,7 @@ class FakeMessagesAPI:
         return FakeCall({"name": "spaces/test/messages/1"})
 
     def update(self, name, updateMask, body):
+        self.updated.append({"name": name, "updateMask": updateMask, "body": body})
         return FakeCall({"name": name})
 
 
@@ -64,8 +66,12 @@ class FakeRuntimeAgent:
 
         result_task = await self.assign(task)
         yield StreamEvent(
+            event_type=StreamEventType.MESSAGE,
+            data={"role": "assistant", "content": result_task.result or "", "delta": True},
+        )
+        yield StreamEvent(
             event_type=StreamEventType.RESULT,
-            data={"result": result_task.result or ""},
+            data={"status": "success"},
         )
 
 
@@ -237,3 +243,126 @@ async def test_chat_bridge_ignores_unlinked_mentions(tmp_path) -> None:
     await bridge.handle_message(message)
 
     assert service.messages_api.created == []
+
+
+@pytest.mark.asyncio
+async def test_chat_bridge_updates_original_message_for_tool_use(tmp_path) -> None:
+    data_dir = str(tmp_path / "data")
+    persona = save_persona(
+        data_dir,
+        AgentPersona(
+            id="luna",
+            name="Luna",
+            emoji="🦀",
+            soul="",
+            model="gemini",
+            mcp_servers=["*"],
+            bot_user_id="users/999",
+        ),
+    )
+
+    service = FakeService()
+
+    class StreamingRuntime(FakeRuntimeAgent):
+        async def assign_stream(self, task):
+            from g3lobster.cli.streaming import StreamEvent, StreamEventType
+
+            task.status = TaskStatus.COMPLETED
+            task.result = "reply"
+            yield StreamEvent(
+                event_type=StreamEventType.TOOL_USE,
+                data={"tool_name": "Read"},
+            )
+            yield StreamEvent(
+                event_type=StreamEventType.MESSAGE,
+                data={"role": "assistant", "content": "reply", "delta": True},
+            )
+            yield StreamEvent(
+                event_type=StreamEventType.RESULT,
+                data={"status": "success"},
+            )
+
+    registry = FakeRegistry(data_dir, persona)
+    registry.runtime = StreamingRuntime(persona)
+
+    bridge = ChatBridge(
+        registry=registry,
+        space_id="spaces/test",
+        service=service,
+        spaces_config=str(tmp_path / "spaces.json"),
+    )
+
+    message = {
+        "text": "Hello there",
+        "sender": {"type": "HUMAN", "name": "users/123", "displayName": "Ada"},
+        "thread": {"name": "spaces/test/threads/abc"},
+        "annotations": [
+            {
+                "type": "USER_MENTION",
+                "userMention": {"user": {"type": "BOT", "name": "users/999"}},
+            }
+        ],
+    }
+
+    await bridge.handle_message(message)
+
+    assert service.messages_api.updated == [
+        {
+            "name": "spaces/test/messages/1",
+            "updateMask": "text",
+            "body": {"text": "🦀 _Luna is doing Read..._"},
+        }
+    ]
+    assert service.messages_api.created[-1]["body"]["text"] == "🦀 Luna: reply"
+
+
+@pytest.mark.asyncio
+async def test_chat_bridge_uses_task_error_when_stream_ends_silently(tmp_path) -> None:
+    data_dir = str(tmp_path / "data")
+    persona = save_persona(
+        data_dir,
+        AgentPersona(
+            id="luna",
+            name="Luna",
+            emoji="🦀",
+            soul="",
+            model="gemini",
+            mcp_servers=["*"],
+            bot_user_id="users/999",
+        ),
+    )
+
+    service = FakeService()
+
+    class SilentFailureRuntime(FakeRuntimeAgent):
+        async def assign_stream(self, task):
+            task.status = TaskStatus.FAILED
+            task.error = "stream blew up"
+            if False:
+                yield None
+
+    registry = FakeRegistry(data_dir, persona)
+    registry.runtime = SilentFailureRuntime(persona)
+
+    bridge = ChatBridge(
+        registry=registry,
+        space_id="spaces/test",
+        service=service,
+        spaces_config=str(tmp_path / "spaces.json"),
+    )
+
+    message = {
+        "text": "Hello there",
+        "sender": {"type": "HUMAN", "name": "users/123", "displayName": "Ada"},
+        "thread": {"name": "spaces/test/threads/abc"},
+        "annotations": [
+            {
+                "type": "USER_MENTION",
+                "userMention": {"user": {"type": "BOT", "name": "users/999"}},
+            }
+        ],
+    }
+
+    await bridge.handle_message(message)
+
+    assert service.messages_api.created[-1]["body"]["text"] == "🦀 Luna: error: stream blew up"
