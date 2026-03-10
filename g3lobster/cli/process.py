@@ -12,6 +12,23 @@ ALLOWED_MCP_SERVER_NAMES_FLAG = "--allowed-mcp-server-names"
 PROMPT_FLAG = "-p"
 
 
+async def _wait_for_process_exit(
+    proc: asyncio.subprocess.Process, timeout: float, stderr: Optional[asyncio.StreamReader]
+) -> None:
+    """Wait for process exit and surface non-zero exit codes with stderr."""
+    await asyncio.wait_for(proc.wait(), timeout=timeout)
+    if proc.returncode == 0:
+        return
+
+    stderr_text = ""
+    if stderr is not None:
+        stderr_bytes = await stderr.read()
+        stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
+
+    detail = stderr_text or f"Gemini process exited with code {proc.returncode}"
+    raise RuntimeError(detail)
+
+
 class GeminiProcess:
     """Spawns a fresh Gemini CLI process for each prompt using ``-p``."""
 
@@ -98,59 +115,51 @@ class GeminiProcess:
         if not self._ready:
             raise RuntimeError("GeminiProcess has not been initialised (call spawn first)")
 
-        from g3lobster.cli.streaming import StreamEventType, parse_stream_event
+        from g3lobster.cli.streaming import stream_events
 
-        cmd = [self.command] + self.args + ["--output-format", "stream-json", PROMPT_FLAG, prompt]
-        if self._mcp_server_names and self._mcp_server_names != ["*"]:
-            cmd.extend([ALLOWED_MCP_SERVER_NAMES_FLAG, *self._mcp_server_names])
+        async with self._lock:
+            cmd = [self.command] + self.args + ["--output-format", "stream-json", PROMPT_FLAG, prompt]
+            if self._mcp_server_names and self._mcp_server_names != ["*"]:
+                cmd.extend([ALLOWED_MCP_SERVER_NAMES_FLAG, *self._mcp_server_names])
 
-        env = os.environ.copy()
-        env.update(self.env)
-        if self.agent_id:
-            env["G3LOBSTER_AGENT_ID"] = self.agent_id
-        if session_id:
-            env["G3LOBSTER_SESSION_ID"] = session_id
+            env = os.environ.copy()
+            env.update(self.env)
+            if self.agent_id:
+                env["G3LOBSTER_AGENT_ID"] = self.agent_id
+            if session_id:
+                env["G3LOBSTER_SESSION_ID"] = session_id
 
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=self.cwd,
-            env=env,
-        )
-        self._active_process = proc
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=self.cwd,
+                env=env,
+            )
+            self._active_process = proc
 
-        try:
-            assert proc.stdout is not None
-            deadline = asyncio.get_event_loop().time() + timeout
-            while True:
-                remaining = deadline - asyncio.get_event_loop().time()
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + timeout
+
+            try:
+                assert proc.stdout is not None
+                async for event in stream_events(proc.stdout):
+                    yield event
+                    if event.is_terminal:
+                        break
+
+                remaining = deadline - loop.time()
                 if remaining <= 0:
                     proc.kill()
                     raise asyncio.TimeoutError("Stream read timed out")
 
-                try:
-                    line_bytes = await asyncio.wait_for(
-                        proc.stdout.readline(), timeout=min(remaining, 30.0)
-                    )
-                except asyncio.TimeoutError:
-                    continue
-
-                if not line_bytes:
-                    break
-                line = line_bytes.decode("utf-8", errors="replace").rstrip()
-                if not line:
-                    continue
-                event = parse_stream_event(line)
-                yield event
-                if event.event_type in {StreamEventType.RESULT, StreamEventType.ERROR}:
-                    break
-        finally:
-            self._active_process = None
-            if proc.returncode is None:
-                proc.kill()
-                with contextlib.suppress(Exception):
-                    await asyncio.wait_for(proc.wait(), timeout=5.0)
+                await _wait_for_process_exit(proc, remaining, proc.stderr)
+            finally:
+                self._active_process = None
+                if proc.returncode is None:
+                    proc.kill()
+                    with contextlib.suppress(Exception):
+                        await asyncio.wait_for(proc.wait(), timeout=5.0)
 
     async def kill(self) -> None:
         proc = self._active_process
@@ -295,7 +304,7 @@ class TmuxSubagentProcess:
         if not self._ready:
             raise RuntimeError("TmuxSubagentProcess has not been initialised (call spawn first)")
 
-        from g3lobster.cli.streaming import StreamEventType, parse_stream_event
+        from g3lobster.cli.streaming import stream_events
 
         cmd = self._build_cmd(prompt)
         env = self._build_env(session_id)
@@ -310,30 +319,19 @@ class TmuxSubagentProcess:
 
         try:
             assert proc.stdout is not None
-            deadline = asyncio.get_event_loop().time() + timeout
-            while True:
-                remaining = deadline - asyncio.get_event_loop().time()
-                if remaining <= 0:
-                    proc.kill()
-                    raise asyncio.TimeoutError("Stream read timed out")
-
-                try:
-                    line_bytes = await asyncio.wait_for(
-                        proc.stdout.readline(), timeout=min(remaining, 30.0)
-                    )
-                except asyncio.TimeoutError:
-                    # No output for 30s but overall timeout not reached — keep waiting
-                    continue
-
-                if not line_bytes:
-                    break
-                line = line_bytes.decode("utf-8", errors="replace").rstrip()
-                if not line:
-                    continue
-                event = parse_stream_event(line)
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + timeout
+            async for event in stream_events(proc.stdout):
                 yield event
-                if event.event_type in {StreamEventType.RESULT, StreamEventType.ERROR}:
+                if event.is_terminal:
                     break
+
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                proc.kill()
+                raise asyncio.TimeoutError("Stream read timed out")
+
+            await _wait_for_process_exit(proc, remaining, proc.stderr)
         finally:
             if proc.returncode is None:
                 proc.kill()

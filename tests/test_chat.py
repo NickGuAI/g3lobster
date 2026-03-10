@@ -28,7 +28,7 @@ class FakeMessagesAPI:
         return FakeCall({"name": "spaces/test/messages/1"})
 
     def update(self, name, updateMask, body):
-        self.updated.append({"name": name, "body": body})
+        self.updated.append({"name": name, "updateMask": updateMask, "body": body})
         return FakeCall({"name": name})
 
 
@@ -66,8 +66,12 @@ class FakeRuntimeAgent:
 
         result_task = await self.assign(task)
         yield StreamEvent(
+            event_type=StreamEventType.MESSAGE,
+            data={"role": "assistant", "content": result_task.result or "", "delta": True},
+        )
+        yield StreamEvent(
             event_type=StreamEventType.RESULT,
-            data={"result": result_task.result or ""},
+            data={"status": "success"},
         )
 
 
@@ -86,6 +90,48 @@ class FakeRegistry:
 
     async def start_agent(self, agent_id):
         return agent_id == self.runtime.persona.id
+
+
+class FakeErrorRuntime:
+    def __init__(self, persona):
+        self.persona = persona
+
+    async def assign_stream(self, task):
+        from g3lobster.cli.streaming import StreamEvent, StreamEventType
+
+        task.status = TaskStatus.FAILED
+        task.error = "model overloaded"
+        yield StreamEvent(
+            event_type=StreamEventType.ERROR,
+            data={"severity": "error", "message": "model overloaded"},
+        )
+
+
+class FakeToolRuntime:
+    def __init__(self, persona):
+        self.persona = persona
+
+    async def assign_stream(self, task):
+        from g3lobster.cli.streaming import StreamEvent, StreamEventType
+
+        task.status = TaskStatus.COMPLETED
+        task.result = "Here is the answer."
+        yield StreamEvent(
+            event_type=StreamEventType.TOOL_USE,
+            data={"tool_name": "web_search"},
+        )
+        yield StreamEvent(
+            event_type=StreamEventType.TOOL_USE,
+            data={"tool_name": "read_file"},
+        )
+        yield StreamEvent(
+            event_type=StreamEventType.MESSAGE,
+            data={"role": "assistant", "content": "Here is the answer.", "delta": True},
+        )
+        yield StreamEvent(
+            event_type=StreamEventType.RESULT,
+            data={"status": "success"},
+        )
 
 
 @pytest.mark.asyncio
@@ -128,7 +174,6 @@ async def test_chat_bridge_routes_to_named_agent_by_bot_user_id(tmp_path) -> Non
 
     await bridge.handle_message(message)
 
-    # Thinking message is created, then updated in-place with the final result.
     assert len(service.messages_api.created) == 1
     assert service.messages_api.created[0]["body"]["text"] == "🦀 _Luna is thinking..._"
     assert len(service.messages_api.updated) == 1
@@ -183,7 +228,6 @@ async def test_chat_bridge_session_key_is_space_and_user(tmp_path) -> None:
         ],
     }
 
-    # Same user, different threads — distinct text to bypass content dedup
     msg1 = {**base_message, "text": "Hello from thread A", "thread": {"name": "spaces/test/threads/aaa"}}
     msg2 = {**base_message, "text": "Hello from thread B", "thread": {"name": "spaces/test/threads/bbb"}}
 
@@ -191,9 +235,7 @@ async def test_chat_bridge_session_key_is_space_and_user(tmp_path) -> None:
     await bridge.handle_message(msg2)
 
     assert len(captured_session_ids) == 2
-    assert captured_session_ids[0] != captured_session_ids[1], (
-        "Different threads must produce different session_ids for per-thread isolation"
-    )
+    assert captured_session_ids[0] != captured_session_ids[1]
     assert "spaces/test" in captured_session_ids[0]
     assert "users/123" in captured_session_ids[0]
     assert "threads_aaa" in captured_session_ids[0]
@@ -243,29 +285,8 @@ async def test_chat_bridge_ignores_unlinked_mentions(tmp_path) -> None:
     assert service.messages_api.created == []
 
 
-class FakeErrorRuntime:
-    """Runtime that always fails the task."""
-
-    def __init__(self, persona):
-        self.persona = persona
-
-    async def assign(self, task):
-        task.status = TaskStatus.FAILED
-        task.error = "model overloaded"
-        return task
-
-    async def assign_stream(self, task):
-        from g3lobster.cli.streaming import StreamEvent, StreamEventType
-
-        yield StreamEvent(
-            event_type=StreamEventType.ERROR,
-            data={"error": "model overloaded"},
-        )
-
-
 @pytest.mark.asyncio
 async def test_debug_mode_shows_error_detail_in_chat(tmp_path) -> None:
-    """When debug_mode is on, error details are appended to the Chat reply."""
     data_dir = str(tmp_path / "data")
     persona = save_persona(
         data_dir,
@@ -306,17 +327,15 @@ async def test_debug_mode_shows_error_detail_in_chat(tmp_path) -> None:
 
     await bridge.handle_message(message)
 
-    # Thinking message created, then updated with error detail (debug code block).
     assert len(service.messages_api.updated) == 1
     updated_text = service.messages_api.updated[0]["body"]["text"]
     assert "error" in updated_text
     assert "model overloaded" in updated_text
-    assert "```" in updated_text  # debug code block
+    assert "```" in updated_text
 
 
 @pytest.mark.asyncio
 async def test_debug_off_hides_error_code_block(tmp_path) -> None:
-    """When debug_mode is off, error messages do NOT include a code block."""
     data_dir = str(tmp_path / "data")
     persona = save_persona(
         data_dir,
@@ -360,35 +379,11 @@ async def test_debug_off_hides_error_code_block(tmp_path) -> None:
     assert len(service.messages_api.updated) == 1
     updated_text = service.messages_api.updated[0]["body"]["text"]
     assert "error" in updated_text
-    assert "```" not in updated_text  # no debug code block
-
-
-class FakeToolRuntime:
-    """Runtime that emits TOOL_USE events then a RESULT."""
-
-    def __init__(self, persona):
-        self.persona = persona
-
-    async def assign_stream(self, task):
-        from g3lobster.cli.streaming import StreamEvent, StreamEventType
-
-        yield StreamEvent(
-            event_type=StreamEventType.TOOL_USE,
-            data={"tool": "web_search"},
-        )
-        yield StreamEvent(
-            event_type=StreamEventType.TOOL_USE,
-            data={"tool": "read_file"},
-        )
-        yield StreamEvent(
-            event_type=StreamEventType.RESULT,
-            data={"result": "Here is the answer."},
-        )
+    assert "```" not in updated_text
 
 
 @pytest.mark.asyncio
-async def test_streaming_updates_thinking_message_with_tool_names(tmp_path) -> None:
-    """Tool use events update the thinking message in-place with tool names."""
+async def test_chat_bridge_updates_original_message_for_tool_use(tmp_path) -> None:
     data_dir = str(tmp_path / "data")
     persona = save_persona(
         data_dir,
@@ -428,16 +423,75 @@ async def test_streaming_updates_thinking_message_with_tool_names(tmp_path) -> N
 
     await bridge.handle_message(message)
 
-    # Thinking message created once.
     assert len(service.messages_api.created) == 1
-    assert "thinking" in service.messages_api.created[0]["body"]["text"]
-
-    # Updated: 2 tool updates + 1 final result = 3 updates total.
+    assert service.messages_api.created[0]["body"]["text"] == "🦀 _Luna is thinking..._"
     assert len(service.messages_api.updated) == 3
+    assert service.messages_api.updated[0] == {
+        "name": "spaces/test/messages/1",
+        "updateMask": "text",
+        "body": {"text": "🦀 _Luna is doing web_search..._"},
+    }
+    assert service.messages_api.updated[1] == {
+        "name": "spaces/test/messages/1",
+        "updateMask": "text",
+        "body": {"text": "🦀 _Luna is doing read_file..._"},
+    }
+    assert service.messages_api.updated[2] == {
+        "name": "spaces/test/messages/1",
+        "updateMask": "text",
+        "body": {"text": "🦀 Luna: Here is the answer."},
+    }
 
-    # First two updates should contain tool names.
-    assert "web_search" in service.messages_api.updated[0]["body"]["text"]
-    assert "read_file" in service.messages_api.updated[1]["body"]["text"]
 
-    # Final update is the result text.
-    assert "Here is the answer." in service.messages_api.updated[2]["body"]["text"]
+@pytest.mark.asyncio
+async def test_chat_bridge_uses_task_error_when_stream_ends_silently(tmp_path) -> None:
+    data_dir = str(tmp_path / "data")
+    persona = save_persona(
+        data_dir,
+        AgentPersona(
+            id="luna",
+            name="Luna",
+            emoji="🦀",
+            soul="",
+            model="gemini",
+            mcp_servers=["*"],
+            bot_user_id="users/999",
+        ),
+    )
+
+    service = FakeService()
+
+    class SilentFailureRuntime(FakeRuntimeAgent):
+        async def assign_stream(self, task):
+            task.status = TaskStatus.FAILED
+            task.error = "stream blew up"
+            if False:
+                yield None
+
+    registry = FakeRegistry(data_dir, persona)
+    registry.runtime = SilentFailureRuntime(persona)
+
+    bridge = ChatBridge(
+        registry=registry,
+        space_id="spaces/test",
+        service=service,
+        spaces_config=str(tmp_path / "spaces.json"),
+    )
+
+    message = {
+        "text": "Hello there",
+        "sender": {"type": "HUMAN", "name": "users/123", "displayName": "Ada"},
+        "thread": {"name": "spaces/test/threads/abc"},
+        "annotations": [
+            {
+                "type": "USER_MENTION",
+                "userMention": {"user": {"type": "BOT", "name": "users/999"}},
+            }
+        ],
+    }
+
+    await bridge.handle_message(message)
+
+    assert len(service.messages_api.created) == 1
+    assert len(service.messages_api.updated) == 1
+    assert service.messages_api.updated[0]["body"]["text"] == "🦀 Luna: error: stream blew up"

@@ -15,7 +15,8 @@ if TYPE_CHECKING:
 from g3lobster.chat.auth import get_authenticated_service
 from g3lobster.chat.commands import handle as handle_command
 from g3lobster.cli.parser import get_content_id
-from g3lobster.tasks.types import Task
+from g3lobster.cli.streaming import StreamEventType, accumulate_text
+from g3lobster.tasks.types import Task, TaskStatus
 from g3lobster.utils import BoundedSet
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,22 @@ def _parse_ts(ts: str) -> datetime:
         return datetime.fromisoformat(ts.replace("Z", "+00:00"))
     except (ValueError, AttributeError):
         return _EPOCH
+
+
+def _tool_name_for_display(event_data: Dict[str, object]) -> str:
+    """Extract a displayable tool name across Gemini CLI schema variants."""
+    for key in ("tool_name", "toolName", "tool", "name"):
+        value = event_data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _format_progress_text(persona, activity: str) -> str:
+    activity_text = activity.strip()
+    if not activity_text:
+        return f"{persona.emoji} _{persona.name} is thinking..._"
+    return f"{persona.emoji} _{persona.name} is doing {activity_text}..._"
 
 
 class ChatBridge:
@@ -253,33 +270,44 @@ class ChatBridge:
             thread_id=thread_id,
         )
         thinking_name: Optional[str] = thinking_msg.get("name") if thinking_msg else None
-        active_tools: list = []
-
-        from g3lobster.cli.streaming import StreamEventType
+        last_progress_text = f"{persona.emoji} _{persona.name} is thinking..._"
+        stream_events = []
 
         final_result: Optional[str] = None
         final_error: Optional[str] = None
 
         async for event in runtime.assign_stream(task):
+            stream_events.append(event)
             if event.event_type == StreamEventType.TOOL_USE:
-                tool_name = event.data.get("tool", event.data.get("toolName", ""))
-                if tool_name and tool_name not in active_tools:
-                    active_tools.append(tool_name)
-                    if thinking_name:
-                        tools_str = ", ".join(active_tools)
-                        await self.update_message(
-                            thinking_name,
-                            f"{persona.emoji} _{persona.name} is working... [{tools_str}]_",
-                        )
+                tool_name = _tool_name_for_display(event.data)
+                progress_text = _format_progress_text(persona, tool_name)
+                if thinking_name and progress_text != last_progress_text:
+                    await self.update_message(thinking_name, progress_text)
+                    last_progress_text = progress_text
             elif event.event_type == StreamEventType.RESULT:
-                final_result = event.text
+                if event.data.get("status") == "error":
+                    error_data = event.data.get("error") or {}
+                    if isinstance(error_data, dict):
+                        final_error = str(error_data.get("message") or "unknown error")
+                elif event.text:
+                    final_result = event.text
             elif event.event_type == StreamEventType.ERROR:
-                final_error = event.data.get("error", "unknown error")
+                if event.data.get("severity") == "error":
+                    final_error = str(event.data.get("message") or event.data.get("error") or "unknown error")
 
-        if final_result:
+        if not final_error and task.status == TaskStatus.FAILED:
+            final_error = task.error or "unknown error"
+        if not final_result:
+            final_result = (task.result or accumulate_text(stream_events)).strip()
+
+        if task.status == TaskStatus.FAILED and final_error:
+            reply_text = f"{persona.emoji} {persona.name}: error: {final_error}"
+            if self.debug_mode:
+                reply_text += f"\n```\n{final_error}\n```"
+        elif final_result:
             reply_text = f"{persona.emoji} {persona.name}: {final_result}"
         elif final_error:
-            reply_text = f"{persona.emoji} {persona.name}: error — {final_error}"
+            reply_text = f"{persona.emoji} {persona.name}: error: {final_error}"
             if self.debug_mode:
                 reply_text += f"\n```\n{final_error}\n```"
         else:

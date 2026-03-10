@@ -14,13 +14,13 @@ logger = logging.getLogger(__name__)
 
 class StreamEventType(str, Enum):
     """Event types emitted by Gemini CLI stream-json output."""
-    TURN_START = "turn_start"
-    TEXT_DELTA = "text_delta"
+    INIT = "init"
+    MESSAGE = "message"
     TOOL_USE = "tool_use"
     TOOL_RESULT = "tool_result"
-    TURN_END = "turn_end"
     RESULT = "result"
     ERROR = "error"
+    TURN_END = "turn_end"
     UNKNOWN = "unknown"
 
 
@@ -33,17 +33,19 @@ class StreamEvent:
 
     @property
     def text(self) -> str:
-        """Extract text content from text_delta or result events."""
-        if self.event_type == StreamEventType.TEXT_DELTA:
-            return self.data.get("text", "")
+        """Extract text content from assistant message or legacy result events."""
+        if self.event_type == StreamEventType.MESSAGE:
+            if self.data.get("role") != "assistant":
+                return ""
+            return self.data.get("content", "")
         if self.event_type == StreamEventType.RESULT:
-            return self.data.get("result", "")
+            return self.data.get("response") or self.data.get("result", "")
         return ""
 
     @property
     def is_terminal(self) -> bool:
         """Whether this event signals the end of the stream."""
-        return self.event_type in {StreamEventType.RESULT, StreamEventType.ERROR}
+        return self.event_type == StreamEventType.RESULT
 
 
 def parse_stream_event(line: str) -> StreamEvent:
@@ -88,7 +90,7 @@ def accumulate_text(events: List[StreamEvent]) -> str:
     """Accumulate all text deltas from a list of events into a single string."""
     parts: List[str] = []
     for event in events:
-        if event.event_type == StreamEventType.TEXT_DELTA:
+        if event.event_type == StreamEventType.MESSAGE and event.text:
             parts.append(event.text)
         elif event.event_type == StreamEventType.RESULT and event.text:
             parts.append(event.text)
