@@ -12,6 +12,7 @@ import {
   listAgentSessions,
   listAgents,
   listGlobalKnowledge,
+  listMcpServers,
   restartAgent,
   startAgent,
   startBridge,
@@ -45,6 +46,42 @@ function parseMcpServers(raw) {
     .filter(Boolean);
 }
 
+function parseDmAllowlist(raw) {
+  const value = String(raw || "").trim();
+  if (!value) {
+    return [];
+  }
+  return value
+    .split("\n")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function mcpChecklistMarkup(available, selected) {
+  const selectedSet = new Set(selected || ["*"]);
+  const useAll = selectedSet.has("*");
+  if (!available.length) {
+    return `<input name="mcp_servers" value="${escapeHtml((selected || ["*"]).join(", "))}" />`;
+  }
+  const allChecked = useAll ? "checked" : "";
+  let html = `<label class="mcp-check"><input type="checkbox" name="mcp_all" value="*" ${allChecked} /> * (all servers)</label>`;
+  for (const name of available) {
+    const checked = useAll || selectedSet.has(name) ? "checked" : "";
+    html += `<label class="mcp-check"><input type="checkbox" name="mcp_server" value="${escapeHtml(name)}" ${checked} /> ${escapeHtml(name)}</label>`;
+  }
+  return `<div class="mcp-checklist">${html}</div>`;
+}
+
+function collectMcpServers(container) {
+  const allBox = container.querySelector('input[name="mcp_all"]');
+  if (allBox && allBox.checked) {
+    return ["*"];
+  }
+  const boxes = container.querySelectorAll('input[name="mcp_server"]:checked');
+  const names = Array.from(boxes).map((el) => el.value);
+  return names.length ? names : ["*"];
+}
+
 function stateClass(state) {
   return String(state || "").toLowerCase();
 }
@@ -70,6 +107,7 @@ export async function render(root, { onSetupChange }) {
   let globalUserMemory = "";
   let globalProcedures = "";
   let globalKnowledge = [];
+  let availableMcpServers = [];
 
   function setNotice(tone, text) {
     notice = { tone, text };
@@ -164,7 +202,7 @@ export async function render(root, { onSetupChange }) {
           </div>
           <div class="field">
             <label>MCP Servers</label>
-            <input name="mcp_servers" value="${escapeHtml((detail.mcp_servers || ["*"]).join(", "))}" />
+            ${mcpChecklistMarkup(availableMcpServers, detail.mcp_servers)}
           </div>
         </div>
         <div class="field">
@@ -183,6 +221,10 @@ export async function render(root, { onSetupChange }) {
               <option value="false" ${detail.enabled ? "" : "selected"}>false</option>
             </select>
           </div>
+        </div>
+        <div class="field">
+          <label>DM Allowlist (one user ID per line, empty = allow all)</label>
+          <textarea name="dm_allowlist" rows="3">${escapeHtml((detail.dm_allowlist || []).join("\n"))}</textarea>
         </div>
         <div class="actions">
           <button class="btn btn-primary" type="submit">Save Persona</button>
@@ -313,7 +355,7 @@ export async function render(root, { onSetupChange }) {
             </div>
             <div class="field">
               <label>MCP Servers</label>
-              <input name="mcp_servers" value="*" />
+              ${mcpChecklistMarkup(availableMcpServers, ["*"])}
             </div>
             <div class="field" style="grid-column: 1 / -1;">
               <label>SOUL.md</label>
@@ -410,7 +452,7 @@ export async function render(root, { onSetupChange }) {
           name,
           emoji: String(data.get("emoji") || "🤖").trim() || "🤖",
           model: String(data.get("model") || "gemini").trim() || "gemini",
-          mcp_servers: parseMcpServers(data.get("mcp_servers")),
+          mcp_servers: collectMcpServers(form),
           soul: String(data.get("soul") || ""),
         });
         activeAgentId = created.id;
@@ -548,7 +590,8 @@ export async function render(root, { onSetupChange }) {
             emoji: String(data.get("emoji") || "🤖").trim() || "🤖",
             model: String(data.get("model") || "gemini").trim() || "gemini",
             soul: String(data.get("soul") || ""),
-            mcp_servers: parseMcpServers(data.get("mcp_servers")),
+            mcp_servers: collectMcpServers(form),
+            dm_allowlist: parseDmAllowlist(data.get("dm_allowlist")),
             enabled: String(data.get("enabled") || "true") === "true",
             bot_user_id: String(data.get("bot_user_id") || "").trim() || null,
           };
@@ -575,6 +618,12 @@ export async function render(root, { onSetupChange }) {
     await ensureGlobalMemory();
   } catch (_err) {
     // Keep UI usable even if global files are not available yet.
+  }
+
+  try {
+    availableMcpServers = await listMcpServers();
+  } catch (_err) {
+    availableMcpServers = [];
   }
 
   await rerender();

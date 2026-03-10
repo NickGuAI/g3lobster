@@ -183,3 +183,7 @@ export function testAgent(agentId, text = "ping") {
     body: JSON.stringify({ text }),
   });
 }
+
+export function listMcpServers() {
+  return request("/mcp/servers", { method: "GET" });
+}

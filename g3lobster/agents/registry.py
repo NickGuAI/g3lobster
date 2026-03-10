@@ -59,6 +59,24 @@ class RegisteredAgent:
         finally:
             self._pending_assignments -= 1
 
+    async def assign_stream(self, task):
+        """Assign a task and yield streaming events under the assignment lock."""
+        self._pending_assignments += 1
+        try:
+            async with self._assign_lock:
+                if hasattr(self.agent, "assign_stream"):
+                    async for event in self.agent.assign_stream(task):
+                        yield event
+                else:
+                    result = await self.agent.assign(task)
+                    from g3lobster.cli.streaming import StreamEvent, StreamEventType
+                    yield StreamEvent(
+                        type=StreamEventType.RESULT,
+                        text=result.result or result.error or "",
+                    )
+        finally:
+            self._pending_assignments -= 1
+
 
 class AgentRegistry:
     """Manages named agents and their per-agent runtime dependencies."""
@@ -202,6 +220,7 @@ class AgentRegistry:
                     "bot_user_id": persona.bot_user_id,
                     "model": persona.model,
                     "mcp_servers": runtime.mcp_servers or list(persona.mcp_servers),
+                    "dm_allowlist": list(persona.dm_allowlist),
                     "state": state,
                     "uptime_s": int(now - runtime.started_at),
                     "current_task": runtime.current_task.id if runtime.current_task else None,
@@ -216,6 +235,7 @@ class AgentRegistry:
                     "bot_user_id": persona.bot_user_id,
                     "model": persona.model,
                     "mcp_servers": list(persona.mcp_servers),
+                    "dm_allowlist": list(persona.dm_allowlist),
                     "state": "stopped",
                     "uptime_s": 0,
                     "current_task": None,

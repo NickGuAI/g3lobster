@@ -10,6 +10,7 @@ from typing import Dict, Optional, Set
 
 from g3lobster.chat.auth import get_authenticated_service
 from g3lobster.cli.parser import get_content_id
+from g3lobster.cli.streaming import StreamEventType
 from g3lobster.tasks.types import Task, TaskStatus
 
 logger = logging.getLogger(__name__)
@@ -188,6 +189,23 @@ class ChatBridge:
                 return
 
         persona = runtime.persona
+
+        # Enforce DM allowlist: if the space is a DM and the agent has
+        # a non-empty allowlist, only allow senders whose user name or
+        # email appears in the list.
+        space_type = message.get("space", {}).get("spaceType", "")
+        if persona.dm_allowlist and space_type == "DIRECT_MESSAGE":
+            sender_name = sender.get("name", "")
+            sender_email = sender.get("email", "")
+            allowed = {item.strip() for item in persona.dm_allowlist if item.strip()}
+            if sender_name not in allowed and sender_email not in allowed:
+                logger.info(
+                    "DM from %s blocked by allowlist for agent %s",
+                    sender_name or sender_email,
+                    persona.id,
+                )
+                return
+
         thread_id = message.get("thread", {}).get("name")
         session_id = thread_id or sender.get("name") or "default"
 
@@ -198,22 +216,55 @@ class ChatBridge:
             thread_id=thread_id,
         )
 
-        result_task = await runtime.assign(task)
-        if result_task.status == TaskStatus.COMPLETED and result_task.result:
-            await self.send_message(
-                f"{persona.emoji} {persona.name}: {result_task.result}",
-                thread_id=thread_id,
-            )
-        elif result_task.status == TaskStatus.FAILED:
-            await self.send_message(
-                f"{persona.emoji} {persona.name}: error: {result_task.error}",
-                thread_id=thread_id,
-            )
+        # Use streaming when available to relay tool-use updates to chat.
+        if hasattr(runtime, "assign_stream"):
+            tools_seen: list = []
+            result_text = ""
+            async for event in runtime.assign_stream(task):
+                if event.type == StreamEventType.TOOL_USE and event.tool_name:
+                    tools_seen.append(event.tool_name)
+                    status_line = ", ".join(tools_seen[-5:])
+                    await self.send_message(
+                        f"{persona.emoji} _{persona.name} using: {status_line}_",
+                        thread_id=thread_id,
+                    )
+                elif event.type == StreamEventType.RESULT:
+                    result_text = event.text
+                elif event.type == StreamEventType.ERROR:
+                    result_text = ""
+
+            if task.status == TaskStatus.COMPLETED and (task.result or result_text):
+                await self.send_message(
+                    f"{persona.emoji} {persona.name}: {task.result or result_text}",
+                    thread_id=thread_id,
+                )
+            elif task.status == TaskStatus.FAILED:
+                await self.send_message(
+                    f"{persona.emoji} {persona.name}: error: {task.error}",
+                    thread_id=thread_id,
+                )
+            else:
+                await self.send_message(
+                    f"{persona.emoji} {persona.name}: task canceled",
+                    thread_id=thread_id,
+                )
         else:
-            await self.send_message(
-                f"{persona.emoji} {persona.name}: task canceled",
-                thread_id=thread_id,
-            )
+            result_task = await runtime.assign(task)
+            if result_task.status == TaskStatus.COMPLETED and result_task.result:
+                await self.send_message(
+                    f"{persona.emoji} {persona.name}: {result_task.result}",
+                    thread_id=thread_id,
+                )
+            elif result_task.status == TaskStatus.FAILED:
+                await self.send_message(
+                    f"{persona.emoji} {persona.name}: error: {result_task.error}",
+                    thread_id=thread_id,
+                )
+            else:
+                await self.send_message(
+                    f"{persona.emoji} {persona.name}: task canceled",
+                    thread_id=thread_id,
+                )
 
     async def send_message(self, text: str, thread_id: Optional[str] = None) -> None:
         body = {"text": text}

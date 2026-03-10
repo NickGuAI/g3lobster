@@ -160,3 +160,144 @@ async def test_chat_bridge_ignores_unlinked_mentions(tmp_path) -> None:
     await bridge.handle_message(message)
 
     assert service.messages_api.created == []
+
+
+@pytest.mark.asyncio
+async def test_chat_bridge_dm_allowlist_blocks_unlisted_sender(tmp_path) -> None:
+    """DM from a sender not in the allowlist is silently dropped."""
+    data_dir = str(tmp_path / "data")
+    persona = save_persona(
+        data_dir,
+        AgentPersona(
+            id="luna",
+            name="Luna",
+            emoji="🦀",
+            soul="",
+            model="gemini",
+            mcp_servers=["*"],
+            dm_allowlist=["users/allowed-1"],
+            bot_user_id="users/999",
+        ),
+    )
+
+    service = FakeService()
+    registry = FakeRegistry(data_dir, persona)
+
+    bridge = ChatBridge(
+        registry=registry,
+        space_id="spaces/test",
+        service=service,
+        spaces_config=str(tmp_path / "spaces.json"),
+    )
+
+    message = {
+        "text": "Hello there",
+        "sender": {"type": "HUMAN", "name": "users/blocked-user"},
+        "space": {"spaceType": "DIRECT_MESSAGE"},
+        "thread": {"name": "spaces/test/threads/abc"},
+        "annotations": [
+            {
+                "type": "USER_MENTION",
+                "userMention": {"user": {"type": "BOT", "name": "users/999"}},
+            }
+        ],
+    }
+
+    await bridge.handle_message(message)
+
+    # Blocked — no messages sent
+    assert service.messages_api.created == []
+
+
+@pytest.mark.asyncio
+async def test_chat_bridge_dm_allowlist_permits_listed_sender(tmp_path) -> None:
+    """DM from a sender in the allowlist is processed normally."""
+    data_dir = str(tmp_path / "data")
+    persona = save_persona(
+        data_dir,
+        AgentPersona(
+            id="luna",
+            name="Luna",
+            emoji="🦀",
+            soul="",
+            model="gemini",
+            mcp_servers=["*"],
+            dm_allowlist=["users/allowed-1"],
+            bot_user_id="users/999",
+        ),
+    )
+
+    service = FakeService()
+    registry = FakeRegistry(data_dir, persona)
+
+    bridge = ChatBridge(
+        registry=registry,
+        space_id="spaces/test",
+        service=service,
+        spaces_config=str(tmp_path / "spaces.json"),
+    )
+
+    message = {
+        "text": "Hello there",
+        "sender": {"type": "HUMAN", "name": "users/allowed-1"},
+        "space": {"spaceType": "DIRECT_MESSAGE"},
+        "thread": {"name": "spaces/test/threads/abc"},
+        "annotations": [
+            {
+                "type": "USER_MENTION",
+                "userMention": {"user": {"type": "BOT", "name": "users/999"}},
+            }
+        ],
+    }
+
+    await bridge.handle_message(message)
+
+    assert len(service.messages_api.created) == 2
+    assert "thinking" in service.messages_api.created[0]["body"]["text"]
+    assert "reply" in service.messages_api.created[1]["body"]["text"]
+
+
+@pytest.mark.asyncio
+async def test_chat_bridge_empty_dm_allowlist_allows_all(tmp_path) -> None:
+    """Empty allowlist means all senders are allowed (default)."""
+    data_dir = str(tmp_path / "data")
+    persona = save_persona(
+        data_dir,
+        AgentPersona(
+            id="luna",
+            name="Luna",
+            emoji="🦀",
+            soul="",
+            model="gemini",
+            mcp_servers=["*"],
+            dm_allowlist=[],
+            bot_user_id="users/999",
+        ),
+    )
+
+    service = FakeService()
+    registry = FakeRegistry(data_dir, persona)
+
+    bridge = ChatBridge(
+        registry=registry,
+        space_id="spaces/test",
+        service=service,
+        spaces_config=str(tmp_path / "spaces.json"),
+    )
+
+    message = {
+        "text": "Hello there",
+        "sender": {"type": "HUMAN", "name": "users/anyone"},
+        "space": {"spaceType": "DIRECT_MESSAGE"},
+        "thread": {"name": "spaces/test/threads/abc"},
+        "annotations": [
+            {
+                "type": "USER_MENTION",
+                "userMention": {"user": {"type": "BOT", "name": "users/999"}},
+            }
+        ],
+    }
+
+    await bridge.handle_message(message)
+
+    assert len(service.messages_api.created) == 2

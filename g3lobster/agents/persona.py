@@ -26,6 +26,7 @@ class AgentPersona:
     soul: str = ""
     model: str = "gemini"
     mcp_servers: List[str] = field(default_factory=lambda: ["*"])
+    dm_allowlist: List[str] = field(default_factory=list)
     bot_user_id: Optional[str] = None
     enabled: bool = True
     created_at: str = field(default_factory=lambda: _utc_now())
@@ -42,6 +43,7 @@ class AgentPersona:
         self.soul = self.soul.strip()
         self.model = self.model.strip() or "gemini"
         self.mcp_servers = [str(item).strip() for item in self.mcp_servers if str(item).strip()] or ["*"]
+        self.dm_allowlist = [str(item).strip() for item in self.dm_allowlist if str(item).strip()]
         if self.bot_user_id:
             self.bot_user_id = str(self.bot_user_id).strip() or None
         else:
@@ -54,6 +56,7 @@ class AgentPersona:
             "emoji": self.emoji,
             "model": self.model,
             "mcp_servers": list(self.mcp_servers),
+            "dm_allowlist": list(self.dm_allowlist),
             "bot_user_id": self.bot_user_id,
             "enabled": bool(self.enabled),
             "created_at": self.created_at,
@@ -151,6 +154,7 @@ def load_persona(data_dir: str, agent_id: str, *, skip_migration: bool = False) 
         soul=soul,
         model=str(payload.get("model", "gemini")),
         mcp_servers=list(payload.get("mcp_servers") or ["*"]),
+        dm_allowlist=list(payload.get("dm_allowlist") or []),
         bot_user_id=payload.get("bot_user_id"),
         enabled=bool(payload.get("enabled", True)),
         created_at=str(payload.get("created_at") or _utc_now()),
@@ -173,6 +177,7 @@ def save_persona(data_dir: str, persona: AgentPersona) -> AgentPersona:
         soul=persona.soul,
         model=persona.model,
         mcp_servers=list(persona.mcp_servers),
+        dm_allowlist=list(persona.dm_allowlist),
         bot_user_id=persona.bot_user_id,
         enabled=persona.enabled,
         created_at=(existing.created_at if existing else persona.created_at) or now,

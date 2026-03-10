@@ -30,8 +30,10 @@ from g3lobster.api.models import (
 )
 from g3lobster.memory.global_memory import GlobalMemoryManager
 from g3lobster.memory.manager import MemoryManager
+from g3lobster.mcp.loader import MCPConfigLoader
 
 router = APIRouter(prefix="/agents", tags=["agents"])
+mcp_router = APIRouter(prefix="/mcp", tags=["mcp"])
 
 
 def _to_agent_response(payload: Dict[str, object]) -> AgentResponse:
@@ -117,6 +119,7 @@ async def create_agent(payload: AgentCreateRequest, request: Request) -> AgentDe
         soul=payload.soul,
         model=payload.model,
         mcp_servers=payload.mcp_servers,
+        dm_allowlist=payload.dm_allowlist,
         enabled=payload.enabled,
     )
     saved = save_persona(config.agents.data_dir, persona)
@@ -129,6 +132,7 @@ async def create_agent(payload: AgentCreateRequest, request: Request) -> AgentDe
         "enabled": saved.enabled,
         "model": saved.model,
         "mcp_servers": list(saved.mcp_servers),
+        "dm_allowlist": list(saved.dm_allowlist),
         "bot_user_id": saved.bot_user_id,
         "state": "stopped",
         "uptime_s": 0,
@@ -191,6 +195,7 @@ async def get_agent(agent_id: str, request: Request) -> AgentDetailResponse:
         "enabled": persona.enabled,
         "model": persona.model,
         "mcp_servers": list(persona.mcp_servers),
+        "dm_allowlist": list(persona.dm_allowlist),
         "bot_user_id": persona.bot_user_id,
         "state": "stopped",
         "uptime_s": 0,
@@ -225,6 +230,8 @@ async def update_agent(agent_id: str, payload: AgentUpdateRequest, request: Requ
         persona.model = str(updates["model"])
     if "mcp_servers" in updates:
         persona.mcp_servers = [str(item) for item in (updates["mcp_servers"] or ["*"])]
+    if "dm_allowlist" in updates:
+        persona.dm_allowlist = [str(item) for item in (updates["dm_allowlist"] or [])]
     if "enabled" in updates:
         persona.enabled = bool(updates["enabled"])
     if "bot_user_id" in updates:
@@ -387,3 +394,10 @@ async def test_agent(agent_id: str, payload: TestAgentRequest, request: Request)
     message = f"{persona.emoji} {persona.name} test: {payload.text}"
     await chat_bridge.send_message(message)
     return {"sent": True}
+
+
+@mcp_router.get("/servers", response_model=List[str])
+async def list_mcp_servers(request: Request) -> List[str]:
+    config = request.app.state.config
+    loader = MCPConfigLoader(config_dir=config.mcp.config_dir)
+    return sorted(loader.load_all().keys())

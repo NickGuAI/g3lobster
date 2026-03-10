@@ -386,3 +386,64 @@ def test_setup_routes_bridge_lifecycle(monkeypatch, tmp_path):
     assert saved["chat"]["enabled"] is False
     assert saved["chat"]["space_id"] == "spaces/new"
     assert saved["chat"]["space_name"] == "Ops"
+
+
+def test_mcp_servers_endpoint(tmp_path):
+    app, _bridge_instances, _config_path = _build_test_app(tmp_path)
+
+    # Create an MCP config directory with a server definition
+    mcp_dir = tmp_path / "config" / "mcp"
+    mcp_dir.mkdir(parents=True)
+    (mcp_dir / "gmail.yaml").write_text(
+        "name: gmail\nenabled: true\ntransport:\n  type: sse\n  url: https://example.test\n",
+        encoding="utf-8",
+    )
+    (mcp_dir / "calendar.yaml").write_text(
+        "name: calendar\nenabled: true\ntransport:\n  type: sse\n  url: https://example.test\n",
+        encoding="utf-8",
+    )
+
+    # Point the app config at our test mcp dir
+    app.state.config.mcp.config_dir = str(mcp_dir)
+
+    with TestClient(app) as client:
+        resp = client.get("/mcp/servers")
+        assert resp.status_code == 200
+        servers = resp.json()
+        assert "gmail" in servers
+        assert "calendar" in servers
+        assert servers == sorted(servers)
+
+
+def test_dm_allowlist_persisted_via_api(tmp_path):
+    app, _bridge_instances, _config_path = _build_test_app(tmp_path)
+
+    with TestClient(app) as client:
+        create = client.post(
+            "/agents",
+            json={
+                "name": "Iris",
+                "emoji": "🧭",
+                "soul": "",
+                "model": "gemini",
+                "mcp_servers": ["*"],
+                "dm_allowlist": ["users/a", "users/b"],
+            },
+        )
+        assert create.status_code == 200
+        agent_id = create.json()["id"]
+        assert create.json()["dm_allowlist"] == ["users/a", "users/b"]
+
+        detail = client.get(f"/agents/{agent_id}")
+        assert detail.status_code == 200
+        assert detail.json()["dm_allowlist"] == ["users/a", "users/b"]
+
+        updated = client.put(
+            f"/agents/{agent_id}",
+            json={"dm_allowlist": ["users/c"]},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["dm_allowlist"] == ["users/c"]
+
+        detail2 = client.get(f"/agents/{agent_id}")
+        assert detail2.json()["dm_allowlist"] == ["users/c"]
