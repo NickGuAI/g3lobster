@@ -18,7 +18,8 @@ from g3lobster.memory.global_memory import GlobalMemoryManager
 from g3lobster.memory.manager import MemoryManager
 from g3lobster.pool.health import HealthInspector
 from g3lobster.pool.types import AgentState
-from g3lobster.tasks.types import Task, TaskStatus
+from g3lobster.tasks.types import Task, TaskStatus, TaskStore
+from g3lobster.tmux.spawner import SubAgentRunInfo, SubAgentSpawner
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ class RegisteredAgent:
     agent: object
     memory_manager: MemoryManager
     context_builder: ContextBuilder
+    task_store: Optional[TaskStore] = None
     _assign_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _pending_assignments: int = 0
 
@@ -63,7 +65,14 @@ class RegisteredAgent:
         self._pending_assignments += 1
         try:
             async with self._assign_lock:
-                return await self.agent.assign(task)
+                result = await self.agent.assign(task)
+                if self.task_store and result.status in {
+                    TaskStatus.COMPLETED,
+                    TaskStatus.FAILED,
+                    TaskStatus.CANCELED,
+                }:
+                    self.task_store.add(result)
+                return result
         finally:
             self._pending_assignments -= 1
 
@@ -74,6 +83,12 @@ class RegisteredAgent:
             async with self._assign_lock:
                 async for event in self.agent.assign_stream(task):
                     yield event
+                if self.task_store and task.status in {
+                    TaskStatus.COMPLETED,
+                    TaskStatus.FAILED,
+                    TaskStatus.CANCELED,
+                }:
+                    self.task_store.add(task)
         finally:
             self._pending_assignments -= 1
 
@@ -97,6 +112,9 @@ class AgentRegistry:
         gemini_args: Optional[List[str]] = None,
         gemini_timeout_s: float = 45.0,
         gemini_cwd: Optional[str] = None,
+        task_store_size: int = 100,
+        subagent_max_concurrent: int = 3,
+        subagent_timeout_s: float = 300.0,
         global_memory_manager: Optional[GlobalMemoryManager] = None,
         alert_manager: Optional[AlertManager] = None,
         chat_bridge: Optional[object] = None,
@@ -123,7 +141,15 @@ class AgentRegistry:
         self.agent_factory = agent_factory
 
         self.health = HealthInspector()
+        self.task_store = TaskStore(max_tasks_per_agent=task_store_size)
         self.subagent_registry = SubagentRegistry(Path(data_dir))
+        self.tmux_subagent_spawner = SubAgentSpawner(
+            command=self.gemini_command,
+            args=self.gemini_args,
+            cwd=self.gemini_cwd,
+            max_concurrent_per_agent=subagent_max_concurrent,
+            default_timeout_s=subagent_timeout_s,
+        )
         self._agents: Dict[str, RegisteredAgent] = {}
 
         self._health_task: Optional[asyncio.Task] = None
@@ -192,6 +218,8 @@ class AgentRegistry:
             agent_list_provider=_agent_list_provider,
         )
         agent = self.agent_factory(persona, memory, context)
+        setattr(agent, "task_store", self.task_store)
+        setattr(agent, "subagent_spawner", self.tmux_subagent_spawner)
         await agent.start(mcp_servers=persona.mcp_servers)
 
         self._agents[agent_id] = RegisteredAgent(
@@ -199,6 +227,7 @@ class AgentRegistry:
             agent=agent,
             memory_manager=memory,
             context_builder=context,
+            task_store=self.task_store,
         )
         return True
 
@@ -206,6 +235,7 @@ class AgentRegistry:
         runtime = self._agents.pop(agent_id, None)
         if not runtime:
             return False
+        await self.tmux_subagent_spawner.kill_agent_runs(agent_id)
         await runtime.agent.stop()
         return True
 
@@ -264,6 +294,76 @@ class AgentRegistry:
 
     def load_persona(self, agent_id: str) -> Optional[AgentPersona]:
         return load_persona(self.data_dir, agent_id)
+
+    def list_tasks(self, agent_id: str, limit: int = 20) -> List[Task]:
+        capped_limit = max(1, int(limit))
+        runtime = self.get_agent(agent_id)
+        items = self.task_store.list(agent_id, limit=capped_limit)
+        current = runtime.current_task if runtime else None
+        if current and all(existing.id != current.id for existing in items):
+            items = [current, *items]
+        return items[:capped_limit]
+
+    def get_task(self, agent_id: str, task_id: str) -> Optional[Task]:
+        runtime = self.get_agent(agent_id)
+        if runtime and runtime.current_task and runtime.current_task.id == task_id:
+            return runtime.current_task
+        return self.task_store.get(agent_id, task_id)
+
+    async def cancel_task(self, agent_id: str, task_id: str) -> Optional[Task]:
+        runtime = self.get_agent(agent_id)
+        if not runtime:
+            return self.task_store.get(agent_id, task_id)
+
+        current = runtime.current_task
+        if not current or current.id != task_id:
+            return self.task_store.get(agent_id, task_id)
+
+        if current.status != TaskStatus.RUNNING:
+            return current
+
+        agent = runtime.agent
+        if hasattr(agent, "cancel_task"):
+            canceled = await agent.cancel_task(task_id)
+            if canceled:
+                self.task_store.add(canceled)
+            return canceled
+
+        process = getattr(agent, "process", None)
+        if process and hasattr(process, "kill"):
+            await process.kill()
+        current.status = TaskStatus.CANCELED
+        current.completed_at = current.completed_at or time.time()
+        current.error = current.error or "Canceled by API request"
+        current.add_event("canceled", {"reason": current.error})
+        self.task_store.add(current)
+        return current
+
+    async def spawn_subagent(
+        self,
+        agent_id: str,
+        prompt: str,
+        timeout_s: Optional[float] = None,
+        mcp_servers: Optional[List[str]] = None,
+        parent_task_id: Optional[str] = None,
+    ) -> SubAgentRunInfo:
+        runtime = self.get_agent(agent_id)
+        if not runtime:
+            raise ValueError(f"Agent '{agent_id}' is not running")
+        selected_servers = list(mcp_servers or runtime.mcp_servers or ["*"])
+        return await self.tmux_subagent_spawner.spawn(
+            agent_id=agent_id,
+            prompt=prompt,
+            timeout_s=timeout_s,
+            mcp_server_names=selected_servers,
+            parent_task_id=parent_task_id,
+        )
+
+    async def list_subagents(self, agent_id: str, active_only: bool = True) -> List[SubAgentRunInfo]:
+        return await self.tmux_subagent_spawner.list_runs(agent_id=agent_id, active_only=active_only)
+
+    async def kill_subagent(self, agent_id: str, session_name: str) -> Optional[SubAgentRunInfo]:
+        return await self.tmux_subagent_spawner.kill(agent_id=agent_id, session_name=session_name)
 
     async def delegate_task(
         self,
@@ -395,6 +495,7 @@ class AgentRegistry:
                     "uptime_s": int(now - runtime.started_at),
                     "current_task": runtime.current_task.id if runtime.current_task else None,
                     "pending_assignments": runtime.pending_assignments,
+                    "recent_tasks": len(self.task_store.list(persona.id)),
                     "description": description,
                 }
             else:
@@ -410,6 +511,7 @@ class AgentRegistry:
                     "uptime_s": 0,
                     "current_task": None,
                     "pending_assignments": 0,
+                    "recent_tasks": len(self.task_store.list(persona.id)),
                     "description": description,
                 }
             items.append(item)

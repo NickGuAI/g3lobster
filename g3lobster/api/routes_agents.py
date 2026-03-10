@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from g3lobster.agents.persona import (
     AgentPersona,
@@ -24,15 +24,26 @@ from g3lobster.api.models import (
     AgentUpdateRequest,
     KnowledgeListResponse,
     LinkBotRequest,
+    MemorySearchRequest,
+    MemorySearchResponse,
+    MemorySearchResult,
     MemoryResponse,
     MemoryUpdateRequest,
     SessionListResponse,
     SleepAgentRequest,
+    SubAgentRequest,
+    SubAgentResponse,
+    TaskDetailResponse,
+    TaskEventResponse,
+    TaskListResponse,
+    TaskSummaryResponse,
     TestAgentRequest,
 )
 from g3lobster.config import normalize_space_id
 from g3lobster.memory.global_memory import GlobalMemoryManager
 from g3lobster.memory.manager import MemoryManager
+from g3lobster.memory.search import MemorySearchEngine
+from g3lobster.tasks.types import Task, TaskStatus
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -115,6 +126,53 @@ def _global_memory_manager(request: Request) -> GlobalMemoryManager:
     if manager is None:
         raise RuntimeError("GlobalMemoryManager is not initialized on app state")
     return manager
+
+
+def _memory_search_engine(request: Request) -> MemorySearchEngine:
+    config = request.app.state.config
+    return MemorySearchEngine(data_dir=config.agents.data_dir)
+
+
+def _to_task_summary(task: Task) -> TaskSummaryResponse:
+    payload = task.as_dict()
+    return TaskSummaryResponse(**{key: payload[key] for key in TaskSummaryResponse.model_fields.keys()})
+
+
+def _to_task_detail(task: Task) -> TaskDetailResponse:
+    payload = task.as_dict()
+    event_items = [
+        TaskEventResponse(
+            timestamp=event.timestamp,
+            kind=event.kind,
+            payload=dict(event.payload),
+        )
+        for event in task.events
+    ]
+    summary = {key: payload[key] for key in TaskSummaryResponse.model_fields.keys()}
+    return TaskDetailResponse(**summary, events=event_items)
+
+
+def _to_subagent_response(run: object) -> SubAgentResponse:
+    if hasattr(run, "as_dict"):
+        payload = run.as_dict()
+    elif isinstance(run, dict):
+        payload = dict(run)
+    else:
+        payload = {
+            "session_name": getattr(run, "session_name", ""),
+            "agent_id": getattr(run, "agent_id", ""),
+            "prompt": getattr(run, "prompt", ""),
+            "mcp_server_names": list(getattr(run, "mcp_server_names", [])),
+            "parent_task_id": getattr(run, "parent_task_id", None),
+            "status": getattr(run, "status", "unknown"),
+            "created_at": float(getattr(run, "created_at", 0.0)),
+            "started_at": float(getattr(run, "started_at", 0.0)),
+            "completed_at": getattr(run, "completed_at", None),
+            "timeout_s": float(getattr(run, "timeout_s", 0.0)),
+            "output": getattr(run, "output", None),
+            "error": getattr(run, "error", None),
+        }
+    return SubAgentResponse(**payload)
 
 
 @router.get("", response_model=List[AgentResponse])
@@ -205,6 +263,7 @@ async def create_agent(payload: AgentCreateRequest, request: Request) -> AgentDe
         "uptime_s": 0,
         "current_task": None,
         "pending_assignments": 0,
+        "recent_tasks": 0,
         "description": (saved.soul.split("\n")[0].strip().lstrip("#").strip() if saved.soul else ""),
     }
     return AgentDetailResponse(
@@ -295,6 +354,7 @@ async def get_agent(agent_id: str, request: Request) -> AgentDetailResponse:
         "uptime_s": 0,
         "current_task": None,
         "pending_assignments": 0,
+        "recent_tasks": 0,
         "description": (persona.soul.split("\n")[0].strip().lstrip("#").strip() if persona.soul else ""),
     }
     return AgentDetailResponse(
@@ -432,6 +492,135 @@ async def sleep_agent_route(agent_id: str, payload: SleepAgentRequest, request: 
     return {"sleeping": True, "duration_s": payload.duration_s}
 
 
+@router.get("/{agent_id}/tasks", response_model=TaskListResponse)
+async def list_agent_tasks(
+    agent_id: str,
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=200),
+) -> TaskListResponse:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+    registry = request.app.state.registry
+    tasks = registry.list_tasks(agent_id, limit=limit)
+    return TaskListResponse(tasks=[_to_task_summary(task) for task in tasks])
+
+
+@router.get("/{agent_id}/tasks/{task_id}", response_model=TaskDetailResponse)
+async def get_agent_task(agent_id: str, task_id: str, request: Request) -> TaskDetailResponse:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+    registry = request.app.state.registry
+    task = registry.get_task(agent_id, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return _to_task_detail(task)
+
+
+@router.post("/{agent_id}/tasks/{task_id}/cancel", response_model=TaskDetailResponse)
+async def cancel_agent_task(agent_id: str, task_id: str, request: Request) -> TaskDetailResponse:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+    registry = request.app.state.registry
+    task = await registry.cancel_task(agent_id, task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.status != TaskStatus.CANCELED:
+        raise HTTPException(status_code=409, detail=f"Task is not cancelable (status={task.status.value})")
+    return _to_task_detail(task)
+
+
+@router.post("/memory/search", response_model=MemorySearchResponse)
+async def search_memory(payload: MemorySearchRequest, request: Request) -> MemorySearchResponse:
+    config = request.app.state.config
+    if payload.agent_id:
+        _ensure_persona(config.agents.data_dir, payload.agent_id)
+
+    engine = _memory_search_engine(request)
+    agent_ids = [payload.agent_id] if payload.agent_id else None
+    hits = engine.search(
+        payload.query,
+        agent_ids=agent_ids,
+        memory_types=payload.memory_types or None,
+        start_date=payload.start_date,
+        end_date=payload.end_date,
+        limit=payload.limit,
+    )
+    return MemorySearchResponse(results=[MemorySearchResult(**hit.as_dict()) for hit in hits])
+
+
+@router.get("/{agent_id}/memory/search", response_model=MemorySearchResponse)
+async def search_agent_memory(
+    agent_id: str,
+    request: Request,
+    q: str = Query(min_length=1),
+    memory_type: List[str] = Query(default=[]),
+    start_date: str = Query(default=""),
+    end_date: str = Query(default=""),
+    limit: int = Query(default=20, ge=1, le=200),
+) -> MemorySearchResponse:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+
+    engine = _memory_search_engine(request)
+    selected_types = memory_type or ["memory", "procedures", "daily", "session"]
+    hits = engine.search(
+        q,
+        agent_ids=[agent_id],
+        memory_types=selected_types,
+        start_date=start_date or None,
+        end_date=end_date or None,
+        limit=limit,
+    )
+    return MemorySearchResponse(results=[MemorySearchResult(**hit.as_dict()) for hit in hits])
+
+
+@router.post("/{agent_id}/subagents", response_model=SubAgentResponse)
+async def spawn_subagent(agent_id: str, payload: SubAgentRequest, request: Request) -> SubAgentResponse:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+
+    registry = request.app.state.registry
+    try:
+        run = await registry.spawn_subagent(
+            agent_id=agent_id,
+            prompt=payload.prompt,
+            timeout_s=payload.timeout_s,
+            mcp_servers=payload.mcp_servers,
+            parent_task_id=payload.parent_task_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _to_subagent_response(run)
+
+
+@router.get("/{agent_id}/subagents", response_model=List[SubAgentResponse])
+async def list_subagents(
+    agent_id: str,
+    request: Request,
+    active_only: bool = Query(default=True),
+) -> List[SubAgentResponse]:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+
+    registry = request.app.state.registry
+    runs = await registry.list_subagents(agent_id=agent_id, active_only=active_only)
+    return [_to_subagent_response(run) for run in runs]
+
+
+@router.delete("/{agent_id}/subagents/{session_name}", response_model=SubAgentResponse)
+async def kill_subagent(agent_id: str, session_name: str, request: Request) -> SubAgentResponse:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+
+    registry = request.app.state.registry
+    run = await registry.kill_subagent(agent_id=agent_id, session_name=session_name)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Sub-agent session not found")
+    return _to_subagent_response(run)
+
+
 @router.get("/{agent_id}/memory", response_model=MemoryResponse)
 async def get_memory(agent_id: str, request: Request) -> MemoryResponse:
     config = request.app.state.config
@@ -449,6 +638,28 @@ async def update_memory(agent_id: str, payload: MemoryUpdateRequest, request: Re
     manager = _memory_manager(request, agent_id)
     manager.write_memory(payload.content)
     return {"updated": True}
+
+
+@router.post("/{agent_id}/memory/tags/{tag}")
+async def append_tagged_memory(agent_id: str, tag: str, payload: MemoryUpdateRequest, request: Request) -> dict:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+
+    manager = _memory_manager(request, agent_id)
+    try:
+        manager.append_tagged_memory(tag=tag, content=payload.content)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"updated": True}
+
+
+@router.get("/{agent_id}/memory/tags/{tag}")
+async def get_tagged_memory(agent_id: str, tag: str, request: Request) -> dict:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+
+    manager = _memory_manager(request, agent_id)
+    return {"tag": tag, "entries": manager.get_memories_by_tag(tag)}
 
 
 @router.get("/{agent_id}/procedures", response_model=MemoryResponse)

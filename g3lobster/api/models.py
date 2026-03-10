@@ -47,6 +47,7 @@ class AgentResponse(BaseModel):
     uptime_s: int
     current_task: Optional[str] = None
     pending_assignments: int = 0
+    recent_tasks: int = 0
     description: str = ""
 
 
@@ -63,6 +64,80 @@ class MemoryResponse(BaseModel):
 
 class MemoryUpdateRequest(BaseModel):
     content: str
+
+
+class TaskEventResponse(BaseModel):
+    timestamp: float
+    kind: str
+    payload: Dict[str, object] = Field(default_factory=dict)
+
+
+class TaskSummaryResponse(BaseModel):
+    id: str
+    prompt: str
+    priority: str
+    timeout_s: float
+    mcp_servers: List[str] = Field(default_factory=list)
+    session_id: str
+    status: str
+    result: Optional[str] = None
+    error: Optional[str] = None
+    agent_id: Optional[str] = None
+    created_at: float
+    started_at: Optional[float] = None
+    completed_at: Optional[float] = None
+
+
+class TaskDetailResponse(TaskSummaryResponse):
+    events: List[TaskEventResponse] = Field(default_factory=list)
+
+
+class TaskListResponse(BaseModel):
+    tasks: List[TaskSummaryResponse] = Field(default_factory=list)
+
+
+class SubAgentRequest(BaseModel):
+    prompt: str = Field(min_length=1)
+    timeout_s: Optional[float] = Field(default=None, gt=0)
+    mcp_servers: Optional[List[str]] = None
+    parent_task_id: Optional[str] = None
+
+
+class SubAgentResponse(BaseModel):
+    session_name: str
+    agent_id: str
+    prompt: str
+    mcp_server_names: List[str] = Field(default_factory=list)
+    parent_task_id: Optional[str] = None
+    status: str
+    created_at: float
+    started_at: float
+    completed_at: Optional[float] = None
+    timeout_s: float
+    output: Optional[str] = None
+    error: Optional[str] = None
+
+
+class MemorySearchRequest(BaseModel):
+    query: str = Field(min_length=1)
+    agent_id: Optional[str] = None
+    memory_types: List[str] = Field(default_factory=list)
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    limit: int = Field(default=20, ge=1, le=200)
+
+
+class MemorySearchResult(BaseModel):
+    agent_id: str
+    memory_type: str
+    source: str
+    snippet: str
+    line_number: int
+    timestamp: Optional[str] = None
+
+
+class MemorySearchResponse(BaseModel):
+    results: List[MemorySearchResult] = Field(default_factory=list)
 
 
 class SessionListResponse(BaseModel):

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import copy
 import time
+import threading
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional
 
 
 class TaskStatus(str, Enum):
@@ -84,4 +87,66 @@ class Task:
             "created_at": self.created_at,
             "started_at": self.started_at,
             "completed_at": self.completed_at,
+            "events": [
+                {
+                    "timestamp": event.timestamp,
+                    "kind": event.kind,
+                    "payload": dict(event.payload),
+                }
+                for event in self.events
+            ],
         }
+
+
+class TaskStore:
+    """In-memory ring buffer of recent tasks per agent."""
+
+    def __init__(self, max_tasks_per_agent: int = 100):
+        self.max_tasks_per_agent = max(1, int(max_tasks_per_agent))
+        self._lock = threading.Lock()
+        self._tasks_by_agent: Dict[str, Deque[Task]] = {}
+
+    def add(self, task: Task) -> None:
+        agent_id = str(task.agent_id or "").strip()
+        if not agent_id:
+            return
+
+        task_copy: Task = copy.deepcopy(task)
+        with self._lock:
+            bucket = self._tasks_by_agent.setdefault(agent_id, deque())
+
+            # Replace existing task entry if present, otherwise append.
+            for index, existing in enumerate(bucket):
+                if existing.id == task_copy.id:
+                    bucket[index] = task_copy
+                    break
+            else:
+                bucket.append(task_copy)
+
+            while len(bucket) > self.max_tasks_per_agent:
+                bucket.popleft()
+
+    def get(self, agent_id: str, task_id: str) -> Optional[Task]:
+        key = str(agent_id or "").strip()
+        if not key:
+            return None
+
+        with self._lock:
+            bucket = self._tasks_by_agent.get(key, deque())
+            for task in bucket:
+                if task.id == task_id:
+                    return copy.deepcopy(task)
+        return None
+
+    def list(self, agent_id: str, limit: Optional[int] = None) -> List[Task]:
+        key = str(agent_id or "").strip()
+        if not key:
+            return []
+
+        with self._lock:
+            bucket = list(self._tasks_by_agent.get(key, deque()))
+
+        items = [copy.deepcopy(task) for task in reversed(bucket)]
+        if limit is None:
+            return items
+        return items[: max(0, int(limit))]

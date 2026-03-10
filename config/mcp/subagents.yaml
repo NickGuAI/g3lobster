@@ -1,0 +1,8 @@
+name: g3lobster-subagents
+enabled: true
+transport:
+  type: sse
+  url: ${G3LOBSTER_SUBAGENTS_MCP_URL}
+description: tmux-backed sub-agent spawning MCP tools
+tool_patterns:
+  - g3lobster__subagents__*

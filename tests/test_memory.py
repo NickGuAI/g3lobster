@@ -30,3 +30,19 @@ def test_memory_manager_and_context_builder_with_persona_preamble(tmp_path) -> N
     assert "# User Preferences" in prompt
     assert "User prefers concise replies." in prompt
     assert "What next?" in prompt
+
+
+def test_tagged_memory_append_and_read(tmp_path) -> None:
+    memory = MemoryManager(data_dir=str(tmp_path / "data"), compact_threshold=4)
+
+    memory.append_tagged_memory("project-x", "Need smoke tests before deploy.")
+    memory.append_tagged_memory("project-x", "Run migrations during maintenance window.")
+    memory.append_tagged_memory("ops", "Pager rotation starts Monday.")
+
+    project_entries = memory.get_memories_by_tag("project-x")
+    assert len(project_entries) == 2
+    assert "smoke tests" in project_entries[0]
+    assert "migrations" in project_entries[1]
+
+    ops_entries = memory.get_memories_by_tag("ops")
+    assert ops_entries == ["Pager rotation starts Monday."]
