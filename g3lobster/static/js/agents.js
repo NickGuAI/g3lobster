@@ -127,6 +127,9 @@ function tabButtonMarkup(tab, activeTab, label) {
 }
 
 export async function render(root, { onSetupChange }) {
+  const STATUS_POLL_INTERVAL_MS = 4000;
+  const UPTIME_TICK_INTERVAL_MS = 1000;
+
   let disposed = false;
   let notice = { tone: "info", text: "Manage active agents, memory, and bridge lifecycle." };
 
@@ -139,8 +142,13 @@ export async function render(root, { onSetupChange }) {
   const sessionsCache = {};
   const transcriptCache = {};
   const cronsCache = {};
+  const pendingLifecycle = {};
 
   let availableMcpServers = null;
+  let pollIntervalId = null;
+  let uptimeIntervalId = null;
+  let rerenderInFlight = null;
+  let rerenderQueued = false;
 
   let globalUserMemory = "";
   let globalProcedures = "";
@@ -148,6 +156,84 @@ export async function render(root, { onSetupChange }) {
 
   function setNotice(tone, text) {
     notice = { tone, text };
+  }
+
+  function clearStatusPoll() {
+    if (pollIntervalId !== null) {
+      window.clearInterval(pollIntervalId);
+      pollIntervalId = null;
+    }
+  }
+
+  function clearUptimeTicker() {
+    if (uptimeIntervalId !== null) {
+      window.clearInterval(uptimeIntervalId);
+      uptimeIntervalId = null;
+    }
+  }
+
+  function isUptimeRunning(state) {
+    const value = String(state || "").toLowerCase();
+    return !["stopped", "dead", "failed", "canceled", "error"].includes(value);
+  }
+
+  function lifecycleStatus(agentId, fallbackState) {
+    const pending = pendingLifecycle[agentId];
+    if (pending === "start" || pending === "restart") {
+      return { state: "starting", className: "starting", pending };
+    }
+    if (pending === "stop") {
+      return { state: "stopping", className: "starting", pending };
+    }
+    return {
+      state: String(fallbackState || ""),
+      className: stateClass(fallbackState),
+      pending: null,
+    };
+  }
+
+  function startUptimeTicker() {
+    clearUptimeTicker();
+
+    uptimeIntervalId = window.setInterval(() => {
+      if (disposed) {
+        clearUptimeTicker();
+        return;
+      }
+      for (const node of root.querySelectorAll("[data-uptime-for]")) {
+        if (node.dataset.running !== "1") {
+          continue;
+        }
+        const current = Number(node.dataset.uptimeS || "0");
+        const next = current + 1;
+        node.dataset.uptimeS = String(next);
+        node.textContent = `${next}s`;
+      }
+    }, UPTIME_TICK_INTERVAL_MS);
+  }
+
+  async function queueRerender() {
+    if (disposed) {
+      return;
+    }
+
+    if (rerenderInFlight) {
+      rerenderQueued = true;
+      return rerenderInFlight;
+    }
+
+    rerenderInFlight = (async () => {
+      do {
+        rerenderQueued = false;
+        await rerender();
+      } while (rerenderQueued && !disposed);
+    })();
+
+    try {
+      await rerenderInFlight;
+    } finally {
+      rerenderInFlight = null;
+    }
   }
 
   async function ensureAgentDetail(agentId) {
@@ -203,10 +289,11 @@ export async function render(root, { onSetupChange }) {
     return agents
       .map((agent) => {
         const active = agent.id === activeAgentId ? "active" : "";
+        const displayStatus = lifecycleStatus(agent.id, agent.state);
         return `
           <button class="agent-chip ${active}" data-action="select-agent" data-agent-id="${escapeHtml(agent.id)}">
             <span class="chip-name">${escapeHtml(agent.emoji)} ${escapeHtml(agent.name)}</span>
-            <span class="status-pill ${stateClass(agent.state)}">${escapeHtml(agent.state)}</span>
+            <span class="status-pill ${escapeHtml(displayStatus.className)}">${escapeHtml(displayStatus.state)}</span>
           </button>
         `;
       })
@@ -214,20 +301,26 @@ export async function render(root, { onSetupChange }) {
   }
 
   function activeHeroMarkup(agent) {
+    const displayStatus = lifecycleStatus(agent.id, agent.state);
+    const pending = displayStatus.pending;
+    const actionDisabled = pending ? "disabled" : "";
+    const uptime = Number(agent.uptime_s || 0);
+    const uptimeRunning = isUptimeRunning(displayStatus.state) ? "1" : "0";
+
     return `
       <section class="active-agent-hero">
         <div>
           <div class="eyebrow">Active Agent</div>
           <h2>${escapeHtml(agent.emoji)} ${escapeHtml(agent.name)}</h2>
-          <div class="agent-meta">id: ${escapeHtml(agent.id)} · model: ${escapeHtml(agent.model)} · uptime: ${escapeHtml(agent.uptime_s)}s</div>
+          <div class="agent-meta">id: ${escapeHtml(agent.id)} · model: ${escapeHtml(agent.model)} · uptime: <span data-uptime-for="${escapeHtml(agent.id)}" data-uptime-s="${escapeHtml(uptime)}" data-running="${uptimeRunning}">${escapeHtml(uptime)}s</span></div>
         </div>
         <div class="actions">
-          <span class="status-pill ${stateClass(agent.state)}">${escapeHtml(agent.state)}</span>
-          <button class="btn btn-secondary" data-action="start" data-agent-id="${escapeHtml(agent.id)}">Start</button>
-          <button class="btn btn-secondary" data-action="stop" data-agent-id="${escapeHtml(agent.id)}">Stop</button>
-          <button class="btn btn-secondary" data-action="restart" data-agent-id="${escapeHtml(agent.id)}">Restart</button>
-          <button class="btn btn-secondary" data-action="test" data-agent-id="${escapeHtml(agent.id)}">Send Test</button>
-          <button class="btn btn-danger" data-action="delete" data-agent-id="${escapeHtml(agent.id)}">Delete</button>
+          <span class="status-pill ${escapeHtml(displayStatus.className)}">${escapeHtml(displayStatus.state)}</span>
+          <button class="btn btn-secondary" data-action="start" data-agent-id="${escapeHtml(agent.id)}" ${actionDisabled}>${pending === "start" ? "Starting..." : "Start"}</button>
+          <button class="btn btn-secondary" data-action="stop" data-agent-id="${escapeHtml(agent.id)}" ${actionDisabled}>${pending === "stop" ? "Stopping..." : "Stop"}</button>
+          <button class="btn btn-secondary" data-action="restart" data-agent-id="${escapeHtml(agent.id)}" ${actionDisabled}>${pending === "restart" ? "Restarting..." : "Restart"}</button>
+          <button class="btn btn-secondary" data-action="test" data-agent-id="${escapeHtml(agent.id)}" ${actionDisabled}>Send Test</button>
+          <button class="btn btn-danger" data-action="delete" data-agent-id="${escapeHtml(agent.id)}" ${actionDisabled}>Delete</button>
         </div>
       </section>
     `;
@@ -578,6 +671,9 @@ export async function render(root, { onSetupChange }) {
       </div>
     `;
 
+    startUptimeTicker();
+
+
     root.querySelector("#create-agent-form")?.addEventListener("submit", async (event) => {
       event.preventDefault();
       const form = event.currentTarget;
@@ -585,7 +681,7 @@ export async function render(root, { onSetupChange }) {
       const name = String(data.get("name") || "").trim();
       if (!name) {
         setNotice("error", "Agent name is required.");
-        rerender();
+        queueRerender();
         return;
       }
 
@@ -605,13 +701,13 @@ export async function render(root, { onSetupChange }) {
         const message = err instanceof Error ? err.message : String(err);
         setNotice("error", `Failed to create agent: ${message}`);
       }
-      rerender();
+      queueRerender();
     });
 
     for (const tabButton of root.querySelectorAll("button[data-tab]")) {
       tabButton.addEventListener("click", () => {
         activeTab = tabButton.dataset.tab || "persona";
-        rerender();
+        queueRerender();
       });
     }
 
@@ -623,7 +719,7 @@ export async function render(root, { onSetupChange }) {
         if (action === "select-agent") {
           activeAgentId = agentId || null;
           activeTab = "persona";
-          rerender();
+          queueRerender();
           return;
         }
 
@@ -660,14 +756,35 @@ export async function render(root, { onSetupChange }) {
           } else if (!action || !agentId) {
             return;
           } else if (action === "start") {
-            await startAgent(agentId);
-            setNotice("success", `Started ${agentId}.`);
+            pendingLifecycle[agentId] = action;
+            await queueRerender();
+            try {
+              await startAgent(agentId);
+              delete detailCache[agentId];
+              setNotice("success", `Started ${agentId}.`);
+            } finally {
+              delete pendingLifecycle[agentId];
+            }
           } else if (action === "stop") {
-            await stopAgent(agentId);
-            setNotice("info", `Stopped ${agentId}.`);
+            pendingLifecycle[agentId] = action;
+            await queueRerender();
+            try {
+              await stopAgent(agentId);
+              delete detailCache[agentId];
+              setNotice("info", `Stopped ${agentId}.`);
+            } finally {
+              delete pendingLifecycle[agentId];
+            }
           } else if (action === "restart") {
-            await restartAgent(agentId);
-            setNotice("success", `Restarted ${agentId}.`);
+            pendingLifecycle[agentId] = action;
+            await queueRerender();
+            try {
+              await restartAgent(agentId);
+              delete detailCache[agentId];
+              setNotice("success", `Restarted ${agentId}.`);
+            } finally {
+              delete pendingLifecycle[agentId];
+            }
           } else if (action === "delete") {
             await deleteAgent(agentId);
             delete detailCache[agentId];
@@ -746,7 +863,7 @@ export async function render(root, { onSetupChange }) {
           setNotice("error", `${action || "action"} failed${agentId ? ` for ${agentId}` : ""}: ${message}`);
         }
 
-        rerender();
+        queueRerender();
       });
     }
 
@@ -797,7 +914,7 @@ export async function render(root, { onSetupChange }) {
           const message = err instanceof Error ? err.message : String(err);
           setNotice("error", `Failed to update ${agentId}: ${message}`);
         }
-        rerender();
+        queueRerender();
       });
     }
 
@@ -811,7 +928,7 @@ export async function render(root, { onSetupChange }) {
         const instruction = String(data.get("instruction") || "").trim();
         if (!schedule || !instruction) {
           setNotice("error", "Schedule and instruction are required.");
-          rerender();
+          queueRerender();
           return;
         }
         try {
@@ -823,7 +940,7 @@ export async function render(root, { onSetupChange }) {
           const message = err instanceof Error ? err.message : String(err);
           setNotice("error", `Failed to add cron task: ${message}`);
         }
-        rerender();
+        queueRerender();
       });
     }
   }
@@ -842,11 +959,16 @@ export async function render(root, { onSetupChange }) {
     // Keep UI usable even if global files are not available yet.
   }
 
-  await rerender();
+  await queueRerender();
+  pollIntervalId = window.setInterval(() => {
+    queueRerender();
+  }, STATUS_POLL_INTERVAL_MS);
 
   return {
     destroy() {
       disposed = true;
+      clearStatusPoll();
+      clearUptimeTicker();
     },
   };
 }
