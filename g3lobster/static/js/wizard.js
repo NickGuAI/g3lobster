@@ -278,7 +278,7 @@ export async function render(root, { status, onComplete }) {
       ["OAuth complete", lastStatus.auth_ok],
       ["Space configured", lastStatus.space_configured],
       ["At least one agent", lastStatus.agents_ready],
-      ["Bridge running", lastStatus.bridge_running],
+      ["Bridges running", lastStatus.bridge_running],
     ]
       .map(([label, ok]) => `<li>${ok ? "✅" : "⬜"} ${label}</li>`)
       .join("");

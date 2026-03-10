@@ -47,6 +47,8 @@ class MCPConfig:
 @dataclass
 class ChatConfig:
     enabled: bool = False
+    # Legacy defaults retained for backward compatibility and migration.
+    # Per-agent space assignment now lives on AgentPersona.space_id.
     space_id: Optional[str] = None
     space_name: Optional[str] = None
     poll_interval_s: float = 2.0
@@ -217,7 +219,11 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
 
 
 def save_chat_config(chat: ChatConfig, config_path: str) -> None:
-    """Persist only the chat section to YAML using an atomic write."""
+    """Persist the chat section to YAML using an atomic write.
+
+    The ``space_id`` and ``space_name`` keys remain for backward
+    compatibility as legacy defaults for per-agent bridge migration.
+    """
     path = Path(config_path).expanduser().resolve()
     payload: Dict[str, Any] = {}
 

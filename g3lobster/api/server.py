@@ -23,6 +23,7 @@ from g3lobster.config import AppConfig
 
 def create_app(
     registry,
+    bridge_manager: Optional[object] = None,
     chat_bridge: Optional[object] = None,
     chat_bridge_factory=None,
     config: Optional[AppConfig] = None,
@@ -41,7 +42,9 @@ def create_app(
         await registry.start_all()
         if app.state.cron_manager:
             app.state.cron_manager.start()
-        if app.state.chat_bridge:
+        if app.state.bridge_manager and app.state.config.chat.enabled:
+            await app.state.bridge_manager.start_all()
+        elif app.state.chat_bridge:
             await app.state.chat_bridge.start()
         if app.state.email_bridge:
             await app.state.email_bridge.start()
@@ -50,7 +53,9 @@ def create_app(
         finally:
             if app.state.email_bridge:
                 await app.state.email_bridge.stop()
-            if app.state.chat_bridge:
+            if app.state.bridge_manager:
+                await app.state.bridge_manager.stop_all()
+            elif app.state.chat_bridge:
                 await app.state.chat_bridge.stop()
             if app.state.cron_manager:
                 app.state.cron_manager.stop()
@@ -58,6 +63,7 @@ def create_app(
 
     app = FastAPI(title="g3lobster", lifespan=lifespan)
     app.state.registry = registry
+    app.state.bridge_manager = bridge_manager
     app.state.chat_bridge = chat_bridge
     app.state.chat_bridge_factory = chat_bridge_factory
     app.state.config = runtime_config

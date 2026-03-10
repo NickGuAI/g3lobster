@@ -65,6 +65,62 @@ function stateClass(state) {
   return String(state || "").toLowerCase();
 }
 
+function bridgeStatusDetails(bridge) {
+  if (!bridge || !bridge.space_id) {
+    return { label: "not configured", className: "warn", canStart: false, canStop: false };
+  }
+  if (!bridge.bridge_enabled) {
+    return { label: "disabled", className: "stopped", canStart: false, canStop: false };
+  }
+  if (bridge.is_running) {
+    return { label: "running", className: "ok", canStart: false, canStop: true };
+  }
+  return { label: "stopped", className: "error", canStart: true, canStop: false };
+}
+
+function bridgeTableMarkup(agents, bridgeByAgent) {
+  if (!agents.length) {
+    return "<p class='empty'>No agents available.</p>";
+  }
+
+  const rows = agents
+    .map((agent) => {
+      const bridge = bridgeByAgent.get(agent.id) || {
+        agent_id: agent.id,
+        space_id: agent.space_id || null,
+        bridge_enabled: agent.bridge_enabled || false,
+        is_running: agent.bridge_running || false,
+      };
+      const status = bridgeStatusDetails(bridge);
+      return `
+        <tr>
+          <td>${escapeHtml(agent.emoji)} ${escapeHtml(agent.name)}</td>
+          <td><code>${escapeHtml(bridge.space_id || "(not set)")}</code></td>
+          <td><span class="status-pill ${escapeHtml(status.className)}">${escapeHtml(status.label)}</span></td>
+          <td class="bridge-controls">
+            <button class="btn btn-secondary" data-action="bridge-start" data-agent-id="${escapeHtml(agent.id)}" ${status.canStart ? "" : "disabled"}>Start</button>
+            <button class="btn btn-secondary" data-action="bridge-stop" data-agent-id="${escapeHtml(agent.id)}" ${status.canStop ? "" : "disabled"}>Stop</button>
+          </td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  return `
+    <table class="bridge-table">
+      <thead>
+        <tr>
+          <th>Agent</th>
+          <th>Space</th>
+          <th>Status</th>
+          <th>Controls</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
 function tabButtonMarkup(tab, activeTab, label) {
   const active = tab === activeTab ? "active" : "";
   return `<button class="tab-btn ${active}" data-tab="${tab}">${escapeHtml(label)}</button>`;
@@ -216,6 +272,17 @@ export async function render(root, { onSetupChange }) {
           <div class="field">
             <label>Bot User ID</label>
             <input name="bot_user_id" value="${escapeHtml(detail.bot_user_id || "")}" />
+          </div>
+          <div class="field">
+            <label>Space ID</label>
+            <input name="space_id" value="${escapeHtml(detail.space_id || "")}" placeholder="spaces/AAAA..." />
+          </div>
+          <div class="field">
+            <label>Bridge Enabled</label>
+            <select name="bridge_enabled">
+              <option value="true" ${detail.bridge_enabled ? "selected" : ""}>true</option>
+              <option value="false" ${detail.bridge_enabled ? "" : "selected"}>false</option>
+            </select>
           </div>
           <div class="field">
             <label>Enabled</label>
@@ -402,8 +469,10 @@ export async function render(root, { onSetupChange }) {
     }
     await ensureAvailableMcpServers();
 
-    const bridgeLabel = setup.bridge_running ? "running" : "stopped";
-    const bridgeClass = setup.bridge_running ? "ok" : "error";
+    const bridgeByAgent = new Map((setup.agent_bridges || []).map((item) => [item.agent_id, item]));
+    const runningBridgeCount = Array.from(bridgeByAgent.values()).filter((item) => item.is_running).length;
+    const bridgeLabel = runningBridgeCount > 0 ? "running" : "stopped";
+    const bridgeClass = runningBridgeCount > 0 ? "ok" : "error";
     const detail = activeAgent ? detailCache[activeAgent.id] || activeAgent : null;
 
     root.innerHTML = `
@@ -414,11 +483,12 @@ export async function render(root, { onSetupChange }) {
           <h2>Bridge Status</h2>
           <div class="actions">
             <span class="status-pill ${bridgeClass}">${escapeHtml(bridgeLabel)}</span>
-            <span class="agent-meta">space: ${escapeHtml(setup.space_id || "(not set)")}</span>
+            <span class="agent-meta">${escapeHtml(String(runningBridgeCount))}/${escapeHtml(String(agents.length))} running</span>
           </div>
+          ${bridgeTableMarkup(agents, bridgeByAgent)}
           <div class="actions">
-            <button class="btn btn-primary" id="bridge-start-btn">Start Bridge</button>
-            <button class="btn btn-secondary" id="bridge-stop-btn">Stop Bridge</button>
+            <button class="btn btn-primary" data-action="bridge-start-all">Start All Bridges</button>
+            <button class="btn btn-secondary" data-action="bridge-stop-all">Stop All Bridges</button>
           </div>
         </div>
 
@@ -440,6 +510,17 @@ export async function render(root, { onSetupChange }) {
             <div class="field">
               <label>MCP Servers</label>
               <input name="mcp_servers" value="*" />
+            </div>
+            <div class="field">
+              <label>Space ID</label>
+              <input name="space_id" placeholder="spaces/AAAA..." value="${escapeHtml(setup.space_id || "")}" />
+            </div>
+            <div class="field">
+              <label>Bridge Enabled</label>
+              <select name="bridge_enabled">
+                <option value="true" ${setup.space_id ? "selected" : ""}>true</option>
+                <option value="false" ${setup.space_id ? "" : "selected"}>false</option>
+              </select>
             </div>
             <div class="field" style="grid-column: 1 / -1;">
               <label>SOUL.md</label>
@@ -497,30 +578,6 @@ export async function render(root, { onSetupChange }) {
       </div>
     `;
 
-    root.querySelector("#bridge-start-btn")?.addEventListener("click", async () => {
-      try {
-        await startBridge();
-        setNotice("success", "Bridge started.");
-        await onSetupChange();
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        setNotice("error", `Failed to start bridge: ${message}`);
-        rerender();
-      }
-    });
-
-    root.querySelector("#bridge-stop-btn")?.addEventListener("click", async () => {
-      try {
-        await stopBridge();
-        setNotice("info", "Bridge stopped.");
-        rerender();
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        setNotice("error", `Failed to stop bridge: ${message}`);
-        rerender();
-      }
-    });
-
     root.querySelector("#create-agent-form")?.addEventListener("submit", async (event) => {
       event.preventDefault();
       const form = event.currentTarget;
@@ -539,6 +596,8 @@ export async function render(root, { onSetupChange }) {
           model: String(data.get("model") || "gemini").trim() || "gemini",
           mcp_servers: parseMcpServers(data.get("mcp_servers")),
           soul: String(data.get("soul") || ""),
+          space_id: String(data.get("space_id") || "").trim() || null,
+          bridge_enabled: String(data.get("bridge_enabled") || "false") === "true",
         });
         activeAgentId = created.id;
         setNotice("success", `Agent ${name} created.`);
@@ -582,6 +641,22 @@ export async function render(root, { onSetupChange }) {
             globalUserMemory = userValue;
             globalProcedures = proceduresValue;
             setNotice("success", "Saved global memory and procedures.");
+          } else if (action === "bridge-start-all") {
+            await startBridge();
+            setNotice("success", "Started all configured bridges.");
+            await onSetupChange();
+          } else if (action === "bridge-stop-all") {
+            await stopBridge();
+            setNotice("info", "Stopped all bridges.");
+            await onSetupChange();
+          } else if (action === "bridge-start" && agentId) {
+            await startBridge(agentId);
+            setNotice("success", `Started bridge for ${agentId}.`);
+            await onSetupChange();
+          } else if (action === "bridge-stop" && agentId) {
+            await stopBridge(agentId);
+            setNotice("info", `Stopped bridge for ${agentId}.`);
+            await onSetupChange();
           } else if (!action || !agentId) {
             return;
           } else if (action === "start") {
@@ -713,6 +788,8 @@ export async function render(root, { onSetupChange }) {
             enabled: String(data.get("enabled") || "true") === "true",
             bot_user_id: String(data.get("bot_user_id") || "").trim() || null,
             dm_allowlist: parseDmAllowlist(data.get("dm_allowlist")),
+            space_id: String(data.get("space_id") || "").trim() || null,
+            bridge_enabled: String(data.get("bridge_enabled") || "false") === "true",
           };
           detailCache[agentId] = await updateAgent(agentId, payload);
           setNotice("success", `Updated ${agentId}.`);

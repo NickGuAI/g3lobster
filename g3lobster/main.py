@@ -15,6 +15,7 @@ from g3lobster.agents.registry import AgentRegistry
 from g3lobster.alerts import AlertManager
 from g3lobster.api.server import create_app
 from g3lobster.chat.bridge import ChatBridge
+from g3lobster.chat.bridge_manager import BridgeManager
 from g3lobster.chat.email_bridge import EmailBridge
 from g3lobster.cli.process import GeminiProcess
 from g3lobster.config import AppConfig, load_config
@@ -140,13 +141,15 @@ def build_runtime(config: AppConfig):
     cron_manager = CronManager(cron_store=cron_store, registry=registry) if config.cron.enabled else None
 
     def chat_bridge_factory(
+        space_id: str,
         service=None,
         last_message_time=None,
         seen_content=None,
+        agent_filter=None,
     ) -> ChatBridge:
         return ChatBridge(
             registry=registry,
-            space_id=config.chat.space_id,
+            space_id=space_id,
             poll_interval_s=config.chat.poll_interval_s,
             service=service,
             space_name=config.chat.space_name,
@@ -155,9 +158,14 @@ def build_runtime(config: AppConfig):
             auth_data_dir=chat_auth_dir,
             cron_store=cron_store,
             debug_mode=config.debug_mode,
+            agent_filter=agent_filter,
         )
 
-    chat_bridge = chat_bridge_factory() if config.chat.enabled else None
+    bridge_manager = BridgeManager(
+        registry=registry,
+        bridge_factory=chat_bridge_factory,
+        legacy_space_id=config.chat.space_id,
+    )
 
     email_bridge: EmailBridge | None = None
     if config.email.enabled and config.email.base_address:
@@ -171,19 +179,18 @@ def build_runtime(config: AppConfig):
     # Wire alert manager sinks that depend on runtime objects created above.
     if email_bridge:
         alert_manager.email_bridge = email_bridge
-    if chat_bridge:
-        registry.chat_bridge = chat_bridge
+    registry.chat_bridge = bridge_manager
 
-    return registry, chat_bridge, chat_bridge_factory, chat_auth_dir, global_memory_manager, cron_store, cron_manager, email_bridge
+    return registry, bridge_manager, chat_bridge_factory, chat_auth_dir, global_memory_manager, cron_store, cron_manager, email_bridge
 
 
 def build_app(config_path: Optional[str] = None):
     resolved_config_path = Path(config_path or "config.yaml").expanduser().resolve()
     config = load_config(str(resolved_config_path))
-    registry, chat_bridge, chat_bridge_factory, chat_auth_dir, global_memory_manager, cron_store, cron_manager, email_bridge = build_runtime(config)
+    registry, bridge_manager, chat_bridge_factory, chat_auth_dir, global_memory_manager, cron_store, cron_manager, email_bridge = build_runtime(config)
     app = create_app(
         registry=registry,
-        chat_bridge=chat_bridge,
+        bridge_manager=bridge_manager,
         chat_bridge_factory=chat_bridge_factory,
         config=config,
         config_path=str(resolved_config_path),

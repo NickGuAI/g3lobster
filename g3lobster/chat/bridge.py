@@ -71,6 +71,7 @@ class ChatBridge:
         cron_store: Optional["CronStore"] = None,
         seen_content_max_size: int = 10_000,
         debug_mode: bool = False,
+        agent_filter: Optional[Set[str]] = None,
     ):
         self.registry = registry
         self.poll_interval_s = poll_interval_s
@@ -86,9 +87,16 @@ class ChatBridge:
         self._stop_event = asyncio.Event()
         self._last_message_time: Optional[str] = last_message_time
         self._seen_content: BoundedSet = BoundedSet(seen_content_max_size)
+        self._agent_filter: Optional[Set[str]] = set(agent_filter) if agent_filter is not None else None
         if seen_content:
             for item in seen_content:
                 self._seen_content.add(item)
+
+    def set_agent_filter(self, agent_ids: Optional[Set[str]]) -> None:
+        if agent_ids is None:
+            self._agent_filter = None
+            return
+        self._agent_filter = set(agent_ids)
 
     async def start(self) -> None:
         if self.service is None:
@@ -173,6 +181,8 @@ class ChatBridge:
 
     def _resolve_target_agent(self, message: dict, text: str) -> Optional[str]:
         personas = self.registry.list_enabled_personas()
+        if self._agent_filter is not None:
+            personas = [persona for persona in personas if persona.id in self._agent_filter]
         if not personas:
             return None
 

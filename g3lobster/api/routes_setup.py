@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 
 from g3lobster.agents.persona import list_personas
 from g3lobster.api.models import (
+    AgentBridgeStatus,
     CompleteAuthRequest,
     CredentialsUploadRequest,
     SetupStatus,
@@ -35,13 +37,21 @@ def _bridge_running(bridge) -> bool:
 def _status_payload(request: Request) -> SetupStatus:
     config = request.app.state.config
     chat_auth_dir = request.app.state.chat_auth_dir
+    bridge_manager = getattr(request.app.state, "bridge_manager", None)
 
     credentials_ok = credentials_exist(chat_auth_dir)
     auth_ok = token_exists(chat_auth_dir)
-    space_configured = bool(config.chat.space_id)
     bridge_enabled = bool(config.chat.enabled)
-    bridge_running = _bridge_running(request.app.state.chat_bridge)
     agents_ready = bool(list_personas(config.agents.data_dir))
+
+    agent_bridges: list[AgentBridgeStatus] = []
+    if bridge_manager:
+        agent_bridges = [AgentBridgeStatus(**item) for item in bridge_manager.status()]
+        bridge_running = any(item.is_running for item in agent_bridges)
+        space_configured = any(bool(item.space_id) for item in agent_bridges) or bool(config.chat.space_id)
+    else:
+        bridge_running = _bridge_running(request.app.state.chat_bridge)
+        space_configured = bool(config.chat.space_id)
 
     completed = all(
         [
@@ -62,6 +72,7 @@ def _status_payload(request: Request) -> SetupStatus:
         bridge_running=bridge_running,
         agents_ready=agents_ready,
         completed=completed,
+        agent_bridges=agent_bridges,
         space_id=config.chat.space_id,
         space_name=config.chat.space_name,
         email_enabled=config.email.enabled,
@@ -128,22 +139,26 @@ async def configure_space(payload: SpaceConfigRequest, request: Request) -> dict
     config = request.app.state.config
     config.chat.space_id = _normalize_space_id(payload.space_id)
     config.chat.space_name = payload.space_name
+    bridge_manager = getattr(request.app.state, "bridge_manager", None)
+    if bridge_manager:
+        bridge_manager.set_legacy_space_id(config.chat.space_id)
     save_chat_config(config.chat, request.app.state.config_path)
     return {"configured": True, "space_id": config.chat.space_id}
 
 
 @router.get("/space-bots")
-async def list_space_bots(request: Request) -> dict:
+async def list_space_bots(request: Request, space_id: Optional[str] = None) -> dict:
     """List bot members of the configured space so users can grab bot_user_id."""
     config = request.app.state.config
     chat_auth_dir = request.app.state.chat_auth_dir
 
-    if not config.chat.space_id:
+    target_space = space_id or config.chat.space_id
+    if not target_space:
         raise HTTPException(status_code=400, detail="Configure a chat space first (step 2)")
     if not token_exists(chat_auth_dir):
         raise HTTPException(status_code=400, detail="Complete OAuth first (step 1)")
 
-    space_id = _normalize_space_id(config.chat.space_id)
+    space_id = _normalize_space_id(target_space)
 
     try:
         service = get_authenticated_service(chat_auth_dir)
@@ -175,8 +190,32 @@ async def list_space_bots(request: Request) -> dict:
 
 
 @router.post("/start")
-async def start_bridge(request: Request) -> dict:
+async def start_bridge(request: Request, agent_id: Optional[str] = None) -> dict:
     config = request.app.state.config
+    bridge_manager = getattr(request.app.state, "bridge_manager", None)
+
+    if bridge_manager:
+        async with request.app.state.bridge_lock:
+            if agent_id:
+                started = await bridge_manager.start_bridge(agent_id)
+                if not started:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Bridge is not configured for agent '{agent_id}'",
+                    )
+            else:
+                started_count = await bridge_manager.start_all()
+                if started_count == 0:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="No bridge-enabled agents with configured space_id were found",
+                    )
+
+            config.chat.enabled = True
+            save_chat_config(config.chat, request.app.state.config_path)
+
+        return {"started": True}
+
     if not config.chat.space_id:
         raise HTTPException(status_code=400, detail="Configure a chat space first")
 
@@ -200,11 +239,19 @@ async def start_bridge(request: Request) -> dict:
             last_message_time = None
             seen_content = None
 
-        bridge = factory(
-            service=service,
-            last_message_time=last_message_time,
-            seen_content=seen_content,
-        )
+        try:
+            bridge = factory(
+                space_id=config.chat.space_id,
+                service=service,
+                last_message_time=last_message_time,
+                seen_content=seen_content,
+            )
+        except TypeError:
+            bridge = factory(
+                service=service,
+                last_message_time=last_message_time,
+                seen_content=seen_content,
+            )
         try:
             await bridge.start()
         except Exception as exc:
@@ -228,8 +275,20 @@ async def start_bridge(request: Request) -> dict:
 
 
 @router.post("/stop")
-async def stop_bridge(request: Request) -> dict:
+async def stop_bridge(request: Request, agent_id: Optional[str] = None) -> dict:
     config = request.app.state.config
+    bridge_manager = getattr(request.app.state, "bridge_manager", None)
+
+    if bridge_manager:
+        async with request.app.state.bridge_lock:
+            if agent_id:
+                await bridge_manager.stop_bridge(agent_id)
+                config.chat.enabled = bridge_manager.is_running
+            else:
+                await bridge_manager.stop_all()
+                config.chat.enabled = False
+            save_chat_config(config.chat, request.app.state.config_path)
+        return {"stopped": True}
 
     async with request.app.state.bridge_lock:
         bridge = request.app.state.chat_bridge
@@ -249,8 +308,12 @@ async def toggle_debug_mode(request: Request) -> dict:
     config = request.app.state.config
     config.debug_mode = not config.debug_mode
 
-    bridge = request.app.state.chat_bridge
-    if bridge:
-        bridge.debug_mode = config.debug_mode
+    bridge_manager = getattr(request.app.state, "bridge_manager", None)
+    if bridge_manager:
+        bridge_manager.set_debug_mode(config.debug_mode)
+    else:
+        bridge = request.app.state.chat_bridge
+        if bridge:
+            bridge.debug_mode = config.debug_mode
 
     return {"debug_mode": config.debug_mode}

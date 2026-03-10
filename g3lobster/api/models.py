@@ -15,6 +15,8 @@ class AgentCreateRequest(BaseModel):
     mcp_servers: List[str] = Field(default_factory=lambda: ["*"])
     enabled: bool = True
     dm_allowlist: List[str] = Field(default_factory=list)
+    space_id: Optional[str] = None
+    bridge_enabled: bool = False
 
 
 class AgentUpdateRequest(BaseModel):
@@ -26,6 +28,8 @@ class AgentUpdateRequest(BaseModel):
     enabled: Optional[bool] = None
     bot_user_id: Optional[str] = None
     dm_allowlist: Optional[List[str]] = None
+    space_id: Optional[str] = None
+    bridge_enabled: Optional[bool] = None
 
 
 class AgentResponse(BaseModel):
@@ -36,6 +40,9 @@ class AgentResponse(BaseModel):
     model: str
     mcp_servers: List[str]
     bot_user_id: Optional[str] = None
+    space_id: Optional[str] = None
+    bridge_enabled: bool = False
+    bridge_running: bool = False
     state: str
     uptime_s: int
     current_task: Optional[str] = None
@@ -74,6 +81,14 @@ class TestAgentRequest(BaseModel):
     text: str = Field(default="ping", min_length=1)
 
 
+class AgentBridgeStatus(BaseModel):
+    agent_id: str
+    space_id: Optional[str] = None
+    space_name: Optional[str] = None
+    bridge_enabled: bool = False
+    is_running: bool = False
+
+
 class SetupStatus(BaseModel):
     credentials_ok: bool
     auth_ok: bool
@@ -82,6 +97,7 @@ class SetupStatus(BaseModel):
     bridge_running: bool
     agents_ready: bool
     completed: bool
+    agent_bridges: List[AgentBridgeStatus] = Field(default_factory=list)
     space_id: Optional[str] = None
     space_name: Optional[str] = None
     email_enabled: bool = False

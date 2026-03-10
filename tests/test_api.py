@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from g3lobster.agents.registry import AgentRegistry
 from g3lobster.api.server import create_app
+from g3lobster.chat.bridge_manager import BridgeManager
 from g3lobster.config import AppConfig
 from g3lobster.memory.global_memory import GlobalMemoryManager
 from g3lobster.pool.types import AgentState
@@ -58,11 +59,19 @@ class DummyPollTask:
 
 
 class FakeChatBridge:
-    def __init__(self, space_id=None, service=None, last_message_time=None, seen_content=None):
+    def __init__(
+        self,
+        space_id=None,
+        service=None,
+        last_message_time=None,
+        seen_content=None,
+        agent_filter=None,
+    ):
         self.space_id = space_id
         self.service = service
         self._last_message_time = last_message_time
         self._seen_content = seen_content or set()
+        self.agent_filter = set(agent_filter or set())
         self._poll_task = None
         self.started = 0
         self.stopped = 0
@@ -75,6 +84,9 @@ class FakeChatBridge:
     @property
     def is_running(self):
         return bool(self._poll_task and not self._poll_task.done())
+
+    def set_agent_filter(self, agent_ids):
+        self.agent_filter = set(agent_ids or set())
 
     async def stop(self):
         self.stopped += 1
@@ -144,19 +156,26 @@ def _build_test_app(tmp_path: Path):
 
     bridge_instances = []
 
-    def bridge_factory(service=None, last_message_time=None, seen_content=None):
+    def bridge_factory(space_id, service=None, last_message_time=None, seen_content=None, agent_filter=None):
         bridge = FakeChatBridge(
-            space_id=config.chat.space_id,
+            space_id=space_id,
             service=service,
             last_message_time=last_message_time,
             seen_content=seen_content,
+            agent_filter=agent_filter,
         )
         bridge_instances.append(bridge)
         return bridge
 
+    bridge_manager = BridgeManager(
+        registry=registry,
+        bridge_factory=bridge_factory,
+        legacy_space_id=config.chat.space_id,
+    )
+
     app = create_app(
         registry=registry,
-        chat_bridge=None,
+        bridge_manager=bridge_manager,
         chat_bridge_factory=bridge_factory,
         config=config,
         config_path=str(config_path),
@@ -186,10 +205,15 @@ def test_agents_routes_crud_and_memory(tmp_path):
         )
         assert create.status_code == 200
         agent_id = create.json()["id"]
+        assert create.json()["space_id"] == "spaces/test-space"
+        assert create.json()["bridge_enabled"] is True
+        assert create.json()["bridge_running"] is False
 
         listing = client.get("/agents")
         assert listing.status_code == 200
         assert [item["id"] for item in listing.json()] == [agent_id]
+        assert listing.json()[0]["space_id"] == "spaces/test-space"
+        assert listing.json()[0]["bridge_enabled"] is True
 
         detail = client.get(f"/agents/{agent_id}")
         assert detail.status_code == 200
@@ -363,11 +387,13 @@ def test_setup_routes_bridge_lifecycle(monkeypatch, tmp_path):
         )
         assert create_agent.status_code == 200
         agent_id = create_agent.json()["id"]
+        assert create_agent.json()["space_id"] == "spaces/new"
+        assert create_agent.json()["bridge_enabled"] is True
 
         started_agent = client.post(f"/agents/{agent_id}/start")
         assert started_agent.status_code == 200
 
-        start_bridge = client.post("/setup/start")
+        start_bridge = client.post(f"/setup/start?agent_id={agent_id}")
         assert start_bridge.status_code == 200
         assert start_bridge.json() == {"started": True}
 
@@ -377,10 +403,17 @@ def test_setup_routes_bridge_lifecycle(monkeypatch, tmp_path):
         status = client.get("/setup/status")
         assert status.status_code == 200
         assert status.json()["bridge_running"] is True
+        iris_bridge = next(item for item in status.json()["agent_bridges"] if item["agent_id"] == agent_id)
+        assert iris_bridge["space_id"] == "spaces/new"
+        assert iris_bridge["is_running"] is True
 
-        stop_bridge = client.post("/setup/stop")
+        stop_bridge = client.post(f"/setup/stop?agent_id={agent_id}")
         assert stop_bridge.status_code == 200
         assert stop_bridge.json() == {"stopped": True}
+
+        status_after_stop = client.get("/setup/status")
+        assert status_after_stop.status_code == 200
+        assert status_after_stop.json()["bridge_running"] is False
 
     saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert saved["chat"]["enabled"] is False

@@ -418,6 +418,39 @@ pre.transcript {
   font-size: 0.85rem;
 }
 
+.bridge-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+}
+
+.bridge-table th,
+.bridge-table td {
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  border-bottom: 1px solid var(--edge);
+  vertical-align: middle;
+}
+
+.bridge-table th {
+  font-weight: 600;
+  color: var(--ink-soft);
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.bridge-table code {
+  font-family: "IBM Plex Mono", Menlo, Consolas, monospace;
+  font-size: 0.82em;
+}
+
+.bridge-controls {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
 .cron-table th,
 .cron-table td {
   padding: var(--space-2) var(--space-3);

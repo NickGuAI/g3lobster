@@ -29,6 +29,8 @@ class AgentPersona:
     bot_user_id: Optional[str] = None
     enabled: bool = True
     dm_allowlist: List[str] = field(default_factory=list)
+    space_id: Optional[str] = None
+    bridge_enabled: bool = False
     created_at: str = field(default_factory=lambda: _utc_now())
     updated_at: str = field(default_factory=lambda: _utc_now())
 
@@ -48,6 +50,11 @@ class AgentPersona:
         else:
             self.bot_user_id = None
         self.dm_allowlist = [str(item).strip() for item in self.dm_allowlist if str(item).strip()]
+        if self.space_id:
+            self.space_id = str(self.space_id).strip() or None
+        else:
+            self.space_id = None
+        self.bridge_enabled = bool(self.bridge_enabled)
 
     def to_agent_json(self) -> Dict[str, object]:
         return {
@@ -59,6 +66,8 @@ class AgentPersona:
             "bot_user_id": self.bot_user_id,
             "enabled": bool(self.enabled),
             "dm_allowlist": list(self.dm_allowlist),
+            "space_id": self.space_id,
+            "bridge_enabled": bool(self.bridge_enabled),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -157,6 +166,8 @@ def load_persona(data_dir: str, agent_id: str, *, skip_migration: bool = False) 
         bot_user_id=payload.get("bot_user_id"),
         enabled=bool(payload.get("enabled", True)),
         dm_allowlist=list(payload.get("dm_allowlist") or []),
+        space_id=payload.get("space_id"),
+        bridge_enabled=bool(payload.get("bridge_enabled", False)),
         created_at=str(payload.get("created_at") or _utc_now()),
         updated_at=str(payload.get("updated_at") or _utc_now()),
     )
@@ -180,6 +191,8 @@ def save_persona(data_dir: str, persona: AgentPersona) -> AgentPersona:
         bot_user_id=persona.bot_user_id,
         enabled=persona.enabled,
         dm_allowlist=list(persona.dm_allowlist),
+        space_id=persona.space_id,
+        bridge_enabled=persona.bridge_enabled,
         created_at=(existing.created_at if existing else persona.created_at) or now,
         updated_at=now,
     )
