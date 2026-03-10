@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -256,3 +257,29 @@ def test_ensure_delegation_mcp_config_preserves_existing(tmp_path) -> None:
     # Delegation entry added
     assert "g3lobster-delegation" in settings["mcpServers"]
     assert settings["mcpServers"]["g3lobster-delegation"]["args"][-1] == "http://127.0.0.1:20001"
+
+
+def test_skill_mcp_configs_loadable_from_repo() -> None:
+    config_dir = Path("config/mcp")
+    loader = MCPConfigLoader(str(config_dir))
+    configs = loader.load_all(
+        env_vars={
+            "G3LOBSTER_TASKS_MCP_URL": "http://example.test/tasks",
+            "G3LOBSTER_SUBAGENTS_MCP_URL": "http://example.test/subagents",
+            "G3LOBSTER_MEMORY_MCP_URL": "http://example.test/memory",
+        }
+    )
+
+    assert "g3lobster-tasks" in configs
+    assert "g3lobster-subagents" in configs
+    assert "g3lobster-memory" in configs
+    patterns = loader.get_tool_patterns(
+        env_vars={
+            "G3LOBSTER_TASKS_MCP_URL": "http://example.test/tasks",
+            "G3LOBSTER_SUBAGENTS_MCP_URL": "http://example.test/subagents",
+            "G3LOBSTER_MEMORY_MCP_URL": "http://example.test/memory",
+        }
+    )
+    assert patterns["g3lobster-tasks"] == ["g3lobster__tasks__*"]
+    assert patterns["g3lobster-subagents"] == ["g3lobster__subagents__*"]
+    assert patterns["g3lobster-memory"] == ["g3lobster__memory__*"]

@@ -12,7 +12,8 @@ from g3lobster.api.server import create_app
 from g3lobster.config import AppConfig
 from g3lobster.memory.global_memory import GlobalMemoryManager
 from g3lobster.pool.types import AgentState
-from g3lobster.tasks.types import TaskStatus
+from g3lobster.tasks.types import Task, TaskStatus
+from g3lobster.tmux.spawner import SubAgentRunInfo, SubAgentStatus
 
 
 class FakeAgent:
@@ -386,3 +387,191 @@ def test_setup_routes_bridge_lifecycle(monkeypatch, tmp_path):
     assert saved["chat"]["enabled"] is False
     assert saved["chat"]["space_id"] == "spaces/new"
     assert saved["chat"]["space_name"] == "Ops"
+
+
+def test_task_routes_list_detail_cancel(tmp_path):
+    app, _bridge_instances, _config_path = _build_test_app(tmp_path)
+
+    with TestClient(app) as client:
+        create = client.post(
+            "/agents",
+            json={
+                "name": "Delta",
+                "emoji": "🦀",
+                "soul": "Task router test.",
+                "model": "gemini",
+                "mcp_servers": ["*"],
+            },
+        )
+        assert create.status_code == 200
+        agent_id = create.json()["id"]
+
+        start = client.post(f"/agents/{agent_id}/start")
+        assert start.status_code == 200
+
+        runtime = app.state.registry.get_agent(agent_id)
+        assert runtime is not None
+
+        completed_task = Task(prompt="done", session_id="thread-complete", agent_id=agent_id)
+        completed_task.status = TaskStatus.COMPLETED
+        completed_task.completed_at = time.time()
+        app.state.registry.task_store.add(completed_task)
+
+        running_task = Task(prompt="long", session_id="thread-run", agent_id=agent_id)
+        running_task.status = TaskStatus.RUNNING
+        running_task.started_at = time.time()
+        runtime.agent.current_task = running_task
+
+        async def _cancel(task_id: str):
+            if runtime.agent.current_task and runtime.agent.current_task.id == task_id:
+                runtime.agent.current_task.status = TaskStatus.CANCELED
+                runtime.agent.current_task.completed_at = time.time()
+                runtime.agent.current_task.error = "Canceled by API request"
+                runtime.agent.current_task.add_event("canceled", {"reason": "test"})
+                task = runtime.agent.current_task
+                runtime.agent.current_task = None
+                return task
+            return None
+
+        runtime.agent.cancel_task = _cancel
+
+        listing = client.get(f"/agents/{agent_id}/tasks")
+        assert listing.status_code == 200
+        task_ids = [item["id"] for item in listing.json()["tasks"]]
+        assert running_task.id in task_ids
+        assert completed_task.id in task_ids
+
+        detail = client.get(f"/agents/{agent_id}/tasks/{completed_task.id}")
+        assert detail.status_code == 200
+        assert detail.json()["status"] == "completed"
+
+        cancel = client.post(f"/agents/{agent_id}/tasks/{running_task.id}/cancel")
+        assert cancel.status_code == 200
+        assert cancel.json()["status"] == "canceled"
+
+
+def test_subagent_routes(tmp_path, monkeypatch):
+    app, _bridge_instances, _config_path = _build_test_app(tmp_path)
+
+    with TestClient(app) as client:
+        create = client.post(
+            "/agents",
+            json={
+                "name": "Sigma",
+                "emoji": "🛠️",
+                "soul": "Subagent route test.",
+                "model": "gemini",
+                "mcp_servers": ["*"],
+            },
+        )
+        assert create.status_code == 200
+        agent_id = create.json()["id"]
+        assert client.post(f"/agents/{agent_id}/start").status_code == 200
+
+        run = SubAgentRunInfo(
+            session_name="g3l-sigma-abc12345",
+            agent_id=agent_id,
+            prompt="Summarize logs",
+            mcp_server_names=["*"],
+            status=SubAgentStatus.RUNNING,
+            timeout_s=60.0,
+        )
+
+        async def _spawn_subagent(**_kwargs):
+            return run
+
+        async def _list_subagents(**_kwargs):
+            return [run]
+
+        async def _kill_subagent(**_kwargs):
+            run.status = SubAgentStatus.CANCELED
+            run.completed_at = time.time()
+            run.error = "Killed by API request"
+            return run
+
+        monkeypatch.setattr(app.state.registry, "spawn_subagent", _spawn_subagent)
+        monkeypatch.setattr(app.state.registry, "list_subagents", _list_subagents)
+        monkeypatch.setattr(app.state.registry, "kill_subagent", _kill_subagent)
+
+        spawned = client.post(
+            f"/agents/{agent_id}/subagents",
+            json={"prompt": "Summarize logs", "timeout_s": 60},
+        )
+        assert spawned.status_code == 200
+        assert spawned.json()["session_name"] == run.session_name
+
+        listed = client.get(f"/agents/{agent_id}/subagents")
+        assert listed.status_code == 200
+        assert listed.json()[0]["status"] == "running"
+
+        killed = client.delete(f"/agents/{agent_id}/subagents/{run.session_name}")
+        assert killed.status_code == 200
+        assert killed.json()["status"] == "canceled"
+
+
+def test_memory_search_and_tag_routes(tmp_path):
+    app, _bridge_instances, _config_path = _build_test_app(tmp_path)
+
+    with TestClient(app) as client:
+        create_alpha = client.post(
+            "/agents",
+            json={
+                "name": "Alpha",
+                "emoji": "🦀",
+                "soul": "Memory search alpha.",
+                "model": "gemini",
+                "mcp_servers": ["*"],
+            },
+        )
+        create_beta = client.post(
+            "/agents",
+            json={
+                "name": "Beta",
+                "emoji": "🦀",
+                "soul": "Memory search beta.",
+                "model": "gemini",
+                "mcp_servers": ["*"],
+            },
+        )
+        alpha_id = create_alpha.json()["id"]
+        beta_id = create_beta.json()["id"]
+        assert client.post(f"/agents/{alpha_id}/start").status_code == 200
+        assert client.post(f"/agents/{beta_id}/start").status_code == 200
+
+        assert client.put(
+            f"/agents/{alpha_id}/memory",
+            json={"content": "# MEMORY\n\nalpha-keyword present"},
+        ).status_code == 200
+        assert client.put(
+            f"/agents/{beta_id}/memory",
+            json={"content": "# MEMORY\n\nbeta-keyword and alpha-keyword"},
+        ).status_code == 200
+
+        tagged = client.post(
+            f"/agents/{alpha_id}/memory/tags/release",
+            json={"content": "Ship on Friday."},
+        )
+        assert tagged.status_code == 200
+
+        tagged_read = client.get(f"/agents/{alpha_id}/memory/tags/release")
+        assert tagged_read.status_code == 200
+        assert tagged_read.json()["entries"] == ["Ship on Friday."]
+
+        runtime = app.state.registry.get_agent(alpha_id)
+        assert runtime is not None
+        runtime.memory_manager.append_daily_note("Daily alpha-keyword note.")
+        runtime.memory_manager.append_message("thread-alpha", "user", "session alpha-keyword")
+
+        single = client.get(
+            f"/agents/{alpha_id}/memory/search",
+            params={"q": "alpha-keyword", "memory_type": ["memory", "daily", "session"]},
+        )
+        assert single.status_code == 200
+        assert single.json()["results"]
+        assert {item["agent_id"] for item in single.json()["results"]} == {alpha_id}
+
+        cross = client.post("/agents/memory/search", json={"query": "alpha-keyword", "limit": 50})
+        assert cross.status_code == 200
+        found_agents = {item["agent_id"] for item in cross.json()["results"]}
+        assert alpha_id in found_agents
+        assert beta_id in found_agents

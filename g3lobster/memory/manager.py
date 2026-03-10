@@ -120,6 +120,52 @@ class MemoryManager:
             updated = f"{existing}\n\n## {section_title}\n\n{content.strip()}\n"
             self.write_memory(self._trim_memory(updated))
 
+    @staticmethod
+    def _normalize_tag(tag: str) -> str:
+        text = str(tag or "").strip()
+        text = re.sub(r"[\[\]\n\r]+", " ", text)
+        return " ".join(text.split())
+
+    def append_tagged_memory(self, tag: str, content: str) -> None:
+        normalized_tag = self._normalize_tag(tag)
+        if not normalized_tag:
+            raise ValueError("Tag must be non-empty")
+        if not str(content or "").strip():
+            raise ValueError("Tagged memory content must be non-empty")
+        self.append_memory_section(f"[{normalized_tag}]", content)
+
+    def get_memories_by_tag(self, tag: str) -> List[str]:
+        normalized_tag = self._normalize_tag(tag).lower()
+        if not normalized_tag:
+            return []
+
+        content = self.read_memory()
+        lines = content.splitlines()
+
+        entries: List[str] = []
+        current_tag: Optional[str] = None
+        buffer: List[str] = []
+
+        def _flush() -> None:
+            if current_tag != normalized_tag:
+                return
+            text = "\n".join(buffer).strip()
+            if text:
+                entries.append(text)
+
+        for line in lines:
+            if line.startswith("## "):
+                _flush()
+                match = re.fullmatch(r"##\s+\[(.+)\]\s*", line.strip())
+                current_tag = self._normalize_tag(match.group(1)).lower() if match else None
+                buffer = []
+                continue
+            if current_tag is not None:
+                buffer.append(line)
+
+        _flush()
+        return entries
+
     def _trim_memory(self, content: str) -> str:
         """Keep at most ``memory_max_sections`` ## sections.
 

@@ -1,0 +1,8 @@
+name: g3lobster-memory
+enabled: true
+transport:
+  type: sse
+  url: ${G3LOBSTER_MEMORY_MCP_URL}
+description: Memory tagging and search MCP tools across agents
+tool_patterns:
+  - g3lobster__memory__*
