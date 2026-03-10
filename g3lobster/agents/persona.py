@@ -25,10 +25,13 @@ class AgentPersona:
     emoji: str = "🤖"
     soul: str = ""
     model: str = "gemini"
+    response_timeout_s: Optional[float] = None
     mcp_servers: List[str] = field(default_factory=lambda: ["*"])
     bot_user_id: Optional[str] = None
     enabled: bool = True
     dm_allowlist: List[str] = field(default_factory=list)
+    space_id: Optional[str] = None
+    bridge_enabled: bool = False
     created_at: str = field(default_factory=lambda: _utc_now())
     updated_at: str = field(default_factory=lambda: _utc_now())
 
@@ -42,12 +45,21 @@ class AgentPersona:
         self.emoji = self.emoji.strip() or "🤖"
         self.soul = self.soul.strip()
         self.model = self.model.strip() or "gemini"
+        if self.response_timeout_s is not None:
+            self.response_timeout_s = float(self.response_timeout_s)
+            if self.response_timeout_s < 0:
+                raise ValueError("response_timeout_s must be >= 0 when provided")
         self.mcp_servers = [str(item).strip() for item in self.mcp_servers if str(item).strip()] or ["*"]
         if self.bot_user_id:
             self.bot_user_id = str(self.bot_user_id).strip() or None
         else:
             self.bot_user_id = None
         self.dm_allowlist = [str(item).strip() for item in self.dm_allowlist if str(item).strip()]
+        if self.space_id:
+            self.space_id = str(self.space_id).strip() or None
+        else:
+            self.space_id = None
+        self.bridge_enabled = bool(self.bridge_enabled)
 
     def to_agent_json(self) -> Dict[str, object]:
         return {
@@ -55,10 +67,13 @@ class AgentPersona:
             "name": self.name,
             "emoji": self.emoji,
             "model": self.model,
+            "response_timeout_s": self.response_timeout_s,
             "mcp_servers": list(self.mcp_servers),
             "bot_user_id": self.bot_user_id,
             "enabled": bool(self.enabled),
             "dm_allowlist": list(self.dm_allowlist),
+            "space_id": self.space_id,
+            "bridge_enabled": bool(self.bridge_enabled),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -66,6 +81,15 @@ class AgentPersona:
 
 def _utc_now() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
+
+
+def _parse_timeout(value: object) -> Optional[float]:
+    if value is None:
+        return None
+    timeout_s = float(value)
+    if timeout_s < 0:
+        raise ValueError("response_timeout_s must be >= 0 when provided")
+    return timeout_s
 
 
 def is_valid_agent_id(agent_id: str) -> bool:
@@ -153,10 +177,13 @@ def load_persona(data_dir: str, agent_id: str, *, skip_migration: bool = False) 
         emoji=str(payload.get("emoji", "🤖")),
         soul=soul,
         model=str(payload.get("model", "gemini")),
+        response_timeout_s=_parse_timeout(payload.get("response_timeout_s")),
         mcp_servers=list(payload.get("mcp_servers") or ["*"]),
         bot_user_id=payload.get("bot_user_id"),
         enabled=bool(payload.get("enabled", True)),
         dm_allowlist=list(payload.get("dm_allowlist") or []),
+        space_id=payload.get("space_id"),
+        bridge_enabled=bool(payload.get("bridge_enabled", False)),
         created_at=str(payload.get("created_at") or _utc_now()),
         updated_at=str(payload.get("updated_at") or _utc_now()),
     )
@@ -176,10 +203,13 @@ def save_persona(data_dir: str, persona: AgentPersona) -> AgentPersona:
         emoji=persona.emoji,
         soul=persona.soul,
         model=persona.model,
+        response_timeout_s=persona.response_timeout_s,
         mcp_servers=list(persona.mcp_servers),
         bot_user_id=persona.bot_user_id,
         enabled=persona.enabled,
         dm_allowlist=list(persona.dm_allowlist),
+        space_id=persona.space_id,
+        bridge_enabled=persona.bridge_enabled,
         created_at=(existing.created_at if existing else persona.created_at) or now,
         updated_at=now,
     )

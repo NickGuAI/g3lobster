@@ -12,11 +12,25 @@ ALLOWED_MCP_SERVER_NAMES_FLAG = "--allowed-mcp-server-names"
 PROMPT_FLAG = "-p"
 
 
+def _normalize_timeout(timeout: Optional[float]) -> Optional[float]:
+    if timeout is None:
+        return None
+    timeout_s = float(timeout)
+    if timeout_s <= 0:
+        return None
+    return timeout_s
+
+
 async def _wait_for_process_exit(
-    proc: asyncio.subprocess.Process, timeout: float, stderr: Optional[asyncio.StreamReader]
+    proc: asyncio.subprocess.Process,
+    timeout: Optional[float],
+    stderr: Optional[asyncio.StreamReader],
 ) -> None:
     """Wait for process exit and surface non-zero exit codes with stderr."""
-    await asyncio.wait_for(proc.wait(), timeout=timeout)
+    if timeout is not None:
+        await asyncio.wait_for(proc.wait(), timeout=timeout)
+    else:
+        await proc.wait()
     if proc.returncode == 0:
         return
 
@@ -60,7 +74,7 @@ class GeminiProcess:
     def is_alive(self) -> bool:
         return self._ready
 
-    async def ask(self, prompt: str, timeout: float = 120.0, session_id: Optional[str] = None) -> str:
+    async def ask(self, prompt: str, timeout: Optional[float] = 120.0, session_id: Optional[str] = None) -> str:
         if not self._ready:
             raise RuntimeError("GeminiProcess has not been initialised (call spawn first)")
 
@@ -87,8 +101,12 @@ class GeminiProcess:
             )
             self._active_process = proc
 
+            timeout_s = _normalize_timeout(timeout)
             try:
-                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+                if timeout_s is None:
+                    stdout, _ = await proc.communicate()
+                else:
+                    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
             except asyncio.TimeoutError:
                 proc.kill()
                 with contextlib.suppress(Exception):
@@ -104,9 +122,7 @@ class GeminiProcess:
 
             return stdout.decode("utf-8", errors="replace").strip()
 
-    async def ask_stream(
-        self, prompt: str, timeout: float = 120.0, session_id: Optional[str] = None
-    ):
+    async def ask_stream(self, prompt: str, timeout: Optional[float] = 120.0, session_id: Optional[str] = None):
         """Send a prompt and yield StreamEvent objects as they arrive.
 
         Spawns a fresh subprocess with --output-format stream-json and reads
@@ -138,8 +154,9 @@ class GeminiProcess:
             )
             self._active_process = proc
 
+            timeout_s = _normalize_timeout(timeout)
             loop = asyncio.get_running_loop()
-            deadline = loop.time() + timeout
+            deadline = (loop.time() + timeout_s) if timeout_s is not None else None
 
             try:
                 assert proc.stdout is not None
@@ -148,10 +165,13 @@ class GeminiProcess:
                     if event.is_terminal:
                         break
 
-                remaining = deadline - loop.time()
-                if remaining <= 0:
-                    proc.kill()
-                    raise asyncio.TimeoutError("Stream read timed out")
+                if deadline is None:
+                    remaining = None
+                else:
+                    remaining = deadline - loop.time()
+                    if remaining <= 0:
+                        proc.kill()
+                        raise asyncio.TimeoutError("Stream read timed out")
 
                 await _wait_for_process_exit(proc, remaining, proc.stderr)
             finally:
@@ -243,7 +263,7 @@ class TmuxSubagentProcess:
             env["G3LOBSTER_SESSION_ID"] = session_id
         return env
 
-    async def ask(self, prompt: str, timeout: float = 120.0, session_id: Optional[str] = None) -> str:
+    async def ask(self, prompt: str, timeout: Optional[float] = 120.0, session_id: Optional[str] = None) -> str:
         """Send a prompt and collect the full response (blocking).
 
         This is the compatibility interface matching GeminiProcess.ask().
@@ -280,7 +300,11 @@ class TmuxSubagentProcess:
                         event = parse_stream_event(line)
                         events.append(event)
 
-                await asyncio.wait_for(_read_events(), timeout=timeout)
+                timeout_s = _normalize_timeout(timeout)
+                if timeout_s is None:
+                    await _read_events()
+                else:
+                    await asyncio.wait_for(_read_events(), timeout=timeout_s)
             except asyncio.TimeoutError:
                 proc.kill()
                 with contextlib.suppress(Exception):
@@ -293,9 +317,7 @@ class TmuxSubagentProcess:
 
             return accumulate_text(events)
 
-    async def ask_stream(
-        self, prompt: str, timeout: float = 120.0, session_id: Optional[str] = None
-    ):
+    async def ask_stream(self, prompt: str, timeout: Optional[float] = 120.0, session_id: Optional[str] = None):
         """Send a prompt and yield StreamEvent objects as they arrive.
 
         This is the streaming interface for incremental output.
@@ -319,17 +341,21 @@ class TmuxSubagentProcess:
 
         try:
             assert proc.stdout is not None
+            timeout_s = _normalize_timeout(timeout)
             loop = asyncio.get_running_loop()
-            deadline = loop.time() + timeout
+            deadline = (loop.time() + timeout_s) if timeout_s is not None else None
             async for event in stream_events(proc.stdout):
                 yield event
                 if event.is_terminal:
                     break
 
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                proc.kill()
-                raise asyncio.TimeoutError("Stream read timed out")
+            if deadline is None:
+                remaining = None
+            else:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    proc.kill()
+                    raise asyncio.TimeoutError("Stream read timed out")
 
             await _wait_for_process_exit(proc, remaining, proc.stderr)
         finally:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -123,6 +124,40 @@ def test_delegation_handler_session_id_defaults_to_default(monkeypatch) -> None:
     monkeypatch.delenv("G3LOBSTER_SESSION_ID", raising=False)
     handler = DelegationMCPHandler(parent_agent_id="athena")
     assert handler._resolve_parent_session_id() == "default"
+
+
+def test_delegation_handler_forwards_parent_task_id(monkeypatch) -> None:
+    """Delegation payload includes parent_task_id from env when available."""
+    import urllib.request
+
+    monkeypatch.setenv("G3LOBSTER_PARENT_TASK_ID", "task-123")
+    handler = DelegationMCPHandler(parent_agent_id="athena")
+    captured = {}
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"task_id":"child-1","status":"queued"}'
+
+    def fake_urlopen(req, timeout):
+        assert timeout > 0
+        captured["payload"] = json.loads(req.data.decode("utf-8"))
+        return _Response()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    response = handler._delegate_task(
+        req_id=7,
+        arguments={"prompt": "delegate work", "wait": False},
+    )
+
+    assert response["result"]["isError"] is False
+    assert captured["payload"]["parent_task_id"] == "task-123"
 
 
 def test_delegation_handler_initialize_response() -> None:
@@ -256,3 +291,29 @@ def test_ensure_delegation_mcp_config_preserves_existing(tmp_path) -> None:
     # Delegation entry added
     assert "g3lobster-delegation" in settings["mcpServers"]
     assert settings["mcpServers"]["g3lobster-delegation"]["args"][-1] == "http://127.0.0.1:20001"
+
+
+def test_skill_mcp_configs_loadable_from_repo() -> None:
+    config_dir = Path("config/mcp")
+    loader = MCPConfigLoader(str(config_dir))
+    configs = loader.load_all(
+        env_vars={
+            "G3LOBSTER_TASKS_MCP_URL": "http://example.test/tasks",
+            "G3LOBSTER_SUBAGENTS_MCP_URL": "http://example.test/subagents",
+            "G3LOBSTER_MEMORY_MCP_URL": "http://example.test/memory",
+        }
+    )
+
+    assert "g3lobster-tasks" in configs
+    assert "g3lobster-subagents" in configs
+    assert "g3lobster-memory" in configs
+    patterns = loader.get_tool_patterns(
+        env_vars={
+            "G3LOBSTER_TASKS_MCP_URL": "http://example.test/tasks",
+            "G3LOBSTER_SUBAGENTS_MCP_URL": "http://example.test/subagents",
+            "G3LOBSTER_MEMORY_MCP_URL": "http://example.test/memory",
+        }
+    )
+    assert patterns["g3lobster-tasks"] == ["g3lobster__tasks__*"]
+    assert patterns["g3lobster-subagents"] == ["g3lobster__subagents__*"]
+    assert patterns["g3lobster-memory"] == ["g3lobster__memory__*"]

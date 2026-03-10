@@ -26,7 +26,7 @@ class AgentsConfig:
     memory_max_sections: int = 50
     context_messages: int = 12
     health_check_interval_s: int = 30
-    stuck_timeout_s: int = 300
+    stuck_timeout_s: int = 0  # 0 disables stuck-agent auto-restart
 
 
 @dataclass
@@ -34,7 +34,7 @@ class GeminiConfig:
     command: str = "gemini"
     args: List[str] = field(default_factory=lambda: ["-y"])
     workspace_dir: str = "."
-    response_timeout_s: float = 120.0
+    response_timeout_s: float = 0.0  # 0 disables per-task timeout
     idle_read_window_s: float = 0.6
 
 
@@ -47,6 +47,8 @@ class MCPConfig:
 @dataclass
 class ChatConfig:
     enabled: bool = False
+    # Legacy defaults retained for backward compatibility and migration.
+    # Per-agent space assignment now lives on AgentPersona.space_id.
     space_id: Optional[str] = None
     space_name: Optional[str] = None
     poll_interval_s: float = 2.0
@@ -90,6 +92,17 @@ class SubagentConfig:
 
 
 @dataclass
+class ControlPlaneConfig:
+    enabled: bool = True
+    queue_depth: int = 5
+    max_tasks: int = 5000
+    tmux_enabled: bool = False
+    tmux_session_prefix: str = "g3l"
+    tmux_idle_ttl_s: float = 1800.0
+    tmux_max_sessions_per_agent: int = 2
+
+
+@dataclass
 class AppConfig:
     agents: AgentsConfig = field(default_factory=AgentsConfig)
     gemini: GeminiConfig = field(default_factory=GeminiConfig)
@@ -100,11 +113,24 @@ class AppConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
     subagent: SubagentConfig = field(default_factory=SubagentConfig)
+    control_plane: ControlPlaneConfig = field(default_factory=ControlPlaneConfig)
     debug_mode: bool = False
 
 
 def _to_bool(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def normalize_space_id(raw: object) -> Optional[str]:
+    """Normalize Google Chat space ids to ``spaces/<id>`` format."""
+    value = str(raw or "").strip()
+    if not value:
+        return None
+    if value.startswith("space/") and not value.startswith("spaces/"):
+        value = "spaces/" + value[len("space/"):]
+    if not value.startswith("spaces/"):
+        value = "spaces/" + value
+    return value
 
 
 def _coerce_value(raw: str, current: Any) -> Any:
@@ -162,7 +188,7 @@ def _legacy_agents_section(data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         "memory_max_sections": memory.get("memory_max_sections", 50),
         "context_messages": memory.get("context_messages", 12),
         "health_check_interval_s": pool.get("health_check_interval_s", 30),
-        "stuck_timeout_s": pool.get("stuck_timeout_s", 300),
+        "stuck_timeout_s": pool.get("stuck_timeout_s", 0),
     }
 
 
@@ -186,6 +212,9 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         server=ServerConfig(**_filter_fields(ServerConfig, data.get("server") or {}, "server")),
         alerts=AlertsConfig(**_filter_fields(AlertsConfig, data.get("alerts") or {}, "alerts")),
         subagent=SubagentConfig(**_filter_fields(SubagentConfig, data.get("subagent") or {}, "subagent")),
+        control_plane=ControlPlaneConfig(
+            **_filter_fields(ControlPlaneConfig, data.get("control_plane") or {}, "control_plane")
+        ),
         debug_mode=bool(data.get("debug_mode", False)),
     )
 
@@ -198,6 +227,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     _apply_env_overrides("server", config.server)
     _apply_env_overrides("alerts", config.alerts)
     _apply_env_overrides("subagent", config.subagent)
+    _apply_env_overrides("control_plane", config.control_plane)
 
     debug_env = os.environ.get("G3LOBSTER_DEBUG_MODE", "")
     if debug_env:
@@ -217,7 +247,11 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
 
 
 def save_chat_config(chat: ChatConfig, config_path: str) -> None:
-    """Persist only the chat section to YAML using an atomic write."""
+    """Persist the chat section to YAML using an atomic write.
+
+    The ``space_id`` and ``space_name`` keys remain for backward
+    compatibility as legacy defaults for per-agent bridge migration.
+    """
     path = Path(config_path).expanduser().resolve()
     payload: Dict[str, Any] = {}
 

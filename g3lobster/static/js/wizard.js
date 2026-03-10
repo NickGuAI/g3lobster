@@ -71,6 +71,19 @@ function parseMcpServers(raw) {
     .filter(Boolean);
 }
 
+function bridgeReadinessDetails(bridge) {
+  if (!bridge || !bridge.space_id) {
+    return { label: "not configured", className: "warn" };
+  }
+  if (!bridge.bridge_enabled) {
+    return { label: "disabled", className: "stopped" };
+  }
+  if (bridge.is_running) {
+    return { label: "running", className: "ok" };
+  }
+  return { label: "stopped", className: "error" };
+}
+
 export async function render(root, { status, onComplete }) {
   let disposed = false;
   let currentStep = initialStepFromStatus(status);
@@ -273,12 +286,41 @@ export async function render(root, { status, onComplete }) {
       `;
     }
 
+    const bridgeByAgent = new Map((lastStatus.agent_bridges || []).map((item) => [item.agent_id, item]));
+    const bridgeRows = agents.length
+      ? agents.map((agent) => {
+          const bridge = bridgeByAgent.get(agent.id) || {
+            agent_id: agent.id,
+            space_id: agent.space_id || null,
+            bridge_enabled: agent.bridge_enabled || false,
+            is_running: agent.bridge_running || false,
+          };
+          const details = bridgeReadinessDetails(bridge);
+          return `
+            <tr>
+              <td>${escapeHtml(agent.emoji)} ${escapeHtml(agent.name)}</td>
+              <td><code>${escapeHtml(bridge.space_id || "(not set)")}</code></td>
+              <td><span class="status-pill ${escapeHtml(bridge.bridge_enabled ? "ok" : "stopped")}">${escapeHtml(bridge.bridge_enabled ? "enabled" : "disabled")}</span></td>
+              <td><span class="status-pill ${escapeHtml(details.className)}">${escapeHtml(details.label)}</span></td>
+            </tr>
+          `;
+        }).join("")
+      : "<tr><td colspan='4' class='empty'>No agents configured.</td></tr>";
+    const bridgeRequiredCount = agents.filter((agent) => {
+      const bridge = bridgeByAgent.get(agent.id) || {};
+      return Boolean(bridge.bridge_enabled) && Boolean(bridge.space_id);
+    }).length;
+    const bridgeRunningCount = agents.filter((agent) => {
+      const bridge = bridgeByAgent.get(agent.id) || {};
+      return Boolean(bridge.bridge_enabled) && Boolean(bridge.space_id) && Boolean(bridge.is_running);
+    }).length;
+
     const checklist = [
       ["Credentials uploaded", lastStatus.credentials_ok],
       ["OAuth complete", lastStatus.auth_ok],
       ["Space configured", lastStatus.space_configured],
       ["At least one agent", lastStatus.agents_ready],
-      ["Bridge running", lastStatus.bridge_running],
+      ["Bridges running", lastStatus.bridge_running],
     ]
       .map(([label, ok]) => `<li>${ok ? "✅" : "⬜"} ${label}</li>`)
       .join("");
@@ -295,6 +337,18 @@ export async function render(root, { status, onComplete }) {
         <h2>Launch</h2>
         <p class="agent-meta">Start enabled agents and begin polling Google Chat.</p>
         <ul>${checklist}</ul>
+        <div class="agent-meta">${escapeHtml(String(bridgeRunningCount))}/${escapeHtml(String(bridgeRequiredCount))} required agent bridges running</div>
+        <table class="bridge-table">
+          <thead>
+            <tr>
+              <th>Agent</th>
+              <th>Space</th>
+              <th>Bridge</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>${bridgeRows}</tbody>
+        </table>
         <div class="actions">
           <button class="btn btn-primary" id="launch-btn">Launch Bridge + Agents</button>
         </div>

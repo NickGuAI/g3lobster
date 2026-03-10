@@ -15,9 +15,11 @@ from g3lobster.agents.registry import AgentRegistry
 from g3lobster.alerts import AlertManager
 from g3lobster.api.server import create_app
 from g3lobster.chat.bridge import ChatBridge
+from g3lobster.chat.bridge_manager import BridgeManager
 from g3lobster.chat.email_bridge import EmailBridge
 from g3lobster.cli.process import GeminiProcess
 from g3lobster.config import AppConfig, load_config
+from g3lobster.control_plane import ControlPlane, Dispatcher, Orchestrator, TaskRegistry
 from g3lobster.cron.manager import CronManager
 from g3lobster.cron.store import CronStore
 from g3lobster.memory.context import ContextBuilder
@@ -26,6 +28,7 @@ from g3lobster.memory.manager import MemoryManager
 from g3lobster.mcp.loader import MCPConfigLoader
 from g3lobster.mcp.manager import MCPManager
 from g3lobster.pool.agent import GeminiAgent
+from g3lobster.pool.tmux_spawn import TmuxSpawner
 
 logger = logging.getLogger(__name__)
 
@@ -133,20 +136,53 @@ def build_runtime(config: AppConfig):
         global_memory_manager=global_memory_manager,
         agent_factory=agent_factory,
         alert_manager=alert_manager,
+        queue_depth_limit=config.control_plane.queue_depth,
     )
+
+    control_plane = None
+    if config.control_plane.enabled:
+        tmux_spawner = None
+        if config.control_plane.tmux_enabled:
+            tmux_spawner = TmuxSpawner(
+                command=config.gemini.command,
+                args=config.gemini.args,
+                cwd=config.gemini.workspace_dir,
+                session_prefix=config.control_plane.tmux_session_prefix,
+                max_sessions_per_agent=config.control_plane.tmux_max_sessions_per_agent,
+                idle_ttl_s=config.control_plane.tmux_idle_ttl_s,
+            )
+
+        task_registry = TaskRegistry(max_tasks=config.control_plane.max_tasks)
+        dispatcher = Dispatcher(
+            agent_registry=registry,
+            task_registry=task_registry,
+            max_queue_depth=config.control_plane.queue_depth,
+            tmux_spawner=tmux_spawner,
+        )
+        orchestrator = Orchestrator(task_registry=task_registry, dispatcher=dispatcher)
+        dispatcher.set_on_task_complete(orchestrator.on_task_complete)
+        control_plane = ControlPlane(
+            task_registry=task_registry,
+            dispatcher=dispatcher,
+            orchestrator=orchestrator,
+            tmux_spawner=tmux_spawner,
+        )
+    registry.control_plane = control_plane
 
     chat_auth_dir = str(Path(config.agents.data_dir) / "chat_auth")
     cron_store = CronStore(config.agents.data_dir)
     cron_manager = CronManager(cron_store=cron_store, registry=registry) if config.cron.enabled else None
 
     def chat_bridge_factory(
+        space_id: str,
         service=None,
         last_message_time=None,
         seen_content=None,
+        agent_filter=None,
     ) -> ChatBridge:
         return ChatBridge(
             registry=registry,
-            space_id=config.chat.space_id,
+            space_id=space_id,
             poll_interval_s=config.chat.poll_interval_s,
             service=service,
             space_name=config.chat.space_name,
@@ -155,9 +191,14 @@ def build_runtime(config: AppConfig):
             auth_data_dir=chat_auth_dir,
             cron_store=cron_store,
             debug_mode=config.debug_mode,
+            agent_filter=agent_filter,
         )
 
-    chat_bridge = chat_bridge_factory() if config.chat.enabled else None
+    bridge_manager = BridgeManager(
+        registry=registry,
+        bridge_factory=chat_bridge_factory,
+        legacy_space_id=config.chat.space_id,
+    )
 
     email_bridge: EmailBridge | None = None
     if config.email.enabled and config.email.base_address:
@@ -171,19 +212,38 @@ def build_runtime(config: AppConfig):
     # Wire alert manager sinks that depend on runtime objects created above.
     if email_bridge:
         alert_manager.email_bridge = email_bridge
-    if chat_bridge:
-        registry.chat_bridge = chat_bridge
+    registry.chat_bridge = bridge_manager
 
-    return registry, chat_bridge, chat_bridge_factory, chat_auth_dir, global_memory_manager, cron_store, cron_manager, email_bridge
+    return (
+        registry,
+        bridge_manager,
+        chat_bridge_factory,
+        chat_auth_dir,
+        global_memory_manager,
+        cron_store,
+        cron_manager,
+        email_bridge,
+        control_plane,
+    )
 
 
 def build_app(config_path: Optional[str] = None):
     resolved_config_path = Path(config_path or "config.yaml").expanduser().resolve()
     config = load_config(str(resolved_config_path))
-    registry, chat_bridge, chat_bridge_factory, chat_auth_dir, global_memory_manager, cron_store, cron_manager, email_bridge = build_runtime(config)
+    (
+        registry,
+        bridge_manager,
+        chat_bridge_factory,
+        chat_auth_dir,
+        global_memory_manager,
+        cron_store,
+        cron_manager,
+        email_bridge,
+        control_plane,
+    ) = build_runtime(config)
     app = create_app(
         registry=registry,
-        chat_bridge=chat_bridge,
+        bridge_manager=bridge_manager,
         chat_bridge_factory=chat_bridge_factory,
         config=config,
         config_path=str(resolved_config_path),
@@ -192,6 +252,7 @@ def build_app(config_path: Optional[str] = None):
         cron_store=cron_store,
         cron_manager=cron_manager,
         email_bridge=email_bridge,
+        control_plane=control_plane,
     )
     return app, config
 

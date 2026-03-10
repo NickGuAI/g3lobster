@@ -65,12 +65,14 @@ export function listSpaceBots() {
   return request("/setup/space-bots", { method: "GET" });
 }
 
-export function startBridge() {
-  return request("/setup/start", { method: "POST" });
+export function startBridge(agentId = null) {
+  const suffix = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : "";
+  return request(`/setup/start${suffix}`, { method: "POST" });
 }
 
-export function stopBridge() {
-  return request("/setup/stop", { method: "POST" });
+export function stopBridge(agentId = null) {
+  const suffix = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : "";
+  return request(`/setup/stop${suffix}`, { method: "POST" });
 }
 
 export function listAgents() {

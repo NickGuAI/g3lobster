@@ -8,17 +8,18 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from g3lobster.agents.persona import AgentPersona, agent_dir, list_personas, load_persona
-from g3lobster.agents.subagent_registry import RunStatus, SubagentRegistry, SubagentRun
+from g3lobster.agents.subagent_registry import SubagentRegistry, SubagentRun
 from g3lobster.alerts import AlertManager, make_event
 from g3lobster.memory.context import ContextBuilder
 from g3lobster.memory.global_memory import GlobalMemoryManager
 from g3lobster.memory.manager import MemoryManager
 from g3lobster.pool.health import HealthInspector
 from g3lobster.pool.types import AgentState
-from g3lobster.tasks.types import Task, TaskStatus
+from g3lobster.tasks.types import Task, TaskStatus, TaskStore
+from g3lobster.tmux.spawner import SubAgentRunInfo, SubAgentSpawner
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +32,13 @@ class RegisteredAgent:
     agent: object
     memory_manager: MemoryManager
     context_builder: ContextBuilder
+    task_store: Optional[TaskStore] = None
+    max_queue_depth: int = 5
     _assign_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    _pending_assignments: int = 0
+    _queue: "asyncio.Queue[Tuple[Any, asyncio.Future, Optional[Callable[[], None]], Optional[asyncio.Queue]]]" = field(
+        default_factory=asyncio.Queue
+    )
+    _queue_worker: Optional[asyncio.Task] = None
 
     @property
     def id(self) -> str:
@@ -56,26 +62,109 @@ class RegisteredAgent:
 
     @property
     def pending_assignments(self) -> int:
-        # Includes the currently running assignment, so expose queued only.
-        return max(0, self._pending_assignments - 1)
+        return self._queue.qsize()
 
-    async def assign(self, task):
-        self._pending_assignments += 1
-        try:
-            async with self._assign_lock:
-                return await self.agent.assign(task)
-        finally:
-            self._pending_assignments -= 1
+    @property
+    def queue_load(self) -> int:
+        current = 1 if self.current_task is not None else 0
+        return self.pending_assignments + current
+
+    async def assign(self, task, on_started: Optional[Callable[[], None]] = None):
+        if self.queue_load >= self.max_queue_depth:
+            raise RuntimeError(f"Agent {self.id} queue is full")
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        await self._queue.put((task, future, on_started, None))
+        self._ensure_queue_worker()
+        return await future
 
     async def assign_stream(self, task):
-        """Assign a task and yield streaming events, serialising with the assign lock."""
-        self._pending_assignments += 1
-        try:
-            async with self._assign_lock:
-                async for event in self.agent.assign_stream(task):
-                    yield event
-        finally:
-            self._pending_assignments -= 1
+        """Assign a task and yield streaming events using the same FIFO queue as assign()."""
+        if self.queue_load >= self.max_queue_depth:
+            raise RuntimeError(f"Agent {self.id} queue is full")
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        stream_queue: asyncio.Queue = asyncio.Queue()
+        await self._queue.put((task, future, None, stream_queue))
+        self._ensure_queue_worker()
+
+        while True:
+            kind, payload = await stream_queue.get()
+            if kind == "event":
+                yield payload
+                continue
+            if kind == "error":
+                if isinstance(payload, BaseException):
+                    raise payload
+                raise RuntimeError(str(payload))
+            if kind == "done":
+                break
+
+        if not future.done():
+            await future
+
+    async def stop(self) -> None:
+        if self._queue_worker and not self._queue_worker.done():
+            self._queue_worker.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._queue_worker
+        await self.agent.stop()
+
+    def _ensure_queue_worker(self) -> None:
+        if self._queue_worker and not self._queue_worker.done():
+            return
+        self._queue_worker = asyncio.create_task(self._queue_loop(), name=f"g3lobster-agent-queue-{self.id}")
+
+    def _record_task(self, task) -> None:
+        """Persist a terminal task result to the task store if available."""
+        if self.task_store and hasattr(task, "status") and task.status in {
+            TaskStatus.COMPLETED,
+            TaskStatus.FAILED,
+            TaskStatus.CANCELED,
+        }:
+            self.task_store.add(task)
+
+    async def _queue_loop(self) -> None:
+        while True:
+            task, future, on_started, stream_queue = await self._queue.get()
+            try:
+                async with self._assign_lock:
+                    if callable(on_started):
+                        on_started()
+                    if stream_queue is None:
+                        result = await self.agent.assign(task)
+                        self._record_task(result)
+                        if not future.done():
+                            future.set_result(result)
+                    else:
+                        async for event in self.agent.assign_stream(task):
+                            await stream_queue.put(("event", event))
+                        self._record_task(task)
+                        if not future.done():
+                            future.set_result(task)
+            except asyncio.CancelledError:
+                if stream_queue is None:
+                    if not future.done():
+                        future.set_exception(asyncio.CancelledError())
+                else:
+                    await stream_queue.put(("error", asyncio.CancelledError()))
+                    if not future.done():
+                        future.set_result(task)
+                raise
+            except Exception as exc:
+                if stream_queue is None:
+                    if not future.done():
+                        future.set_exception(exc)
+                else:
+                    await stream_queue.put(("error", exc))
+                    if not future.done():
+                        future.set_result(task)
+            finally:
+                if stream_queue is not None:
+                    await stream_queue.put(("done", None))
+                self._queue.task_done()
 
 
 class AgentRegistry:
@@ -97,9 +186,13 @@ class AgentRegistry:
         gemini_args: Optional[List[str]] = None,
         gemini_timeout_s: float = 45.0,
         gemini_cwd: Optional[str] = None,
+        task_store_size: int = 100,
+        subagent_max_concurrent: int = 3,
+        subagent_timeout_s: float = 300.0,
         global_memory_manager: Optional[GlobalMemoryManager] = None,
         alert_manager: Optional[AlertManager] = None,
         chat_bridge: Optional[object] = None,
+        queue_depth_limit: int = 5,
         # Legacy parameter; ignored.
         summarize_threshold: int = 20,
     ):
@@ -119,11 +212,21 @@ class AgentRegistry:
         self.global_memory_manager = global_memory_manager
         self.alert_manager = alert_manager
         self.chat_bridge = chat_bridge
+        self.queue_depth_limit = max(1, int(queue_depth_limit))
         self._chat_bridge_was_running = False
         self.agent_factory = agent_factory
+        self.control_plane = None
 
         self.health = HealthInspector()
+        self.task_store = TaskStore(max_tasks_per_agent=task_store_size)
         self.subagent_registry = SubagentRegistry(Path(data_dir))
+        self.tmux_subagent_spawner = SubAgentSpawner(
+            command=self.gemini_command,
+            args=self.gemini_args,
+            cwd=self.gemini_cwd,
+            max_concurrent_per_agent=subagent_max_concurrent,
+            default_timeout_s=subagent_timeout_s,
+        )
         self._agents: Dict[str, RegisteredAgent] = {}
 
         self._health_task: Optional[asyncio.Task] = None
@@ -192,6 +295,8 @@ class AgentRegistry:
             agent_list_provider=_agent_list_provider,
         )
         agent = self.agent_factory(persona, memory, context)
+        setattr(agent, "task_store", self.task_store)
+        setattr(agent, "subagent_spawner", self.tmux_subagent_spawner)
         await agent.start(mcp_servers=persona.mcp_servers)
 
         self._agents[agent_id] = RegisteredAgent(
@@ -199,6 +304,8 @@ class AgentRegistry:
             agent=agent,
             memory_manager=memory,
             context_builder=context,
+            task_store=self.task_store,
+            max_queue_depth=self.queue_depth_limit,
         )
         return True
 
@@ -206,7 +313,8 @@ class AgentRegistry:
         runtime = self._agents.pop(agent_id, None)
         if not runtime:
             return False
-        await runtime.agent.stop()
+        await self.tmux_subagent_spawner.kill_agent_runs(agent_id)
+        await runtime.stop()
         return True
 
     async def restart_agent(self, agent_id: str) -> bool:
@@ -258,12 +366,85 @@ class AgentRegistry:
     def get_agent(self, agent_id: str) -> Optional[RegisteredAgent]:
         return self._agents.get(agent_id)
 
+    def active_agents(self) -> List[RegisteredAgent]:
+        return list(self._agents.values())
+
     def list_enabled_personas(self) -> list:
         """Return personas for all enabled agents (includes stopped agents)."""
         return [p for p in list_personas(self.data_dir) if p.enabled]
 
     def load_persona(self, agent_id: str) -> Optional[AgentPersona]:
         return load_persona(self.data_dir, agent_id)
+
+    def list_tasks(self, agent_id: str, limit: int = 20) -> List[Task]:
+        capped_limit = max(1, int(limit))
+        runtime = self.get_agent(agent_id)
+        items = self.task_store.list(agent_id, limit=capped_limit)
+        current = runtime.current_task if runtime else None
+        if current and all(existing.id != current.id for existing in items):
+            items = [current, *items]
+        return items[:capped_limit]
+
+    def get_task(self, agent_id: str, task_id: str) -> Optional[Task]:
+        runtime = self.get_agent(agent_id)
+        if runtime and runtime.current_task and runtime.current_task.id == task_id:
+            return runtime.current_task
+        return self.task_store.get(agent_id, task_id)
+
+    async def cancel_task(self, agent_id: str, task_id: str) -> Optional[Task]:
+        runtime = self.get_agent(agent_id)
+        if not runtime:
+            return self.task_store.get(agent_id, task_id)
+
+        current = runtime.current_task
+        if not current or current.id != task_id:
+            return self.task_store.get(agent_id, task_id)
+
+        if current.status != TaskStatus.RUNNING:
+            return current
+
+        agent = runtime.agent
+        if hasattr(agent, "cancel_task"):
+            canceled = await agent.cancel_task(task_id)
+            if canceled:
+                self.task_store.add(canceled)
+            return canceled
+
+        process = getattr(agent, "process", None)
+        if process and hasattr(process, "kill"):
+            await process.kill()
+        current.status = TaskStatus.CANCELED
+        current.completed_at = current.completed_at or time.time()
+        current.error = current.error or "Canceled by API request"
+        current.add_event("canceled", {"reason": current.error})
+        self.task_store.add(current)
+        return current
+
+    async def spawn_subagent(
+        self,
+        agent_id: str,
+        prompt: str,
+        timeout_s: Optional[float] = None,
+        mcp_servers: Optional[List[str]] = None,
+        parent_task_id: Optional[str] = None,
+    ) -> SubAgentRunInfo:
+        runtime = self.get_agent(agent_id)
+        if not runtime:
+            raise ValueError(f"Agent '{agent_id}' is not running")
+        selected_servers = list(mcp_servers or runtime.mcp_servers or ["*"])
+        return await self.tmux_subagent_spawner.spawn(
+            agent_id=agent_id,
+            prompt=prompt,
+            timeout_s=timeout_s,
+            mcp_server_names=selected_servers,
+            parent_task_id=parent_task_id,
+        )
+
+    async def list_subagents(self, agent_id: str, active_only: bool = True) -> List[SubAgentRunInfo]:
+        return await self.tmux_subagent_spawner.list_runs(agent_id=agent_id, active_only=active_only)
+
+    async def kill_subagent(self, agent_id: str, session_name: str) -> Optional[SubAgentRunInfo]:
+        return await self.tmux_subagent_spawner.kill(agent_id=agent_id, session_name=session_name)
 
     async def delegate_task(
         self,
@@ -349,7 +530,7 @@ class AgentRegistry:
 
         collected_text = []
         try:
-            async for event in child.agent.assign_stream(child_task):
+            async for event in child.assign_stream(child_task):
                 yield event
                 if hasattr(event, 'text') and event.text:
                     collected_text.append(event.text)
@@ -395,6 +576,7 @@ class AgentRegistry:
                     "uptime_s": int(now - runtime.started_at),
                     "current_task": runtime.current_task.id if runtime.current_task else None,
                     "pending_assignments": runtime.pending_assignments,
+                    "recent_tasks": len(self.task_store.list(persona.id)),
                     "description": description,
                 }
             else:
@@ -410,6 +592,7 @@ class AgentRegistry:
                     "uptime_s": 0,
                     "current_task": None,
                     "pending_assignments": 0,
+                    "recent_tasks": len(self.task_store.list(persona.id)),
                     "description": description,
                 }
             items.append(item)
@@ -460,6 +643,27 @@ class AgentRegistry:
                         agent_id=run.child_agent_id,
                         detail=f"Delegation run {run.run_id} timed out ({run.parent_agent_id} -> {run.child_agent_id})",
                     ))
+
+            if self.control_plane is not None:
+                all_tasks = self.control_plane.task_registry.list()
+                orphaned_ids = self.health.inspect_orphaned_tasks(all_tasks, self._agents.keys())
+                for orphan_id in orphaned_ids:
+                    orphan = self.control_plane.task_registry.get(orphan_id)
+                    if orphan is None:
+                        continue
+                    if orphan.is_terminal:
+                        continue
+                    self.control_plane.task_registry.fail(
+                        orphan_id,
+                        f"Orphaned task: assigned agent {orphan.agent_id} is not active",
+                    )
+                    logger.warning("Marked orphaned control-plane task as failed: %s", orphan_id)
+                    if self.alert_manager:
+                        await self.alert_manager.send(make_event(
+                            event_type="task_orphaned",
+                            agent_id=orphan.agent_id or "unknown",
+                            detail=f"Control-plane task {orphan_id} became orphaned",
+                        ))
 
             # Monitor ChatBridge liveness
             if self.chat_bridge and self.alert_manager:

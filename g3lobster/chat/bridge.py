@@ -54,6 +54,15 @@ def _format_progress_text(persona, activity: str) -> str:
     return f"{persona.emoji} _{persona.name} is doing {activity_text}..._"
 
 
+def _resolve_task_timeout_s(persona: object, registry: object) -> Optional[float]:
+    timeout_s = getattr(persona, "response_timeout_s", None)
+    if timeout_s is None:
+        timeout_s = getattr(registry, "gemini_timeout_s", 120.0)
+    if timeout_s is None:
+        return None
+    return float(timeout_s)
+
+
 class ChatBridge:
     """Polls Google Chat and forwards messages to named agents."""
 
@@ -71,6 +80,7 @@ class ChatBridge:
         cron_store: Optional["CronStore"] = None,
         seen_content_max_size: int = 10_000,
         debug_mode: bool = False,
+        agent_filter: Optional[Set[str]] = None,
     ):
         self.registry = registry
         self.poll_interval_s = poll_interval_s
@@ -86,9 +96,16 @@ class ChatBridge:
         self._stop_event = asyncio.Event()
         self._last_message_time: Optional[str] = last_message_time
         self._seen_content: BoundedSet = BoundedSet(seen_content_max_size)
+        self._agent_filter: Optional[Set[str]] = set(agent_filter) if agent_filter is not None else None
         if seen_content:
             for item in seen_content:
                 self._seen_content.add(item)
+
+    def set_agent_filter(self, agent_ids: Optional[Set[str]]) -> None:
+        if agent_ids is None:
+            self._agent_filter = None
+            return
+        self._agent_filter = set(agent_ids)
 
     async def start(self) -> None:
         if self.service is None:
@@ -173,6 +190,8 @@ class ChatBridge:
 
     def _resolve_target_agent(self, message: dict, text: str) -> Optional[str]:
         personas = self.registry.list_enabled_personas()
+        if self._agent_filter is not None:
+            personas = [persona for persona in personas if persona.id in self._agent_filter]
         if not personas:
             return None
 
@@ -263,7 +282,11 @@ class ChatBridge:
                 )
                 return
 
-        task = Task(prompt=text, session_id=session_id)
+        task = Task(
+            prompt=text,
+            session_id=session_id,
+            timeout_s=_resolve_task_timeout_s(persona, self.registry),
+        )
 
         thinking_msg = await self.send_message(
             f"{persona.emoji} _{persona.name} is thinking..._",

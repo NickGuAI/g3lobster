@@ -10,7 +10,16 @@ from g3lobster.memory.context import ContextBuilder
 from g3lobster.memory.manager import MemoryManager
 from g3lobster.mcp.manager import MCPManager
 from g3lobster.pool.types import AgentState
-from g3lobster.tasks.types import Task, TaskStatus
+from g3lobster.tasks.types import Task, TaskStatus, TaskStore
+
+
+def _normalize_timeout(timeout_s: Optional[float]) -> Optional[float]:
+    if timeout_s is None:
+        return None
+    timeout_value = float(timeout_s)
+    if timeout_value <= 0:
+        return None
+    return timeout_value
 
 
 class GeminiAgent:
@@ -24,6 +33,8 @@ class GeminiAgent:
         memory_manager: MemoryManager,
         context_builder: ContextBuilder,
         default_mcp_servers: Optional[List[str]] = None,
+        task_store: Optional[TaskStore] = None,
+        subagent_spawner: Optional[object] = None,
     ):
         self.id = agent_id
         self.state = AgentState.STARTING
@@ -37,6 +48,23 @@ class GeminiAgent:
         self.current_task: Optional[Task] = None
         self.started_at = time.time()
         self.busy_since: Optional[float] = None
+        self.task_store = task_store
+        self.subagent_spawner = subagent_spawner
+
+    def _persist_terminal_task(self, task: Task) -> None:
+        if not self.task_store:
+            return
+        if task.status in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELED}:
+            self.task_store.add(task)
+
+    @staticmethod
+    def _mark_task_canceled(task: Task, reason: str) -> None:
+        if task.status == TaskStatus.CANCELED:
+            return
+        task.status = TaskStatus.CANCELED
+        task.error = reason
+        task.completed_at = task.completed_at or time.time()
+        task.add_event("canceled", {"reason": reason})
 
     async def start(self, mcp_servers: Optional[List[str]] = None) -> None:
         selected_servers = self.mcp_manager.resolve_server_names(
@@ -72,7 +100,11 @@ class GeminiAgent:
         try:
             prompt = self.context_builder.build(task.session_id, task.prompt)
             self.memory_manager.append_message(task.session_id, "user", task.prompt, {"task_id": task.id})
-            raw_output = await self.process.ask(prompt, timeout=task.timeout_s, session_id=task.session_id)
+            raw_output = await self.process.ask(
+                prompt,
+                timeout=_normalize_timeout(task.timeout_s),
+                session_id=task.session_id,
+            )
             parsed = strip_reasoning(clean_text(raw_output))
             task.result = parsed
             task.status = TaskStatus.COMPLETED
@@ -80,10 +112,11 @@ class GeminiAgent:
             task.add_event("completed", {"chars": len(parsed or "")})
             self.memory_manager.append_message(task.session_id, "assistant", parsed, {"task_id": task.id})
         except Exception as exc:  # pragma: no cover - defensive path
-            task.error = str(exc)
-            task.status = TaskStatus.FAILED
-            task.completed_at = time.time()
-            task.add_event("failed", {"error": task.error})
+            if task.status != TaskStatus.CANCELED:
+                task.error = str(exc)
+                task.status = TaskStatus.FAILED
+                task.completed_at = time.time()
+                task.add_event("failed", {"error": task.error})
         finally:
             self.current_task = None
             self.busy_since = None
@@ -91,6 +124,7 @@ class GeminiAgent:
                 self.state = AgentState.IDLE
             else:
                 self.state = AgentState.DEAD
+            self._persist_terminal_task(task)
 
         return task
 
@@ -146,9 +180,10 @@ class GeminiAgent:
         try:
             prompt = self.context_builder.build(task.session_id, task.prompt)
             self.memory_manager.append_message(task.session_id, "user", task.prompt, {"task_id": task.id})
+            timeout_s = _normalize_timeout(task.timeout_s)
 
             collected_events = []
-            async for event in self.process.ask_stream(prompt, timeout=task.timeout_s, session_id=task.session_id):
+            async for event in self.process.ask_stream(prompt, timeout=timeout_s, session_id=task.session_id):
                 collected_events.append(event)
                 yield event
 
@@ -166,7 +201,9 @@ class GeminiAgent:
                     stream_error = str(event.data.get("message") or event.data.get("error") or "unknown error")
 
             task.completed_at = time.time()
-            if result_error or (stream_error and not parsed):
+            if task.status == TaskStatus.CANCELED:
+                pass
+            elif result_error or (stream_error and not parsed):
                 task.error = result_error or stream_error
                 task.status = TaskStatus.FAILED
                 task.add_event("failed", {"error": task.error})
@@ -176,14 +213,15 @@ class GeminiAgent:
                 task.add_event("completed", {"chars": len(parsed)})
                 self.memory_manager.append_message(task.session_id, "assistant", parsed, {"task_id": task.id})
         except Exception as exc:
-            task.error = str(exc)
-            task.status = TaskStatus.FAILED
-            task.completed_at = time.time()
-            task.add_event("failed", {"error": task.error})
-            yield StreamEvent(
-                event_type=StreamEventType.ERROR,
-                data={"severity": "error", "message": task.error},
-            )
+            if task.status != TaskStatus.CANCELED:
+                task.error = str(exc)
+                task.status = TaskStatus.FAILED
+                task.completed_at = time.time()
+                task.add_event("failed", {"error": task.error})
+                yield StreamEvent(
+                    event_type=StreamEventType.ERROR,
+                    data={"severity": "error", "message": task.error},
+                )
         finally:
             self.current_task = None
             self.busy_since = None
@@ -191,3 +229,32 @@ class GeminiAgent:
                 self.state = AgentState.IDLE
             else:
                 self.state = AgentState.DEAD
+            self._persist_terminal_task(task)
+
+    async def cancel_task(self, task_id: str) -> Optional[Task]:
+        task = self.current_task
+        if not task or task.id != task_id:
+            return None
+
+        self._mark_task_canceled(task, "Canceled by API request")
+        if self.process and hasattr(self.process, "kill"):
+            await self.process.kill()
+        return task
+
+    async def delegate_to_subagent(
+        self,
+        prompt: str,
+        timeout_s: Optional[float] = None,
+        mcp_servers: Optional[List[str]] = None,
+        task_id: Optional[str] = None,
+    ):
+        if not self.subagent_spawner:
+            raise RuntimeError("Sub-agent spawner is not configured")
+        selected_servers = list(mcp_servers or self.mcp_servers)
+        return await self.subagent_spawner.spawn(
+            agent_id=self.id,
+            prompt=prompt,
+            timeout_s=timeout_s,
+            mcp_server_names=selected_servers,
+            parent_task_id=task_id,
+        )
