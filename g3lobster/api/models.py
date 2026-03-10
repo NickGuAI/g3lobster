@@ -14,6 +14,7 @@ class AgentCreateRequest(BaseModel):
     model: str = "gemini"
     mcp_servers: List[str] = Field(default_factory=lambda: ["*"])
     enabled: bool = True
+    dm_allowlist: List[str] = Field(default_factory=list)
 
 
 class AgentUpdateRequest(BaseModel):
@@ -24,6 +25,7 @@ class AgentUpdateRequest(BaseModel):
     mcp_servers: Optional[List[str]] = None
     enabled: Optional[bool] = None
     bot_user_id: Optional[str] = None
+    dm_allowlist: Optional[List[str]] = None
 
 
 class AgentResponse(BaseModel):
@@ -45,6 +47,7 @@ class AgentDetailResponse(AgentResponse):
     soul: str
     created_at: str
     updated_at: str
+    dm_allowlist: List[str] = Field(default_factory=list)
 
 
 class MemoryResponse(BaseModel):

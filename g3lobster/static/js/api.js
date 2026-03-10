@@ -207,3 +207,7 @@ export function deleteCronTask(agentId, taskId) {
     method: "DELETE",
   });
 }
+
+export function listMcpServers() {
+  return request("/agents/_mcp/servers", { method: "GET" });
+}

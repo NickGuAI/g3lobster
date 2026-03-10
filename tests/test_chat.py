@@ -26,6 +26,9 @@ class FakeMessagesAPI:
         self.created.append({"parent": parent, "body": body})
         return FakeCall({"name": "spaces/test/messages/1"})
 
+    def update(self, name, updateMask, body):
+        return FakeCall({"name": name})
+
 
 class FakeSpacesAPI:
     def __init__(self, messages_api):
@@ -55,6 +58,15 @@ class FakeRuntimeAgent:
         task.status = TaskStatus.COMPLETED
         task.result = "reply"
         return task
+
+    async def assign_stream(self, task):
+        from g3lobster.cli.streaming import StreamEvent, StreamEventType
+
+        result_task = await self.assign(task)
+        yield StreamEvent(
+            event_type=StreamEventType.RESULT,
+            data={"result": result_task.result or ""},
+        )
 
 
 class FakeRegistry:

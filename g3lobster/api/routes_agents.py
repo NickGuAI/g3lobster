@@ -119,6 +119,7 @@ async def create_agent(payload: AgentCreateRequest, request: Request) -> AgentDe
         model=payload.model,
         mcp_servers=payload.mcp_servers,
         enabled=payload.enabled,
+        dm_allowlist=list(payload.dm_allowlist),
     )
     saved = save_persona(config.agents.data_dir, persona)
 
@@ -131,6 +132,7 @@ async def create_agent(payload: AgentCreateRequest, request: Request) -> AgentDe
         "model": saved.model,
         "mcp_servers": list(saved.mcp_servers),
         "bot_user_id": saved.bot_user_id,
+        "dm_allowlist": list(saved.dm_allowlist),
         "state": "stopped",
         "uptime_s": 0,
         "current_task": None,
@@ -142,6 +144,7 @@ async def create_agent(payload: AgentCreateRequest, request: Request) -> AgentDe
         soul=saved.soul,
         created_at=saved.created_at,
         updated_at=saved.updated_at,
+        dm_allowlist=saved.dm_allowlist,
     )
 
 
@@ -193,6 +196,15 @@ async def list_global_knowledge(request: Request) -> KnowledgeListResponse:
     return KnowledgeListResponse(items=manager.list_knowledge())
 
 
+@router.get("/_mcp/servers")
+async def list_mcp_servers(request: Request) -> dict:
+    config = request.app.state.config
+    from g3lobster.mcp.loader import MCPConfigLoader
+    loader = MCPConfigLoader(config_dir=config.mcp.config_dir)
+    names = sorted(loader.load_all().keys())
+    return {"servers": names}
+
+
 @router.get("/{agent_id}", response_model=AgentDetailResponse)
 async def get_agent(agent_id: str, request: Request) -> AgentDetailResponse:
     config = request.app.state.config
@@ -207,6 +219,7 @@ async def get_agent(agent_id: str, request: Request) -> AgentDetailResponse:
         "model": persona.model,
         "mcp_servers": list(persona.mcp_servers),
         "bot_user_id": persona.bot_user_id,
+        "dm_allowlist": list(persona.dm_allowlist),
         "state": "stopped",
         "uptime_s": 0,
         "current_task": None,
@@ -218,6 +231,7 @@ async def get_agent(agent_id: str, request: Request) -> AgentDetailResponse:
         soul=persona.soul,
         created_at=persona.created_at,
         updated_at=persona.updated_at,
+        dm_allowlist=persona.dm_allowlist,
     )
 
 
@@ -246,6 +260,8 @@ async def update_agent(agent_id: str, payload: AgentUpdateRequest, request: Requ
     if "bot_user_id" in updates:
         raw = updates["bot_user_id"]
         persona.bot_user_id = str(raw).strip() if raw else None
+    if "dm_allowlist" in updates:
+        persona.dm_allowlist = [str(item) for item in (updates["dm_allowlist"] or [])]
 
     saved = save_persona(config.agents.data_dir, persona)
 
