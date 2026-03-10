@@ -51,8 +51,12 @@ class TmuxSession:
         args = ["new-session", "-d", "-s", self.name]
         if cwd:
             args.extend(["-c", cwd])
-        args.append(command)
         await self._run(*args, check=True)
+
+        # Keep pane output available after command exit so callers can poll
+        # completion and capture the exit sentinel before cleanup.
+        await self._run("set-option", "-t", self.name, "remain-on-exit", "on", check=False)
+        await self.send_keys(command)
 
     async def send_keys(self, text: str) -> None:
         await self._run("send-keys", "-t", self.name, text, "C-m", check=True)
