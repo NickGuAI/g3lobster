@@ -64,6 +64,10 @@ def _status_payload(request: Request) -> SetupStatus:
         completed=completed,
         space_id=config.chat.space_id,
         space_name=config.chat.space_name,
+        email_enabled=config.email.enabled,
+        email_base_address=config.email.base_address,
+        email_poll_interval_s=config.email.poll_interval_s,
+        debug_mode=config.debug_mode,
     )
 
 
@@ -237,3 +241,16 @@ async def stop_bridge(request: Request) -> dict:
         save_chat_config(config.chat, request.app.state.config_path)
 
     return {"stopped": True}
+
+
+@router.post("/debug-mode")
+async def toggle_debug_mode(request: Request) -> dict:
+    """Toggle global debug mode on/off."""
+    config = request.app.state.config
+    config.debug_mode = not config.debug_mode
+
+    bridge = request.app.state.chat_bridge
+    if bridge:
+        bridge.debug_mode = config.debug_mode
+
+    return {"debug_mode": config.debug_mode}

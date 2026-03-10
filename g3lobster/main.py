@@ -154,6 +154,7 @@ def build_runtime(config: AppConfig):
             seen_content=seen_content,
             auth_data_dir=chat_auth_dir,
             cron_store=cron_store,
+            debug_mode=config.debug_mode,
         )
 
     chat_bridge = chat_bridge_factory() if config.chat.enabled else None
