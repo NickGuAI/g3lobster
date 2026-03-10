@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from pathlib import Path
 
@@ -54,6 +55,29 @@ class FakeAgent:
         return task
 
 
+class BlockingAgent(FakeAgent):
+    def __init__(self, agent_id: str, gates: dict[str, threading.Event]):
+        super().__init__(agent_id)
+        self._gates = gates
+
+    async def assign(self, task):
+        self.current_task = task
+        self.busy_since = time.time()
+        self.state = AgentState.BUSY
+        task.status = TaskStatus.RUNNING
+        task.started_at = time.time()
+        gate = self._gates.setdefault(self.id, threading.Event())
+        while not gate.is_set():
+            await asyncio.sleep(0.01)
+        task.status = TaskStatus.COMPLETED
+        task.result = f"done:{task.prompt}:by:{self.id}"
+        task.completed_at = time.time()
+        self.current_task = None
+        self.busy_since = None
+        self.state = AgentState.IDLE
+        return task
+
+
 class FakeRuntime:
     def __init__(self, agent_id: str, pending: int = 0, busy: bool = False):
         self.id = agent_id
@@ -86,13 +110,15 @@ class FakeAgentRegistry:
         return False
 
 
-def _build_control_plane_app(tmp_path: Path):
+def _build_control_plane_app(tmp_path: Path, agent_factory=None):
     data_dir = tmp_path / "data"
 
     config = AppConfig()
     config.agents.data_dir = str(data_dir)
     config.agents.health_check_interval_s = 3600
     config.chat.enabled = False
+    if agent_factory is None:
+        agent_factory = lambda persona, _memory, _context: FakeAgent(persona.id)
 
     registry = AgentRegistry(
         data_dir=str(data_dir),
@@ -100,7 +126,7 @@ def _build_control_plane_app(tmp_path: Path):
         health_check_interval_s=config.agents.health_check_interval_s,
         stuck_timeout_s=config.agents.stuck_timeout_s,
         queue_depth_limit=config.control_plane.queue_depth,
-        agent_factory=lambda persona, _memory, _context: FakeAgent(persona.id),
+        agent_factory=agent_factory,
     )
 
     task_registry = TaskRegistry(max_tasks=100)
@@ -127,6 +153,17 @@ def _build_control_plane_app(tmp_path: Path):
         control_plane=control_plane,
     )
     return app, data_dir
+
+
+def _wait_for_current_task(client: TestClient, agent_id: str, timeout_s: float = 2.0) -> bool:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        payload = client.get("/control-plane/status").json()
+        for item in payload.get("agents", []):
+            if item.get("id") == agent_id and item.get("current_task"):
+                return True
+        time.sleep(0.02)
+    return False
 
 
 def test_task_unit_state_machine_transitions() -> None:
@@ -261,3 +298,51 @@ def test_control_plane_routes_submit_status_and_delegate(tmp_path: Path) -> None
         sessions = client.get("/control-plane/sessions")
         assert sessions.status_code == 200
         assert sessions.json() == {"sessions": []}
+
+
+def test_control_plane_delegate_cycle_detected_without_parent_task_id(tmp_path: Path) -> None:
+    gates = {
+        "athena": threading.Event(),
+        "hermes": threading.Event(),
+    }
+    app, data_dir = _build_control_plane_app(
+        tmp_path,
+        agent_factory=lambda persona, _memory, _context: BlockingAgent(persona.id, gates),
+    )
+    save_persona(str(data_dir), AgentPersona(id="athena", name="Athena", soul="Research"))
+    save_persona(str(data_dir), AgentPersona(id="hermes", name="Hermes", soul="Execute"))
+
+    with TestClient(app) as client:
+        root = client.post(
+            "/control-plane/tasks",
+            json={"prompt": "root task", "agent_id": "athena", "wait": False},
+        )
+        assert root.status_code == 200
+        assert _wait_for_current_task(client, "athena")
+
+        first_delegate = client.post(
+            "/control-plane/delegate",
+            json={
+                "parent_agent_id": "athena",
+                "agent_name": "hermes",
+                "prompt": "delegate to hermes",
+                "wait": False,
+            },
+        )
+        assert first_delegate.status_code == 200
+        assert _wait_for_current_task(client, "hermes")
+
+        cycle = client.post(
+            "/control-plane/delegate",
+            json={
+                "parent_agent_id": "hermes",
+                "agent_name": "athena",
+                "prompt": "delegate back to athena",
+                "wait": False,
+            },
+        )
+        assert cycle.status_code == 422
+        assert "cycle" in cycle.json()["detail"].lower()
+
+        gates["athena"].set()
+        gates["hermes"].set()

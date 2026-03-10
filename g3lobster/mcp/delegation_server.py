@@ -81,6 +81,13 @@ def _build_delegate_task_tool_schema() -> Dict[str, Any]:
                     "description": "Timeout in seconds (default 300).",
                     "default": 300.0,
                 },
+                "parent_task_id": {
+                    "type": "string",
+                    "description": (
+                        "Optional parent control-plane task ID. "
+                        "When omitted, the server will try to resolve it from env vars."
+                    ),
+                },
             },
             "required": ["prompt"],
         },
@@ -193,6 +200,10 @@ class DelegationMCPHandler:
         """Resolve the parent session ID from environment."""
         return os.environ.get("G3LOBSTER_SESSION_ID", "default")
 
+    def _resolve_parent_task_id(self) -> Optional[str]:
+        """Resolve the active control-plane task ID from environment."""
+        return os.environ.get("G3LOBSTER_PARENT_TASK_ID") or os.environ.get("G3LOBSTER_TASK_ID")
+
     def _delegate_to_agent(
         self, req_id: Any, arguments: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -215,6 +226,7 @@ class DelegationMCPHandler:
         agent_name = arguments.get("agent_name", "") or None
         wait = bool(arguments.get("wait", True))
         timeout_s = float(arguments.get("timeout_s", 300.0))
+        parent_task_id = arguments.get("parent_task_id") or self._resolve_parent_task_id()
 
         if not prompt:
             return self._respond(req_id, {
@@ -246,6 +258,8 @@ class DelegationMCPHandler:
             "parent_session_id": parent_session,
             "timeout_s": timeout_s,
         }
+        if parent_task_id:
+            payload["parent_task_id"] = str(parent_task_id)
 
         try:
             import urllib.request

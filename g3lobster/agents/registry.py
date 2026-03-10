@@ -33,7 +33,7 @@ class RegisteredAgent:
     context_builder: ContextBuilder
     max_queue_depth: int = 5
     _assign_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    _queue: "asyncio.Queue[Tuple[Any, asyncio.Future, Optional[Callable[[], None]]]]" = field(
+    _queue: "asyncio.Queue[Tuple[Any, asyncio.Future, Optional[Callable[[], None]], Optional[asyncio.Queue]]]" = field(
         default_factory=asyncio.Queue
     )
     _queue_worker: Optional[asyncio.Task] = None
@@ -73,17 +73,35 @@ class RegisteredAgent:
 
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
-        await self._queue.put((task, future, on_started))
+        await self._queue.put((task, future, on_started, None))
         self._ensure_queue_worker()
         return await future
 
     async def assign_stream(self, task):
-        """Assign a task and yield streaming events, serialising with the assign lock."""
+        """Assign a task and yield streaming events using the same FIFO queue as assign()."""
         if self.queue_load >= self.max_queue_depth:
             raise RuntimeError(f"Agent {self.id} queue is full")
-        async with self._assign_lock:
-            async for event in self.agent.assign_stream(task):
-                yield event
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        stream_queue: asyncio.Queue = asyncio.Queue()
+        await self._queue.put((task, future, None, stream_queue))
+        self._ensure_queue_worker()
+
+        while True:
+            kind, payload = await stream_queue.get()
+            if kind == "event":
+                yield payload
+                continue
+            if kind == "error":
+                if isinstance(payload, BaseException):
+                    raise payload
+                raise RuntimeError(str(payload))
+            if kind == "done":
+                break
+
+        if not future.done():
+            await future
 
     async def stop(self) -> None:
         if self._queue_worker and not self._queue_worker.done():
@@ -99,22 +117,40 @@ class RegisteredAgent:
 
     async def _queue_loop(self) -> None:
         while True:
-            task, future, on_started = await self._queue.get()
+            task, future, on_started, stream_queue = await self._queue.get()
             try:
                 async with self._assign_lock:
                     if callable(on_started):
                         on_started()
-                    result = await self.agent.assign(task)
-                if not future.done():
-                    future.set_result(result)
+                    if stream_queue is None:
+                        result = await self.agent.assign(task)
+                        if not future.done():
+                            future.set_result(result)
+                    else:
+                        async for event in self.agent.assign_stream(task):
+                            await stream_queue.put(("event", event))
+                        if not future.done():
+                            future.set_result(task)
             except asyncio.CancelledError:
-                if not future.done():
-                    future.set_exception(asyncio.CancelledError())
+                if stream_queue is None:
+                    if not future.done():
+                        future.set_exception(asyncio.CancelledError())
+                else:
+                    await stream_queue.put(("error", asyncio.CancelledError()))
+                    if not future.done():
+                        future.set_result(task)
                 raise
             except Exception as exc:
-                if not future.done():
-                    future.set_exception(exc)
+                if stream_queue is None:
+                    if not future.done():
+                        future.set_exception(exc)
+                else:
+                    await stream_queue.put(("error", exc))
+                    if not future.done():
+                        future.set_result(task)
             finally:
+                if stream_queue is not None:
+                    await stream_queue.put(("done", None))
                 self._queue.task_done()
 
 

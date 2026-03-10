@@ -90,6 +90,20 @@ def _parse_status(raw: Optional[str]) -> Optional[TaskUnitStatus]:
         raise HTTPException(status_code=422, detail=f"Unknown status: {raw}") from exc
 
 
+def _resolve_parent_task_id(control_plane, payload: DelegateRequest) -> Optional[str]:
+    if payload.parent_task_id:
+        return payload.parent_task_id
+
+    active = control_plane.task_registry.list(
+        status=TaskUnitStatus.WORKING,
+        agent_id=payload.parent_agent_id,
+        limit=1,
+    )
+    if not active:
+        return None
+    return active[0].id
+
+
 @router.post("/tasks")
 async def create_task(payload: TaskSubmitRequest, request: Request) -> Dict[str, Any]:
     control_plane = _control_plane(request)
@@ -202,13 +216,14 @@ async def status(request: Request) -> Dict[str, Any]:
 @router.post("/delegate")
 async def delegate(payload: DelegateRequest, request: Request) -> Dict[str, Any]:
     control_plane = _control_plane(request)
+    parent_task_id = _resolve_parent_task_id(control_plane, payload)
 
     if payload.agent_name and payload.agent_name == payload.parent_agent_id:
         raise HTTPException(status_code=422, detail="Circular delegation is not allowed")
 
-    if payload.agent_name and payload.parent_task_id:
+    if payload.agent_name:
         blocked_agents = {payload.parent_agent_id}
-        cursor = control_plane.task_registry.get(payload.parent_task_id)
+        cursor = control_plane.task_registry.get(parent_task_id) if parent_task_id else None
         while cursor is not None:
             if cursor.agent_id:
                 blocked_agents.add(cursor.agent_id)
@@ -222,11 +237,13 @@ async def delegate(payload: DelegateRequest, request: Request) -> Dict[str, Any]
     metadata.setdefault("session_id", payload.parent_session_id)
     metadata.setdefault("timeout_s", payload.timeout_s)
     metadata.setdefault("delegated_by", payload.parent_agent_id)
+    if parent_task_id:
+        metadata.setdefault("parent_task_id", parent_task_id)
 
     task = TaskUnit(
         prompt=payload.prompt,
         source="agent",
-        parent_id=payload.parent_task_id,
+        parent_id=parent_task_id,
         metadata=metadata,
     )
     control_plane.task_registry.add(task)
