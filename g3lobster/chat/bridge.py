@@ -70,6 +70,7 @@ class ChatBridge:
         auth_data_dir: Optional[str] = None,
         cron_store: Optional["CronStore"] = None,
         seen_content_max_size: int = 10_000,
+        debug_mode: bool = False,
     ):
         self.registry = registry
         self.poll_interval_s = poll_interval_s
@@ -78,6 +79,7 @@ class ChatBridge:
         self.spaces_config = Path(spaces_config or (Path.home() / ".gemini" / "chat_bridge_spaces.json"))
         self.auth_data_dir = auth_data_dir
         self.cron_store = cron_store
+        self.debug_mode = debug_mode
 
         self.space_id = space_id
         self._poll_task: Optional[asyncio.Task] = None
@@ -295,29 +297,27 @@ class ChatBridge:
 
         if not final_error and task.status == TaskStatus.FAILED:
             final_error = task.error or "unknown error"
-        if not final_result and task.status == TaskStatus.COMPLETED:
+        if not final_result:
             final_result = (task.result or accumulate_text(stream_events)).strip()
 
-        if task.status == TaskStatus.COMPLETED and final_result:
-            await self.send_message(
-                f"{persona.emoji} {persona.name}: {final_result}",
-                thread_id=thread_id,
-            )
-        elif final_error:
-            await self.send_message(
-                f"{persona.emoji} {persona.name}: error: {final_error}",
-                thread_id=thread_id,
-            )
+        if task.status == TaskStatus.FAILED and final_error:
+            reply_text = f"{persona.emoji} {persona.name}: error: {final_error}"
+            if self.debug_mode:
+                reply_text += f"\n```\n{final_error}\n```"
         elif final_result:
-            await self.send_message(
-                f"{persona.emoji} {persona.name}: {final_result}",
-                thread_id=thread_id,
-            )
+            reply_text = f"{persona.emoji} {persona.name}: {final_result}"
+        elif final_error:
+            reply_text = f"{persona.emoji} {persona.name}: error: {final_error}"
+            if self.debug_mode:
+                reply_text += f"\n```\n{final_error}\n```"
         else:
-            await self.send_message(
-                f"{persona.emoji} {persona.name}: task canceled",
-                thread_id=thread_id,
-            )
+            reply_text = f"{persona.emoji} {persona.name}: task finished with no output"
+
+        # Update the thinking message in-place (no extra new message).
+        if thinking_name:
+            await self.update_message(thinking_name, reply_text)
+        else:
+            await self.send_message(reply_text, thread_id=thread_id)
 
     async def send_message(self, text: str, thread_id: Optional[str] = None) -> dict:
         body = {"text": text}

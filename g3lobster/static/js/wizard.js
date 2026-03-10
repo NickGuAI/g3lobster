@@ -10,6 +10,7 @@ import {
   startBridge,
   testAgent,
   testAuth,
+  toggleDebugMode,
   uploadCredentials,
 } from "./api.js";
 
@@ -282,6 +283,13 @@ export async function render(root, { status, onComplete }) {
       .map(([label, ok]) => `<li>${ok ? "✅" : "⬜"} ${label}</li>`)
       .join("");
 
+    const emailStatus = lastStatus.email_enabled
+      ? `enabled — ${escapeHtml(lastStatus.email_base_address || "(no address)")} (poll: ${lastStatus.email_poll_interval_s}s)`
+      : "disabled";
+
+    const debugLabel = lastStatus.debug_mode ? "ON" : "OFF";
+    const debugClass = lastStatus.debug_mode ? "ok" : "";
+
     return `
       <div class="step-panel">
         <h2>Launch</h2>
@@ -290,6 +298,20 @@ export async function render(root, { status, onComplete }) {
         <div class="actions">
           <button class="btn btn-primary" id="launch-btn">Launch Bridge + Agents</button>
         </div>
+      </div>
+      <div class="step-panel">
+        <h2>Email Bridge</h2>
+        <p class="agent-meta">Email bridge status: <strong>${emailStatus}</strong></p>
+        <p class="agent-meta">Configure email settings in <code>config.yaml</code> under the <code>email</code> section.</p>
+      </div>
+      <div class="step-panel">
+        <h2>Debug Mode</h2>
+        <p class="agent-meta">When enabled, error details are sent to the Google Chat thread instead of generic messages.</p>
+        <div class="actions">
+          <span class="status-pill ${debugClass}">${escapeHtml(debugLabel)}</span>
+          <button class="btn btn-secondary" id="toggle-debug-btn">Toggle Debug Mode</button>
+        </div>
+        <p class="agent-meta">Override via env: <code>G3LOBSTER_DEBUG_MODE=true</code></p>
       </div>
     `;
   }
@@ -484,6 +506,18 @@ export async function render(root, { status, onComplete }) {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         setNotice("error", `Failed to send test message: ${message}`);
+      }
+      rerender();
+    });
+
+    root.querySelector("#toggle-debug-btn")?.addEventListener("click", async () => {
+      try {
+        const result = await toggleDebugMode();
+        lastStatus.debug_mode = result.debug_mode;
+        setNotice("success", `Debug mode ${result.debug_mode ? "enabled" : "disabled"}.`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        setNotice("error", `Failed to toggle debug mode: ${message}`);
       }
       rerender();
     });
