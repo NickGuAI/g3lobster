@@ -13,6 +13,15 @@ from g3lobster.pool.types import AgentState
 from g3lobster.tasks.types import Task, TaskStatus
 
 
+def _normalize_timeout(timeout_s: Optional[float]) -> Optional[float]:
+    if timeout_s is None:
+        return None
+    timeout_value = float(timeout_s)
+    if timeout_value <= 0:
+        return None
+    return timeout_value
+
+
 class GeminiAgent:
     """Represents a single long-lived Gemini CLI worker."""
 
@@ -72,7 +81,11 @@ class GeminiAgent:
         try:
             prompt = self.context_builder.build(task.session_id, task.prompt)
             self.memory_manager.append_message(task.session_id, "user", task.prompt, {"task_id": task.id})
-            raw_output = await self.process.ask(prompt, timeout=task.timeout_s, session_id=task.session_id)
+            raw_output = await self.process.ask(
+                prompt,
+                timeout=_normalize_timeout(task.timeout_s),
+                session_id=task.session_id,
+            )
             parsed = strip_reasoning(clean_text(raw_output))
             task.result = parsed
             task.status = TaskStatus.COMPLETED
@@ -146,9 +159,10 @@ class GeminiAgent:
         try:
             prompt = self.context_builder.build(task.session_id, task.prompt)
             self.memory_manager.append_message(task.session_id, "user", task.prompt, {"task_id": task.id})
+            timeout_s = _normalize_timeout(task.timeout_s)
 
             collected_events = []
-            async for event in self.process.ask_stream(prompt, timeout=task.timeout_s, session_id=task.session_id):
+            async for event in self.process.ask_stream(prompt, timeout=timeout_s, session_id=task.session_id):
                 collected_events.append(event)
                 yield event
 

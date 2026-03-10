@@ -18,9 +18,25 @@ class HealthIssue:
 class HealthInspector:
     """Detects dead and stuck agents from runtime metadata."""
 
+    @staticmethod
+    def _task_has_timeout(agent: object) -> bool:
+        task = getattr(agent, "current_task", None)
+        if task is None:
+            return True
+
+        timeout_s = getattr(task, "timeout_s", None)
+        if timeout_s is None:
+            return False
+
+        try:
+            return float(timeout_s) > 0
+        except (TypeError, ValueError):
+            return True
+
     def inspect(self, agents: List[object], stuck_timeout_s: int) -> List[HealthIssue]:
         now = time.time()
         issues: List[HealthIssue] = []
+        stuck_enabled = stuck_timeout_s > 0
 
         for agent in agents:
             state = getattr(agent, "state", None)
@@ -28,7 +44,12 @@ class HealthInspector:
 
             if state == AgentState.BUSY:
                 busy_since = getattr(agent, "busy_since", None)
-                if busy_since and (now - busy_since) > stuck_timeout_s:
+                if (
+                    stuck_enabled
+                    and busy_since
+                    and self._task_has_timeout(agent)
+                    and (now - busy_since) > stuck_timeout_s
+                ):
                     issues.append(HealthIssue(agent_id=agent_id, issue="stuck"))
                 continue
 
