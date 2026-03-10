@@ -92,6 +92,17 @@ class SubagentConfig:
 
 
 @dataclass
+class ControlPlaneConfig:
+    enabled: bool = True
+    queue_depth: int = 5
+    max_tasks: int = 5000
+    tmux_enabled: bool = False
+    tmux_session_prefix: str = "g3l"
+    tmux_idle_ttl_s: float = 1800.0
+    tmux_max_sessions_per_agent: int = 2
+
+
+@dataclass
 class AppConfig:
     agents: AgentsConfig = field(default_factory=AgentsConfig)
     gemini: GeminiConfig = field(default_factory=GeminiConfig)
@@ -102,6 +113,7 @@ class AppConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
     subagent: SubagentConfig = field(default_factory=SubagentConfig)
+    control_plane: ControlPlaneConfig = field(default_factory=ControlPlaneConfig)
     debug_mode: bool = False
 
 
@@ -200,6 +212,9 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         server=ServerConfig(**_filter_fields(ServerConfig, data.get("server") or {}, "server")),
         alerts=AlertsConfig(**_filter_fields(AlertsConfig, data.get("alerts") or {}, "alerts")),
         subagent=SubagentConfig(**_filter_fields(SubagentConfig, data.get("subagent") or {}, "subagent")),
+        control_plane=ControlPlaneConfig(
+            **_filter_fields(ControlPlaneConfig, data.get("control_plane") or {}, "control_plane")
+        ),
         debug_mode=bool(data.get("debug_mode", False)),
     )
 
@@ -212,6 +227,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     _apply_env_overrides("server", config.server)
     _apply_env_overrides("alerts", config.alerts)
     _apply_env_overrides("subagent", config.subagent)
+    _apply_env_overrides("control_plane", config.control_plane)
 
     debug_env = os.environ.get("G3LOBSTER_DEBUG_MODE", "")
     if debug_env:
