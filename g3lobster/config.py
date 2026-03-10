@@ -26,7 +26,7 @@ class AgentsConfig:
     memory_max_sections: int = 50
     context_messages: int = 12
     health_check_interval_s: int = 30
-    stuck_timeout_s: int = 300
+    stuck_timeout_s: int = 0  # 0 disables stuck-agent auto-restart
 
 
 @dataclass
@@ -34,7 +34,7 @@ class GeminiConfig:
     command: str = "gemini"
     args: List[str] = field(default_factory=lambda: ["-y"])
     workspace_dir: str = "."
-    response_timeout_s: float = 120.0
+    response_timeout_s: float = 0.0  # 0 disables per-task timeout
     idle_read_window_s: float = 0.6
 
 
@@ -176,7 +176,7 @@ def _legacy_agents_section(data: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         "memory_max_sections": memory.get("memory_max_sections", 50),
         "context_messages": memory.get("context_messages", 12),
         "health_check_interval_s": pool.get("health_check_interval_s", 30),
-        "stuck_timeout_s": pool.get("stuck_timeout_s", 300),
+        "stuck_timeout_s": pool.get("stuck_timeout_s", 0),
     }
 
 

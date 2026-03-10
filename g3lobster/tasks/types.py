@@ -56,7 +56,7 @@ class TaskEvent:
 class Task:
     prompt: str
     priority: TaskPriority = TaskPriority.NORMAL
-    timeout_s: float = 120.0
+    timeout_s: Optional[float] = 120.0
     mcp_servers: List[str] = field(default_factory=list)
     session_id: str = "default"
     id: str = field(default_factory=lambda: str(uuid.uuid4()))

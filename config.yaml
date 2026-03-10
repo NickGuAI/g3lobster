@@ -7,13 +7,13 @@ agents:
   memory_max_sections: 50
   context_messages: 12
   health_check_interval_s: 30
-  stuck_timeout_s: 300
+  stuck_timeout_s: 0  # 0 = disabled
 gemini:
   command: gemini
   args:
   - -y
   workspace_dir: .
-  response_timeout_s: 120
+  response_timeout_s: 0  # 0 = no per-task timeout
   idle_read_window_s: 0.6
 mcp:
   config_dir: ./config/mcp

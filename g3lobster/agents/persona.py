@@ -25,6 +25,7 @@ class AgentPersona:
     emoji: str = "🤖"
     soul: str = ""
     model: str = "gemini"
+    response_timeout_s: Optional[float] = None
     mcp_servers: List[str] = field(default_factory=lambda: ["*"])
     bot_user_id: Optional[str] = None
     enabled: bool = True
@@ -44,6 +45,10 @@ class AgentPersona:
         self.emoji = self.emoji.strip() or "🤖"
         self.soul = self.soul.strip()
         self.model = self.model.strip() or "gemini"
+        if self.response_timeout_s is not None:
+            self.response_timeout_s = float(self.response_timeout_s)
+            if self.response_timeout_s < 0:
+                raise ValueError("response_timeout_s must be >= 0 when provided")
         self.mcp_servers = [str(item).strip() for item in self.mcp_servers if str(item).strip()] or ["*"]
         if self.bot_user_id:
             self.bot_user_id = str(self.bot_user_id).strip() or None
@@ -62,6 +67,7 @@ class AgentPersona:
             "name": self.name,
             "emoji": self.emoji,
             "model": self.model,
+            "response_timeout_s": self.response_timeout_s,
             "mcp_servers": list(self.mcp_servers),
             "bot_user_id": self.bot_user_id,
             "enabled": bool(self.enabled),
@@ -75,6 +81,15 @@ class AgentPersona:
 
 def _utc_now() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
+
+
+def _parse_timeout(value: object) -> Optional[float]:
+    if value is None:
+        return None
+    timeout_s = float(value)
+    if timeout_s < 0:
+        raise ValueError("response_timeout_s must be >= 0 when provided")
+    return timeout_s
 
 
 def is_valid_agent_id(agent_id: str) -> bool:
@@ -162,6 +177,7 @@ def load_persona(data_dir: str, agent_id: str, *, skip_migration: bool = False) 
         emoji=str(payload.get("emoji", "🤖")),
         soul=soul,
         model=str(payload.get("model", "gemini")),
+        response_timeout_s=_parse_timeout(payload.get("response_timeout_s")),
         mcp_servers=list(payload.get("mcp_servers") or ["*"]),
         bot_user_id=payload.get("bot_user_id"),
         enabled=bool(payload.get("enabled", True)),
@@ -187,6 +203,7 @@ def save_persona(data_dir: str, persona: AgentPersona) -> AgentPersona:
         emoji=persona.emoji,
         soul=persona.soul,
         model=persona.model,
+        response_timeout_s=persona.response_timeout_s,
         mcp_servers=list(persona.mcp_servers),
         bot_user_id=persona.bot_user_id,
         enabled=persona.enabled,
