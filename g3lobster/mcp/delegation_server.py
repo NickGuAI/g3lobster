@@ -53,6 +53,40 @@ def _build_delegate_tool_schema() -> Dict[str, Any]:
     }
 
 
+def _build_delegate_task_tool_schema() -> Dict[str, Any]:
+    return {
+        "name": "delegate_task",
+        "description": (
+            "Delegate a subtask to another agent or let the dispatcher select one. "
+            "Use wait=true to block for the result, or wait=false for async polling."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "agent_name": {
+                    "type": "string",
+                    "description": "Optional target agent ID. Omit to auto-select the least-busy agent.",
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "Subtask prompt to delegate.",
+                },
+                "wait": {
+                    "type": "boolean",
+                    "description": "Wait for completion before returning (default true).",
+                    "default": True,
+                },
+                "timeout_s": {
+                    "type": "number",
+                    "description": "Timeout in seconds (default 300).",
+                    "default": 300.0,
+                },
+            },
+            "required": ["prompt"],
+        },
+    }
+
+
 def _build_list_agents_tool_schema() -> Dict[str, Any]:
     return {
         "name": "list_agents",
@@ -122,6 +156,7 @@ class DelegationMCPHandler:
         if method == "tools/list":
             return self._respond(req_id, {
                 "tools": [
+                    _build_delegate_task_tool_schema(),
                     _build_delegate_tool_schema(),
                     _build_list_agents_tool_schema(),
                     _build_sleep_tool_schema(),
@@ -139,6 +174,8 @@ class DelegationMCPHandler:
         tool_name = params.get("name", "")
         arguments = params.get("arguments", {})
 
+        if tool_name == "delegate_task":
+            return self._delegate_task(req_id, arguments)
         if tool_name == "delegate_to_agent":
             return self._delegate_to_agent(req_id, arguments)
         if tool_name == "list_agents":
@@ -161,11 +198,27 @@ class DelegationMCPHandler:
     ) -> Dict[str, Any]:
         agent_id = arguments.get("agent_id", "")
         task = arguments.get("task", "")
+        return self._delegate_task(
+            req_id,
+            {
+                "agent_name": agent_id,
+                "prompt": task,
+                "wait": True,
+                "timeout_s": float(arguments.get("timeout_s", 300.0)),
+            },
+        )
+
+    def _delegate_task(
+        self, req_id: Any, arguments: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        prompt = arguments.get("prompt", "")
+        agent_name = arguments.get("agent_name", "") or None
+        wait = bool(arguments.get("wait", True))
         timeout_s = float(arguments.get("timeout_s", 300.0))
 
-        if not agent_id or not task:
+        if not prompt:
             return self._respond(req_id, {
-                "content": [{"type": "text", "text": "Error: agent_id and task are required"}],
+                "content": [{"type": "text", "text": "Error: prompt is required"}],
                 "isError": True,
             })
 
@@ -187,15 +240,16 @@ class DelegationMCPHandler:
         # Build the REST API request payload
         payload = {
             "parent_agent_id": parent_id,
-            "child_agent_id": agent_id,
-            "task": task,
+            "agent_name": agent_name,
+            "prompt": prompt,
+            "wait": wait,
             "parent_session_id": parent_session,
             "timeout_s": timeout_s,
         }
 
         try:
             import urllib.request
-            url = f"{self.base_url}/delegation/run"
+            url = f"{self.base_url}/control-plane/delegate"
             data = json.dumps(payload).encode("utf-8")
             req = urllib.request.Request(
                 url,
@@ -206,14 +260,21 @@ class DelegationMCPHandler:
             with urllib.request.urlopen(req, timeout=int(timeout_s) + 30) as resp:
                 result = json.loads(resp.read().decode("utf-8"))
 
-            if result.get("error"):
-                text = f"Delegation failed: {result['error']}"
-            else:
+            error = result.get("error")
+            status = str(result.get("status", ""))
+            task_id = result.get("task_id")
+            if error:
+                text = f"Delegation failed: {error}"
+            elif not wait and task_id:
+                text = f"Delegated task queued: {task_id}"
+            elif status == "completed":
                 text = result.get("result", "Delegation completed (no result text)")
+            else:
+                text = f"Delegation status: {status or 'queued'}"
 
             return self._respond(req_id, {
                 "content": [{"type": "text", "text": text}],
-                "isError": bool(result.get("error")),
+                "isError": bool(error),
             })
         except Exception as exc:
             return self._respond(req_id, {

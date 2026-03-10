@@ -34,3 +34,11 @@ alerts:
   email_address: ""
   min_severity: warning
   rate_limit_s: 300
+control_plane:
+  enabled: true
+  queue_depth: 5
+  max_tasks: 5000
+  tmux_enabled: false
+  tmux_session_prefix: g3l
+  tmux_idle_ttl_s: 1800
+  tmux_max_sessions_per_agent: 2
