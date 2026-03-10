@@ -30,6 +30,7 @@ from g3lobster.api.models import (
     SleepAgentRequest,
     TestAgentRequest,
 )
+from g3lobster.config import normalize_space_id
 from g3lobster.memory.global_memory import GlobalMemoryManager
 from g3lobster.memory.manager import MemoryManager
 
@@ -38,17 +39,6 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 
 def _to_agent_response(payload: Dict[str, object]) -> AgentResponse:
     return AgentResponse(**payload)
-
-
-def _normalize_space_id(raw: object) -> Optional[str]:
-    value = str(raw or "").strip()
-    if not value:
-        return None
-    if value.startswith("space/") and not value.startswith("spaces/"):
-        value = "spaces/" + value[len("space/"):]
-    if not value.startswith("spaces/"):
-        value = "spaces/" + value
-    return value
 
 
 async def _status_map(request: Request) -> Dict[str, Dict[str, object]]:
@@ -171,9 +161,9 @@ async def create_agent(payload: AgentCreateRequest, request: Request) -> AgentDe
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     if "space_id" in payload.model_fields_set:
-        space_id = _normalize_space_id(payload.space_id)
+        space_id = normalize_space_id(payload.space_id)
     else:
-        space_id = _normalize_space_id(config.chat.space_id)
+        space_id = normalize_space_id(config.chat.space_id)
     if "bridge_enabled" in payload.model_fields_set:
         bridge_enabled = bool(payload.bridge_enabled)
     else:
@@ -343,7 +333,7 @@ async def update_agent(agent_id: str, payload: AgentUpdateRequest, request: Requ
     if "dm_allowlist" in updates:
         persona.dm_allowlist = [str(item) for item in (updates["dm_allowlist"] or [])]
     if "space_id" in updates:
-        persona.space_id = _normalize_space_id(updates["space_id"])
+        persona.space_id = normalize_space_id(updates["space_id"])
     if "bridge_enabled" in updates:
         persona.bridge_enabled = bool(updates["bridge_enabled"])
 

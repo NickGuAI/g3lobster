@@ -109,6 +109,18 @@ def _to_bool(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def normalize_space_id(raw: object) -> Optional[str]:
+    """Normalize Google Chat space ids to ``spaces/<id>`` format."""
+    value = str(raw or "").strip()
+    if not value:
+        return None
+    if value.startswith("space/") and not value.startswith("spaces/"):
+        value = "spaces/" + value[len("space/"):]
+    if not value.startswith("spaces/"):
+        value = "spaces/" + value
+    return value
+
+
 def _coerce_value(raw: str, current: Any) -> Any:
     if isinstance(current, bool):
         return _to_bool(raw)

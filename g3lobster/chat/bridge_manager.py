@@ -6,6 +6,7 @@ import logging
 from typing import Callable, Dict, List, Optional, Set
 
 from g3lobster.agents.persona import list_personas, save_persona
+from g3lobster.config import normalize_space_id
 
 logger = logging.getLogger(__name__)
 
@@ -22,25 +23,14 @@ class BridgeManager:
     ) -> None:
         self.registry = registry
         self.bridge_factory = bridge_factory
-        self.legacy_space_id: Optional[str] = self._normalize_space_id(legacy_space_id)
+        self.legacy_space_id: Optional[str] = normalize_space_id(legacy_space_id)
 
         self._bridges_by_space: Dict[str, object] = {}
         self._space_agents: Dict[str, Set[str]] = {}
         self._agent_to_space: Dict[str, str] = {}
 
-    @staticmethod
-    def _normalize_space_id(raw: Optional[str]) -> Optional[str]:
-        value = str(raw or "").strip()
-        if not value:
-            return None
-        if value.startswith("space/") and not value.startswith("spaces/"):
-            value = "spaces/" + value[len("space/"):]
-        if not value.startswith("spaces/"):
-            value = "spaces/" + value
-        return value
-
     def set_legacy_space_id(self, space_id: Optional[str]) -> None:
-        self.legacy_space_id = self._normalize_space_id(space_id)
+        self.legacy_space_id = normalize_space_id(space_id)
 
     def _apply_legacy_space_defaults(self) -> int:
         """Migrate legacy chat.space_id to per-agent fields when needed."""
@@ -77,7 +67,7 @@ class BridgeManager:
         for persona in list_personas(self.registry.data_dir):
             if not persona.bridge_enabled:
                 continue
-            if not self._normalize_space_id(persona.space_id):
+            if not normalize_space_id(persona.space_id):
                 continue
             await self.start_bridge(persona.id)
             started += 1
@@ -98,7 +88,7 @@ class BridgeManager:
         if not persona.bridge_enabled:
             return False
 
-        space_id = self._normalize_space_id(persona.space_id)
+        space_id = normalize_space_id(persona.space_id)
         if not space_id:
             return False
 
@@ -126,9 +116,6 @@ class BridgeManager:
                 bridge.set_agent_filter(set(target_agents))
             if not getattr(bridge, "is_running", False):
                 await bridge.start()
-
-        if hasattr(bridge, "set_agent_filter"):
-            bridge.set_agent_filter(set(target_agents))
         self._space_agents[space_id] = target_agents
         self._agent_to_space[agent_id] = space_id
         return True
@@ -173,7 +160,7 @@ class BridgeManager:
         self._apply_legacy_space_defaults()
         payload: List[Dict[str, object]] = []
         for persona in list_personas(self.registry.data_dir):
-            configured_space = self._normalize_space_id(persona.space_id)
+            configured_space = normalize_space_id(persona.space_id)
             running_bridge = self.get_bridge(persona.id)
             payload.append(
                 {
@@ -185,4 +172,3 @@ class BridgeManager:
                 }
             )
         return payload
-

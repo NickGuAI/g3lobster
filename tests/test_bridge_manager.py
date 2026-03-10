@@ -12,6 +12,7 @@ class FakeChatBridge:
     def __init__(self, space_id, agent_filter=None, **_kwargs):
         self.space_id = space_id
         self.agent_filter = set(agent_filter or set())
+        self.set_filter_calls = 0
         self.started = 0
         self.stopped = 0
         self._running = False
@@ -29,6 +30,7 @@ class FakeChatBridge:
         return self._running
 
     def set_agent_filter(self, agent_ids):
+        self.set_filter_calls += 1
         self.agent_filter = set(agent_ids or set())
 
 
@@ -78,12 +80,14 @@ async def test_shared_space_uses_one_bridge_instance(tmp_path) -> None:
     manager = BridgeManager(registry=registry, bridge_factory=bridge_factory)
 
     assert await manager.start_bridge("iris") is True
+    assert bridges[0].set_filter_calls <= 1
     assert await manager.start_bridge("nova") is True
 
     assert len(bridges) == 1
     assert bridges[0].space_id == "spaces/A"
     assert bridges[0].agent_filter == {"iris", "nova"}
     assert bridges[0].started == 1
+    assert bridges[0].set_filter_calls <= 2
 
 
 @pytest.mark.asyncio

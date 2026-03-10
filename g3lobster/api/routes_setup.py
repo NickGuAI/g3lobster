@@ -23,7 +23,7 @@ from g3lobster.chat.auth import (
     save_credentials_json,
     token_exists,
 )
-from g3lobster.config import save_chat_config
+from g3lobster.config import normalize_space_id, save_chat_config
 
 router = APIRouter(prefix="/setup", tags=["setup"])
 
@@ -124,20 +124,13 @@ async def complete_auth(payload: CompleteAuthRequest, request: Request) -> dict:
     return {"authenticated": True}
 
 
-def _normalize_space_id(raw: str) -> str:
-    """Accept 'space/XXX' (from browser URL) or 'spaces/XXX' (API format)."""
-    raw = raw.strip()
-    if raw.startswith("space/") and not raw.startswith("spaces/"):
-        raw = "spaces/" + raw[len("space/"):]
-    if not raw.startswith("spaces/"):
-        raw = "spaces/" + raw
-    return raw
-
-
 @router.post("/space")
 async def configure_space(payload: SpaceConfigRequest, request: Request) -> dict:
     config = request.app.state.config
-    config.chat.space_id = _normalize_space_id(payload.space_id)
+    space_id = normalize_space_id(payload.space_id)
+    if not space_id:
+        raise HTTPException(status_code=400, detail="Space ID is required")
+    config.chat.space_id = space_id
     config.chat.space_name = payload.space_name
     bridge_manager = getattr(request.app.state, "bridge_manager", None)
     if bridge_manager:
@@ -152,13 +145,11 @@ async def list_space_bots(request: Request, space_id: Optional[str] = None) -> d
     config = request.app.state.config
     chat_auth_dir = request.app.state.chat_auth_dir
 
-    target_space = space_id or config.chat.space_id
+    target_space = normalize_space_id(space_id) or normalize_space_id(config.chat.space_id)
     if not target_space:
         raise HTTPException(status_code=400, detail="Configure a chat space first (step 2)")
     if not token_exists(chat_auth_dir):
         raise HTTPException(status_code=400, detail="Complete OAuth first (step 1)")
-
-    space_id = _normalize_space_id(target_space)
 
     try:
         service = get_authenticated_service(chat_auth_dir)
@@ -168,7 +159,7 @@ async def list_space_bots(request: Request, space_id: Optional[str] = None) -> d
     try:
         result = await asyncio.to_thread(
             service.spaces().members().list(
-                parent=space_id,
+                parent=target_space,
                 filter='member.type = "BOT"',
                 pageSize=100,
             ).execute
