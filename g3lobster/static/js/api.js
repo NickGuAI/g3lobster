@@ -211,3 +211,7 @@ export function deleteCronTask(agentId, taskId) {
 export function listMcpServers() {
   return request("/agents/_mcp/servers", { method: "GET" });
 }
+
+export function toggleDebugMode() {
+  return request("/setup/debug-mode", { method: "POST" });
+}

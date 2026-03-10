@@ -18,6 +18,7 @@ class FakeCall:
 class FakeMessagesAPI:
     def __init__(self):
         self.created = []
+        self.updated = []
 
     def list(self, parent, pageSize, orderBy):
         return FakeCall({"messages": []})
@@ -27,6 +28,7 @@ class FakeMessagesAPI:
         return FakeCall({"name": "spaces/test/messages/1"})
 
     def update(self, name, updateMask, body):
+        self.updated.append({"name": name, "body": body})
         return FakeCall({"name": name})
 
 
@@ -126,9 +128,11 @@ async def test_chat_bridge_routes_to_named_agent_by_bot_user_id(tmp_path) -> Non
 
     await bridge.handle_message(message)
 
-    assert len(service.messages_api.created) == 2
+    # Thinking message is created, then updated in-place with the final result.
+    assert len(service.messages_api.created) == 1
     assert service.messages_api.created[0]["body"]["text"] == "🦀 _Luna is thinking..._"
-    assert service.messages_api.created[1]["body"]["text"] == "🦀 Luna: reply"
+    assert len(service.messages_api.updated) == 1
+    assert service.messages_api.updated[0]["body"]["text"] == "🦀 Luna: reply"
 
 
 @pytest.mark.asyncio
@@ -237,3 +241,203 @@ async def test_chat_bridge_ignores_unlinked_mentions(tmp_path) -> None:
     await bridge.handle_message(message)
 
     assert service.messages_api.created == []
+
+
+class FakeErrorRuntime:
+    """Runtime that always fails the task."""
+
+    def __init__(self, persona):
+        self.persona = persona
+
+    async def assign(self, task):
+        task.status = TaskStatus.FAILED
+        task.error = "model overloaded"
+        return task
+
+    async def assign_stream(self, task):
+        from g3lobster.cli.streaming import StreamEvent, StreamEventType
+
+        yield StreamEvent(
+            event_type=StreamEventType.ERROR,
+            data={"error": "model overloaded"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_debug_mode_shows_error_detail_in_chat(tmp_path) -> None:
+    """When debug_mode is on, error details are appended to the Chat reply."""
+    data_dir = str(tmp_path / "data")
+    persona = save_persona(
+        data_dir,
+        AgentPersona(
+            id="luna",
+            name="Luna",
+            emoji="🦀",
+            soul="",
+            model="gemini",
+            mcp_servers=["*"],
+            bot_user_id="users/999",
+        ),
+    )
+
+    service = FakeService()
+    registry = FakeRegistry(data_dir, persona)
+    registry.runtime = FakeErrorRuntime(persona)
+
+    bridge = ChatBridge(
+        registry=registry,
+        space_id="spaces/test",
+        service=service,
+        spaces_config=str(tmp_path / "spaces.json"),
+        debug_mode=True,
+    )
+
+    message = {
+        "text": "Do something",
+        "sender": {"type": "HUMAN", "name": "users/123", "displayName": "Ada"},
+        "thread": {"name": "spaces/test/threads/abc"},
+        "annotations": [
+            {
+                "type": "USER_MENTION",
+                "userMention": {"user": {"type": "BOT", "name": "users/999"}},
+            }
+        ],
+    }
+
+    await bridge.handle_message(message)
+
+    # Thinking message created, then updated with error detail (debug code block).
+    assert len(service.messages_api.updated) == 1
+    updated_text = service.messages_api.updated[0]["body"]["text"]
+    assert "error" in updated_text
+    assert "model overloaded" in updated_text
+    assert "```" in updated_text  # debug code block
+
+
+@pytest.mark.asyncio
+async def test_debug_off_hides_error_code_block(tmp_path) -> None:
+    """When debug_mode is off, error messages do NOT include a code block."""
+    data_dir = str(tmp_path / "data")
+    persona = save_persona(
+        data_dir,
+        AgentPersona(
+            id="luna",
+            name="Luna",
+            emoji="🦀",
+            soul="",
+            model="gemini",
+            mcp_servers=["*"],
+            bot_user_id="users/999",
+        ),
+    )
+
+    service = FakeService()
+    registry = FakeRegistry(data_dir, persona)
+    registry.runtime = FakeErrorRuntime(persona)
+
+    bridge = ChatBridge(
+        registry=registry,
+        space_id="spaces/test",
+        service=service,
+        spaces_config=str(tmp_path / "spaces.json"),
+        debug_mode=False,
+    )
+
+    message = {
+        "text": "Do something else",
+        "sender": {"type": "HUMAN", "name": "users/123", "displayName": "Ada"},
+        "thread": {"name": "spaces/test/threads/abc"},
+        "annotations": [
+            {
+                "type": "USER_MENTION",
+                "userMention": {"user": {"type": "BOT", "name": "users/999"}},
+            }
+        ],
+    }
+
+    await bridge.handle_message(message)
+
+    assert len(service.messages_api.updated) == 1
+    updated_text = service.messages_api.updated[0]["body"]["text"]
+    assert "error" in updated_text
+    assert "```" not in updated_text  # no debug code block
+
+
+class FakeToolRuntime:
+    """Runtime that emits TOOL_USE events then a RESULT."""
+
+    def __init__(self, persona):
+        self.persona = persona
+
+    async def assign_stream(self, task):
+        from g3lobster.cli.streaming import StreamEvent, StreamEventType
+
+        yield StreamEvent(
+            event_type=StreamEventType.TOOL_USE,
+            data={"tool": "web_search"},
+        )
+        yield StreamEvent(
+            event_type=StreamEventType.TOOL_USE,
+            data={"tool": "read_file"},
+        )
+        yield StreamEvent(
+            event_type=StreamEventType.RESULT,
+            data={"result": "Here is the answer."},
+        )
+
+
+@pytest.mark.asyncio
+async def test_streaming_updates_thinking_message_with_tool_names(tmp_path) -> None:
+    """Tool use events update the thinking message in-place with tool names."""
+    data_dir = str(tmp_path / "data")
+    persona = save_persona(
+        data_dir,
+        AgentPersona(
+            id="luna",
+            name="Luna",
+            emoji="🦀",
+            soul="",
+            model="gemini",
+            mcp_servers=["*"],
+            bot_user_id="users/999",
+        ),
+    )
+
+    service = FakeService()
+    registry = FakeRegistry(data_dir, persona)
+    registry.runtime = FakeToolRuntime(persona)
+
+    bridge = ChatBridge(
+        registry=registry,
+        space_id="spaces/test",
+        service=service,
+        spaces_config=str(tmp_path / "spaces.json"),
+    )
+
+    message = {
+        "text": "Search for something",
+        "sender": {"type": "HUMAN", "name": "users/123", "displayName": "Ada"},
+        "thread": {"name": "spaces/test/threads/abc"},
+        "annotations": [
+            {
+                "type": "USER_MENTION",
+                "userMention": {"user": {"type": "BOT", "name": "users/999"}},
+            }
+        ],
+    }
+
+    await bridge.handle_message(message)
+
+    # Thinking message created once.
+    assert len(service.messages_api.created) == 1
+    assert "thinking" in service.messages_api.created[0]["body"]["text"]
+
+    # Updated: 2 tool updates + 1 final result = 3 updates total.
+    assert len(service.messages_api.updated) == 3
+
+    # First two updates should contain tool names.
+    assert "web_search" in service.messages_api.updated[0]["body"]["text"]
+    assert "read_file" in service.messages_api.updated[1]["body"]["text"]
+
+    # Final update is the result text.
+    assert "Here is the answer." in service.messages_api.updated[2]["body"]["text"]

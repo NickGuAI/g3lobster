@@ -84,6 +84,10 @@ class SetupStatus(BaseModel):
     completed: bool
     space_id: Optional[str] = None
     space_name: Optional[str] = None
+    email_enabled: bool = False
+    email_base_address: str = ""
+    email_poll_interval_s: float = 30.0
+    debug_mode: bool = False
 
 
 class CredentialsUploadRequest(BaseModel):

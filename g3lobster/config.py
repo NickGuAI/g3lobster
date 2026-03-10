@@ -100,6 +100,7 @@ class AppConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
     subagent: SubagentConfig = field(default_factory=SubagentConfig)
+    debug_mode: bool = False
 
 
 def _to_bool(value: str) -> bool:
@@ -185,6 +186,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         server=ServerConfig(**_filter_fields(ServerConfig, data.get("server") or {}, "server")),
         alerts=AlertsConfig(**_filter_fields(AlertsConfig, data.get("alerts") or {}, "alerts")),
         subagent=SubagentConfig(**_filter_fields(SubagentConfig, data.get("subagent") or {}, "subagent")),
+        debug_mode=bool(data.get("debug_mode", False)),
     )
 
     _apply_env_overrides("agents", config.agents)
@@ -196,6 +198,10 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     _apply_env_overrides("server", config.server)
     _apply_env_overrides("alerts", config.alerts)
     _apply_env_overrides("subagent", config.subagent)
+
+    debug_env = os.environ.get("G3LOBSTER_DEBUG_MODE", "")
+    if debug_env:
+        config.debug_mode = _to_bool(debug_env)
 
     config.mcp.config_dir = _resolve_path(config.mcp.config_dir, path)
     config.agents.data_dir = _resolve_path(config.agents.data_dir, path)
