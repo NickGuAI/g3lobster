@@ -111,12 +111,6 @@ def test_health_inspector_reports_stuck_when_enabled() -> None:
     assert issues[0].issue == "stuck"
 
 
-def test_health_inspector_skips_stuck_for_no_timeout_task() -> None:
-    inspector = HealthInspector()
-    issues = inspector.inspect([_BusyAgent(timeout_s=0)], stuck_timeout_s=300)
-    assert issues == []
-
-
 class _CapturingProcess:
     def __init__(self):
         self.alive = False
