@@ -28,6 +28,7 @@ class AgentPersona:
     mcp_servers: List[str] = field(default_factory=lambda: ["*"])
     bot_user_id: Optional[str] = None
     enabled: bool = True
+    dm_allowlist: List[str] = field(default_factory=list)
     created_at: str = field(default_factory=lambda: _utc_now())
     updated_at: str = field(default_factory=lambda: _utc_now())
 
@@ -46,6 +47,7 @@ class AgentPersona:
             self.bot_user_id = str(self.bot_user_id).strip() or None
         else:
             self.bot_user_id = None
+        self.dm_allowlist = [str(item).strip() for item in self.dm_allowlist if str(item).strip()]
 
     def to_agent_json(self) -> Dict[str, object]:
         return {
@@ -56,6 +58,7 @@ class AgentPersona:
             "mcp_servers": list(self.mcp_servers),
             "bot_user_id": self.bot_user_id,
             "enabled": bool(self.enabled),
+            "dm_allowlist": list(self.dm_allowlist),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -153,6 +156,7 @@ def load_persona(data_dir: str, agent_id: str, *, skip_migration: bool = False) 
         mcp_servers=list(payload.get("mcp_servers") or ["*"]),
         bot_user_id=payload.get("bot_user_id"),
         enabled=bool(payload.get("enabled", True)),
+        dm_allowlist=list(payload.get("dm_allowlist") or []),
         created_at=str(payload.get("created_at") or _utc_now()),
         updated_at=str(payload.get("updated_at") or _utc_now()),
     )
@@ -175,6 +179,7 @@ def save_persona(data_dir: str, persona: AgentPersona) -> AgentPersona:
         mcp_servers=list(persona.mcp_servers),
         bot_user_id=persona.bot_user_id,
         enabled=persona.enabled,
+        dm_allowlist=list(persona.dm_allowlist),
         created_at=(existing.created_at if existing else persona.created_at) or now,
         updated_at=now,
     )

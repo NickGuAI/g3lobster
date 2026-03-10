@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 from g3lobster.chat.auth import get_authenticated_service
 from g3lobster.chat.commands import handle as handle_command
 from g3lobster.cli.parser import get_content_id
-from g3lobster.tasks.types import Task, TaskStatus
+from g3lobster.tasks.types import Task
 from g3lobster.utils import BoundedSet
 
 logger = logging.getLogger(__name__)
@@ -218,6 +218,17 @@ class ChatBridge:
                 return
 
         persona = runtime.persona
+
+        # Enforce per-agent DM allowlist for direct message spaces
+        space_type = message.get("space", {}).get("spaceType", "")
+        if space_type == "DIRECT_MESSAGE":
+            allowlist = list(getattr(persona, "dm_allowlist", []) or [])
+            if allowlist:
+                sender_name = sender.get("name", "")
+                sender_email = sender.get("email", "")
+                if sender_name not in allowlist and sender_email not in allowlist:
+                    return
+
         thread_id = message.get("thread", {}).get("name")
         user_id = sender.get("name") or "unknown"
         thread_id_safe = (thread_id or "no-thread").replace("/", "_")
@@ -235,20 +246,42 @@ class ChatBridge:
 
         task = Task(prompt=text, session_id=session_id)
 
-        await self.send_message(
+        thinking_msg = await self.send_message(
             f"{persona.emoji} _{persona.name} is thinking..._",
             thread_id=thread_id,
         )
+        thinking_name: Optional[str] = thinking_msg.get("name") if thinking_msg else None
+        active_tools: list = []
 
-        result_task = await runtime.assign(task)
-        if result_task.status == TaskStatus.COMPLETED and result_task.result:
+        from g3lobster.cli.streaming import StreamEventType
+
+        final_result: Optional[str] = None
+        final_error: Optional[str] = None
+
+        async for event in runtime.assign_stream(task):
+            if event.event_type == StreamEventType.TOOL_USE:
+                tool_name = event.data.get("tool", event.data.get("toolName", ""))
+                if tool_name and tool_name not in active_tools:
+                    active_tools.append(tool_name)
+                    if thinking_name:
+                        tools_str = ", ".join(active_tools)
+                        await self.update_message(
+                            thinking_name,
+                            f"{persona.emoji} _{persona.name} is working... [{tools_str}]_",
+                        )
+            elif event.event_type == StreamEventType.RESULT:
+                final_result = event.text
+            elif event.event_type == StreamEventType.ERROR:
+                final_error = event.data.get("error", "unknown error")
+
+        if final_result:
             await self.send_message(
-                f"{persona.emoji} {persona.name}: {result_task.result}",
+                f"{persona.emoji} {persona.name}: {final_result}",
                 thread_id=thread_id,
             )
-        elif result_task.status == TaskStatus.FAILED:
+        elif final_error:
             await self.send_message(
-                f"{persona.emoji} {persona.name}: error: {result_task.error}",
+                f"{persona.emoji} {persona.name}: error: {final_error}",
                 thread_id=thread_id,
             )
         else:
@@ -257,11 +290,24 @@ class ChatBridge:
                 thread_id=thread_id,
             )
 
-    async def send_message(self, text: str, thread_id: Optional[str] = None) -> None:
+    async def send_message(self, text: str, thread_id: Optional[str] = None) -> dict:
         body = {"text": text}
         if thread_id:
             body["thread"] = {"name": thread_id}
 
-        await asyncio.to_thread(
+        result = await asyncio.to_thread(
             self.service.spaces().messages().create(parent=self.space_id, body=body).execute
         )
+        return result or {}
+
+    async def update_message(self, message_name: str, text: str) -> None:
+        body = {"text": text}
+        try:
+            await asyncio.to_thread(
+                self.service.spaces()
+                .messages()
+                .update(name=message_name, updateMask="text", body=body)
+                .execute
+            )
+        except Exception:
+            logger.debug("Failed to update message %s", message_name, exc_info=True)

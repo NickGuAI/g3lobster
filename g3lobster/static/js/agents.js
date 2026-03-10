@@ -13,6 +13,7 @@ import {
   linkAgentBot,
   listAgentSessions,
   listAgents,
+  listMcpServers,
   listCronTasks,
   listGlobalKnowledge,
   restartAgent,
@@ -49,6 +50,17 @@ function parseMcpServers(raw) {
     .filter(Boolean);
 }
 
+function parseDmAllowlist(raw) {
+  const value = String(raw || "").trim();
+  if (!value) {
+    return [];
+  }
+  return value
+    .split("\n")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function stateClass(state) {
   return String(state || "").toLowerCase();
 }
@@ -71,6 +83,8 @@ export async function render(root, { onSetupChange }) {
   const sessionsCache = {};
   const transcriptCache = {};
   const cronsCache = {};
+
+  let availableMcpServers = null;
 
   let globalUserMemory = "";
   let globalProcedures = "";
@@ -103,6 +117,18 @@ export async function render(root, { onSetupChange }) {
       const payload = await listGlobalKnowledge();
       globalKnowledge = payload.items || [];
     }
+  }
+
+  async function ensureAvailableMcpServers() {
+    if (availableMcpServers === null) {
+      try {
+        const payload = await listMcpServers();
+        availableMcpServers = payload.servers || [];
+      } catch (_err) {
+        availableMcpServers = [];
+      }
+    }
+    return availableMcpServers;
   }
 
   function getActiveAgent(agents) {
@@ -151,7 +177,7 @@ export async function render(root, { onSetupChange }) {
     `;
   }
 
-  function personaTabMarkup(agent, detail) {
+  function personaTabMarkup(agent, detail, mcpServers) {
     return `
       <form class="persona-form" data-agent-id="${escapeHtml(agent.id)}">
         <div class="form-grid">
@@ -169,7 +195,17 @@ export async function render(root, { onSetupChange }) {
           </div>
           <div class="field">
             <label>MCP Servers</label>
-            <input name="mcp_servers" value="${escapeHtml((detail.mcp_servers || ["*"]).join(", "))}" />
+            ${
+              mcpServers && mcpServers.length
+                ? `<div class="mcp-checklist">
+                    ${mcpServers.map((srv) => {
+                      const checked = (detail.mcp_servers || ["*"]).includes("*") || (detail.mcp_servers || []).includes(srv) ? "checked" : "";
+                      return `<label class="mcp-option"><input type="checkbox" name="mcp_server_item" value="${escapeHtml(srv)}" ${checked} /> ${escapeHtml(srv)}</label>`;
+                    }).join("")}
+                  </div>
+                  <label class="mcp-option"><input type="checkbox" name="mcp_server_wildcard" ${(detail.mcp_servers || ["*"]).includes("*") ? "checked" : ""} /> * (all servers)</label>`
+                : `<input name="mcp_servers" value="${escapeHtml((detail.mcp_servers || ["*"]).join(", "))}" />`
+            }
           </div>
         </div>
         <div class="field">
@@ -188,6 +224,10 @@ export async function render(root, { onSetupChange }) {
               <option value="false" ${detail.enabled ? "" : "selected"}>false</option>
             </select>
           </div>
+        </div>
+        <div class="field">
+          <label>DM Allowlist (one sender ID per line)</label>
+          <textarea name="dm_allowlist" placeholder="users/abc123&#10;user@example.com">${escapeHtml((detail.dm_allowlist || []).join("\n"))}</textarea>
         </div>
         <div class="actions">
           <button class="btn btn-primary" type="submit">Save Persona</button>
@@ -334,7 +374,7 @@ export async function render(root, { onSetupChange }) {
     if (activeTab === "crons") {
       return cronsTabMarkup(agent);
     }
-    return personaTabMarkup(agent, detail);
+    return personaTabMarkup(agent, detail, availableMcpServers || []);
   }
 
   async function rerender() {
@@ -360,6 +400,7 @@ export async function render(root, { onSetupChange }) {
         detailCache[activeAgent.id] = detailCache[activeAgent.id] || activeAgent;
       }
     }
+    await ensureAvailableMcpServers();
 
     const bridgeLabel = setup.bridge_running ? "running" : "stopped";
     const bridgeClass = setup.bridge_running ? "ok" : "error";
@@ -644,14 +685,34 @@ export async function render(root, { onSetupChange }) {
 
         const data = new FormData(form);
         try {
+          // Build mcp_servers from checklist (if present) or fallback to text input
+          let mcpServersValue;
+          const wildcardChecked = form.querySelector("input[name='mcp_server_wildcard']");
+          const itemCheckboxes = form.querySelectorAll("input[name='mcp_server_item']:checked");
+          if (wildcardChecked !== null) {
+            // Checklist mode
+            if (wildcardChecked.checked) {
+              mcpServersValue = ["*"];
+            } else {
+              mcpServersValue = Array.from(itemCheckboxes).map((cb) => cb.value).filter(Boolean);
+              if (!mcpServersValue.length) {
+                mcpServersValue = ["*"];
+              }
+            }
+          } else {
+            // Fallback text input mode
+            mcpServersValue = parseMcpServers(data.get("mcp_servers"));
+          }
+
           const payload = {
             name: String(data.get("name") || "").trim(),
             emoji: String(data.get("emoji") || "🤖").trim() || "🤖",
             model: String(data.get("model") || "gemini").trim() || "gemini",
             soul: String(data.get("soul") || ""),
-            mcp_servers: parseMcpServers(data.get("mcp_servers")),
+            mcp_servers: mcpServersValue,
             enabled: String(data.get("enabled") || "true") === "true",
             bot_user_id: String(data.get("bot_user_id") || "").trim() || null,
+            dm_allowlist: parseDmAllowlist(data.get("dm_allowlist")),
           };
           detailCache[agentId] = await updateAgent(agentId, payload);
           setNotice("success", `Updated ${agentId}.`);

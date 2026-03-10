@@ -87,6 +87,71 @@ class GeminiProcess:
 
             return stdout.decode("utf-8", errors="replace").strip()
 
+    async def ask_stream(
+        self, prompt: str, timeout: float = 120.0, session_id: Optional[str] = None
+    ):
+        """Send a prompt and yield StreamEvent objects as they arrive.
+
+        Spawns a fresh subprocess with --output-format stream-json and reads
+        stdout line-by-line, yielding parsed StreamEvent objects.
+        """
+        if not self._ready:
+            raise RuntimeError("GeminiProcess has not been initialised (call spawn first)")
+
+        from g3lobster.cli.streaming import StreamEventType, parse_stream_event
+
+        cmd = [self.command] + self.args + ["--output-format", "stream-json", PROMPT_FLAG, prompt]
+        if self._mcp_server_names and self._mcp_server_names != ["*"]:
+            cmd.extend([ALLOWED_MCP_SERVER_NAMES_FLAG, *self._mcp_server_names])
+
+        env = os.environ.copy()
+        env.update(self.env)
+        if self.agent_id:
+            env["G3LOBSTER_AGENT_ID"] = self.agent_id
+        if session_id:
+            env["G3LOBSTER_SESSION_ID"] = session_id
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=self.cwd,
+            env=env,
+        )
+        self._active_process = proc
+
+        try:
+            assert proc.stdout is not None
+            deadline = asyncio.get_event_loop().time() + timeout
+            while True:
+                remaining = deadline - asyncio.get_event_loop().time()
+                if remaining <= 0:
+                    proc.kill()
+                    raise asyncio.TimeoutError("Stream read timed out")
+
+                try:
+                    line_bytes = await asyncio.wait_for(
+                        proc.stdout.readline(), timeout=min(remaining, 30.0)
+                    )
+                except asyncio.TimeoutError:
+                    continue
+
+                if not line_bytes:
+                    break
+                line = line_bytes.decode("utf-8", errors="replace").rstrip()
+                if not line:
+                    continue
+                event = parse_stream_event(line)
+                yield event
+                if event.event_type in {StreamEventType.RESULT, StreamEventType.ERROR}:
+                    break
+        finally:
+            self._active_process = None
+            if proc.returncode is None:
+                proc.kill()
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(proc.wait(), timeout=5.0)
+
     async def kill(self) -> None:
         proc = self._active_process
         if not proc or proc.returncode is not None:

@@ -67,6 +67,16 @@ class RegisteredAgent:
         finally:
             self._pending_assignments -= 1
 
+    async def assign_stream(self, task):
+        """Assign a task and yield streaming events, serialising with the assign lock."""
+        self._pending_assignments += 1
+        try:
+            async with self._assign_lock:
+                async for event in self.agent.assign_stream(task):
+                    yield event
+        finally:
+            self._pending_assignments -= 1
+
 
 class AgentRegistry:
     """Manages named agents and their per-agent runtime dependencies."""
