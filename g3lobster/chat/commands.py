@@ -87,6 +87,9 @@ async def handle(
     registry: Optional["AgentRegistry"] = None,
     global_memory: Optional["GlobalMemoryManager"] = None,
     incident_store: Optional["IncidentStore"] = None,
+    thread_id: str = "",
+    space_id: str = "",
+    user_id: str = "",
 ) -> Optional[Union[str, Dict[str, Any]]]:
     """Intercept and handle a slash command.
 
