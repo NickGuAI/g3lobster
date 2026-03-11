@@ -548,7 +548,7 @@ async def test_unmentioned_message_routes_to_concierge(tmp_path) -> None:
         AgentPersona(
             id="concierge",
             name="Concierge",
-            emoji="🧭",
+            emoji="\U0001f9ed",
             soul="",
             model="gemini",
             mcp_servers=["*"],
@@ -559,7 +559,7 @@ async def test_unmentioned_message_routes_to_concierge(tmp_path) -> None:
         AgentPersona(
             id="luna",
             name="Luna",
-            emoji="🦀",
+            emoji="\U0001f980",
             soul="",
             model="gemini",
             mcp_servers=["*"],
@@ -607,7 +607,7 @@ async def test_unmentioned_message_routes_to_concierge(tmp_path) -> None:
     assert "Concierge" in service.messages_api.created[0]["body"]["text"]
     assert len(service.messages_api.updated) == 1
     # Final reply is attributed to the specialist (Luna), not the concierge
-    assert "🦀 Luna: reply" in service.messages_api.updated[0]["body"]["text"]
+    assert "\U0001f980 Luna: reply" in service.messages_api.updated[0]["body"]["text"]
 
 
 @pytest.mark.asyncio
@@ -619,7 +619,7 @@ async def test_unmentioned_message_dropped_when_concierge_disabled(tmp_path) -> 
         AgentPersona(
             id="luna",
             name="Luna",
-            emoji="🦀",
+            emoji="\U0001f980",
             soul="",
             model="gemini",
             mcp_servers=["*"],
@@ -659,7 +659,7 @@ async def test_explicit_mention_still_routes_directly_with_concierge(tmp_path) -
         AgentPersona(
             id="concierge",
             name="Concierge",
-            emoji="🧭",
+            emoji="\U0001f9ed",
             soul="",
             model="gemini",
             mcp_servers=["*"],
@@ -670,7 +670,7 @@ async def test_explicit_mention_still_routes_directly_with_concierge(tmp_path) -
         AgentPersona(
             id="luna",
             name="Luna",
-            emoji="🦀",
+            emoji="\U0001f980",
             soul="",
             model="gemini",
             mcp_servers=["*"],
@@ -713,7 +713,61 @@ async def test_explicit_mention_still_routes_directly_with_concierge(tmp_path) -
     assert "Luna" in service.messages_api.created[0]["body"]["text"]
     assert "Concierge" not in service.messages_api.created[0]["body"]["text"]
     assert len(service.messages_api.updated) == 1
-    assert "🦀 Luna: reply" in service.messages_api.updated[0]["body"]["text"]
+    assert "\U0001f980 Luna: reply" in service.messages_api.updated[0]["body"]["text"]
+
+
+@pytest.mark.asyncio
+async def test_slash_command_bypasses_debounce(tmp_path) -> None:
+    """Slash commands should be handled immediately without debouncing."""
+    from unittest.mock import MagicMock
+
+    from g3lobster.cron.store import CronStore
+
+    data_dir = str(tmp_path / "data")
+    persona = save_persona(
+        data_dir,
+        AgentPersona(
+            id="luna",
+            name="Luna",
+            emoji="\U0001f980",
+            soul="",
+            model="gemini",
+            mcp_servers=["*"],
+            bot_user_id="users/999",
+        ),
+    )
+
+    service = FakeService()
+    registry = FakeRegistry(data_dir, persona)
+
+    cron_store = CronStore(data_dir)
+
+    bridge = ChatBridge(
+        registry=registry,
+        space_id="spaces/test",
+        service=service,
+        spaces_config=str(tmp_path / "spaces.json"),
+        cron_store=cron_store,
+        debounce_window_ms=5000,  # Long window to prove bypass works
+    )
+
+    message = {
+        "text": "/help",
+        "sender": {"type": "HUMAN", "name": "users/123", "displayName": "Ada"},
+        "thread": {"name": "spaces/test/threads/abc"},
+        "annotations": [
+            {
+                "type": "USER_MENTION",
+                "userMention": {"user": {"type": "BOT", "name": "users/999"}},
+            }
+        ],
+    }
+
+    await bridge.handle_message(message)
+    # No sleep needed -- slash commands bypass debounce and respond immediately.
+
+    assert len(service.messages_api.created) == 1
+    assert "Available commands" in service.messages_api.created[0]["body"]["text"]
 
 
 def test_save_chat_config_persists_concierge_fields(tmp_path) -> None:
