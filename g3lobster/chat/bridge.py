@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 from g3lobster.chat.auth import get_authenticated_service
 from g3lobster.chat.commands import detect_command, handle as handle_command
 from g3lobster.chat.debounce import DebounceKey, MessageDebouncer
+from g3lobster.chat.memory_inspector import build_memory_card, detect_memory_query
 from g3lobster.cli.parser import get_content_id
 from g3lobster.cli.streaming import StreamEventType, accumulate_text
 from g3lobster.tasks.types import Task, TaskStatus
@@ -307,6 +308,22 @@ class ChatBridge:
         thread_id = message.get("thread", {}).get("name")
         user_id = sender.get("name") or "unknown"
 
+        # Memory query interception — before slash commands since these are
+        # natural language, not /-prefixed.
+        if detect_memory_query(text) is not None:
+            card_payload = await build_memory_card(
+                agent_id=target_id,
+                user_id=user_id,
+                registry=self.registry,
+                global_memory=getattr(self.registry, "global_memory_manager", None),
+            )
+            await self.send_message(
+                f"{persona.emoji} {persona.name}: Here's what I remember:",
+                thread_id=thread_id,
+                cards_v2=card_payload.get("cardsV2"),
+            )
+            return
+
         # Slash-command interception — handle immediately, bypass debounce.
         if detect_command(text) is not None and self.cron_store is not None:
             cmd_reply = await handle_command(text, target_id, self.cron_store, registry=self.registry, global_memory=getattr(self.registry, 'global_memory_manager', None))
@@ -443,6 +460,15 @@ class ChatBridge:
             self.service.spaces().messages().create(parent=self.space_id, body=body).execute
         )
         return result or {}
+
+    async def send_card_message(
+        self,
+        cards_v2: list,
+        thread_id: Optional[str] = None,
+        text: str = "",
+    ) -> dict:
+        """Send a Cards v2 message. Convenience wrapper around send_message."""
+        return await self.send_message(text=text, thread_id=thread_id, cards_v2=cards_v2)
 
     async def send_dm(self, text: str, dm_space_id: Optional[str] = None) -> dict:
         """Send a direct message to a DM space.
