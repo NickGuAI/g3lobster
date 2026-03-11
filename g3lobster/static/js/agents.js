@@ -96,7 +96,7 @@ function bridgeTableMarkup(agents, bridgeByAgent) {
         <tr>
           <td>${escapeHtml(agent.emoji)} ${escapeHtml(agent.name)}</td>
           <td><code>${escapeHtml(bridge.space_id || "(not set)")}</code></td>
-          <td><span class="status-pill ${escapeHtml(status.className)}">${escapeHtml(status.label)}</span></td>
+          <td><span class="status-pill ${escapeHtml(status.className)}"><span class="status-dot"></span>${escapeHtml(status.label)}</span></td>
           <td class="bridge-controls">
             <button class="btn btn-secondary" data-action="bridge-start" data-agent-id="${escapeHtml(agent.id)}" ${status.canStart ? "" : "disabled"}>Start</button>
             <button class="btn btn-secondary" data-action="bridge-stop" data-agent-id="${escapeHtml(agent.id)}" ${status.canStop ? "" : "disabled"}>Stop</button>
@@ -293,7 +293,7 @@ export async function render(root, { onSetupChange }) {
         return `
           <button class="agent-chip ${active}" data-action="select-agent" data-agent-id="${escapeHtml(agent.id)}">
             <span class="chip-name">${escapeHtml(agent.emoji)} ${escapeHtml(agent.name)}</span>
-            <span class="status-pill ${escapeHtml(displayStatus.className)}">${escapeHtml(displayStatus.state)}</span>
+            <span class="status-pill ${escapeHtml(displayStatus.className)}"><span class="status-dot"></span>${escapeHtml(displayStatus.state)}</span>
           </button>
         `;
       })
@@ -315,7 +315,7 @@ export async function render(root, { onSetupChange }) {
           <div class="agent-meta">id: ${escapeHtml(agent.id)} · model: ${escapeHtml(agent.model)} · uptime: <span data-uptime-for="${escapeHtml(agent.id)}" data-uptime-s="${escapeHtml(uptime)}" data-running="${uptimeRunning}">${escapeHtml(uptime)}s</span></div>
         </div>
         <div class="actions">
-          <span class="status-pill ${escapeHtml(displayStatus.className)}">${escapeHtml(displayStatus.state)}</span>
+          <span class="status-pill ${escapeHtml(displayStatus.className)}"><span class="status-dot"></span>${escapeHtml(displayStatus.state)}</span>
           <button class="btn btn-secondary" data-action="start" data-agent-id="${escapeHtml(agent.id)}" ${actionDisabled}>${pending === "start" ? "Starting..." : "Start"}</button>
           <button class="btn btn-secondary" data-action="stop" data-agent-id="${escapeHtml(agent.id)}" ${actionDisabled}>${pending === "stop" ? "Stopping..." : "Stop"}</button>
           <button class="btn btn-secondary" data-action="restart" data-agent-id="${escapeHtml(agent.id)}" ${actionDisabled}>${pending === "restart" ? "Restarting..." : "Restart"}</button>
@@ -673,6 +673,16 @@ export async function render(root, { onSetupChange }) {
 
     startUptimeTicker();
 
+    for (const header of root.querySelectorAll(".collapsible-header")) {
+      header.addEventListener("click", () => {
+        const expanded = header.getAttribute("aria-expanded") === "true";
+        header.setAttribute("aria-expanded", String(!expanded));
+        const body = header.nextElementSibling;
+        if (body && body.classList.contains("collapsible-body")) {
+          body.classList.toggle("open", !expanded);
+        }
+      });
+    }
 
     root.querySelector("#create-agent-form")?.addEventListener("submit", async (event) => {
       event.preventDefault();
