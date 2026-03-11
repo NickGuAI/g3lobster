@@ -9,6 +9,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from g3lobster.memory.compactor import CompactionEngine
+from g3lobster.memory.journal import (
+    AssociationGraph,
+    JournalEntry,
+    JournalStore,
+    SalienceLevel,
+)
 from g3lobster.memory.procedures import (
     CandidateStore,
     Procedure,
@@ -60,6 +66,9 @@ class MemoryManager:
             self.memory_file.write_text("# MEMORY\n\n", encoding="utf-8")
         if not self.procedures_file.exists():
             self.procedures_file.write_text("# PROCEDURES\n\n", encoding="utf-8")
+
+        self.journal_store = JournalStore(str(self.daily_dir))
+        self.association_graph = AssociationGraph(str(self.memory_dir))
 
         self.sessions = SessionStore(str(self.sessions_dir))
         self.procedure_store = ProcedureStore(
@@ -212,6 +221,42 @@ class MemoryManager:
         with path.open("a", encoding="utf-8") as handle:
             handle.write(text.strip() + "\n")
 
+    def append_journal_entry(self, entry: JournalEntry, day: Optional[date] = None) -> JournalEntry:
+        """Write a structured journal entry and also append to the daily .md for backward compat."""
+        saved = self.journal_store.append(entry, day=day)
+        # Human-readable line in the legacy daily markdown.
+        md_line = f"[{entry.salience.value}] {entry.content[:180]}"
+        if entry.tags:
+            md_line += f"  (tags: {', '.join(entry.tags)})"
+        self.append_daily_note(md_line, day=day)
+        # Auto-link by shared tags.
+        self.association_graph.add_edges_for_entry(entry, self.journal_store)
+        return saved
+
+    def query_journal(
+        self,
+        *,
+        salience_min: Optional[SalienceLevel] = None,
+        tags: Optional[List[str]] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        limit: int = 50,
+    ) -> List[JournalEntry]:
+        return self.journal_store.query(
+            salience_min=salience_min,
+            tags=tags,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+        )
+
+    def get_journal_entry(self, entry_id: str) -> Optional[JournalEntry]:
+        return self.journal_store.get_entry(entry_id)
+
+    def get_journal_associations(self, entry_id: str) -> List[Dict[str, Any]]:
+        edges = self.association_graph.get_associations(entry_id)
+        return [e.as_dict() for e in edges]
+
     def append_message(
         self,
         session_id: str,
@@ -270,6 +315,19 @@ class MemoryManager:
             or cls._IMPORTANT_PATTERN.search(text)
         )
 
+    def _classify_salience(self, role: str, content: str) -> SalienceLevel:
+        """Classify compacted message content by salience level."""
+        if role == "user" and self._is_user_preference(content):
+            return SalienceLevel.HIGH
+        if role == "tool" or "error" in content.lower()[:100]:
+            return SalienceLevel.NORMAL
+        if role == "user":
+            return SalienceLevel.NORMAL
+        # Assistant chitchat / short replies.
+        if len(content) < 40:
+            return SalienceLevel.LOW
+        return SalienceLevel.NORMAL
+
     def _maybe_compact(self, session_id: str, message_count: Optional[int] = None) -> bool:
         def _flush_compacted_messages(messages: List[Dict[str, object]]) -> None:
             highlights: List[str] = []
@@ -281,6 +339,17 @@ class MemoryManager:
                 content = str(message.get("content", "")).strip()
                 if not role or not content:
                     continue
+
+                salience = self._classify_salience(role, content)
+                # Write structured journal entries for compacted content.
+                journal_entry = JournalEntry(
+                    content=f"{role}: {content[:300]}",
+                    salience=salience,
+                    tags=["compaction"],
+                    source_session=session_id,
+                )
+                self.journal_store.append(journal_entry)
+
                 if role == "user" and self._is_user_preference(content):
                     highlights.append(f"- user preference: {content[:180]}")
                 elif len(highlights) < 6:
