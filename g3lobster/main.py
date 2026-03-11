@@ -24,6 +24,8 @@ from g3lobster.meeting_prep.orchestrator import MeetingPrepOrchestrator
 from g3lobster.cli.process import GeminiProcess
 from g3lobster.config import AppConfig, load_config
 from g3lobster.control_plane import ControlPlane, Dispatcher, Orchestrator, TaskRegistry
+from g3lobster.calendar.checker import FocusTimeChecker
+from g3lobster.calendar.buffer import MessageBuffer
 from g3lobster.cron.manager import CronManager
 from g3lobster.cron.store import CronStore
 from g3lobster.standup.orchestrator import StandupOrchestrator
@@ -177,6 +179,23 @@ def build_runtime(config: AppConfig):
 
     chat_auth_dir = str(Path(config.agents.data_dir) / "chat_auth")
     cron_store = CronStore(config.agents.data_dir)
+
+    # Calendar focus-time guard
+    focus_checker = None
+    message_buffer = None
+    if config.calendar.enabled:
+        from g3lobster.chat.auth import get_calendar_service
+        try:
+            calendar_service = get_calendar_service(chat_auth_dir)
+            message_buffer = MessageBuffer(config.agents.data_dir)
+            focus_checker = FocusTimeChecker(
+                calendar_service=calendar_service,
+                ttl_s=300.0,
+            )
+            logger.info("Calendar focus-time guard enabled")
+        except Exception:
+            logger.warning("Calendar service unavailable — focus guard disabled", exc_info=True)
+
     cron_manager = CronManager(
         cron_store=cron_store,
         registry=registry,
@@ -188,6 +207,8 @@ def build_runtime(config: AppConfig):
         gemini_args=config.gemini.args,
         gemini_timeout_s=config.gemini.response_timeout_s or 45.0,
         gemini_cwd=config.gemini.workspace_dir,
+        focus_checker=focus_checker,
+        calendar_cron_schedule=config.calendar.check_interval_cron if config.calendar.enabled else None,
     ) if config.cron.enabled else None
     event_bus = EventBus()
 
@@ -227,6 +248,8 @@ def build_runtime(config: AppConfig):
             concierge_agent_id=concierge_id,
             debounce_window_ms=config.chat.debounce_window_ms,
             event_bus=event_bus,
+            focus_checker=focus_checker,
+            message_buffer=message_buffer,
         )
 
     bridge_manager = BridgeManager(

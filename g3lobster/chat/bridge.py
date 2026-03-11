@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Dict, Optional, Set
 
 if TYPE_CHECKING:
+    from g3lobster.calendar.checker import FocusTimeChecker
+    from g3lobster.calendar.buffer import MessageBuffer
     from g3lobster.cron.store import CronStore
     from g3lobster.standup.orchestrator import StandupOrchestrator
     from g3lobster.incident.store import IncidentStore
@@ -23,6 +25,7 @@ from g3lobster.chat.memory_inspector import build_memory_card, detect_memory_que
 from g3lobster.chat.thread_summarizer import ThreadSummarizer, detect_catchup_intent
 from g3lobster.cli.parser import get_content_id
 from g3lobster.cli.streaming import StreamEventType, accumulate_text
+from g3lobster.calendar.buffer import BufferedMessage
 from g3lobster.tasks.types import Task, TaskStatus
 from g3lobster.utils import BoundedSet
 
@@ -89,6 +92,8 @@ class ChatBridge:
         incident_store: Optional["IncidentStore"] = None,
         seen_content_max_size: int = 10_000,
         debug_mode: bool = False,
+        focus_checker: Optional["FocusTimeChecker"] = None,
+        message_buffer: Optional["MessageBuffer"] = None,
         agent_filter: Optional[Set[str]] = None,
         concierge_agent_id: Optional[str] = None,
         debounce_window_ms: int = 2000,
@@ -108,6 +113,8 @@ class ChatBridge:
         self.debug_mode = debug_mode
         self.concierge_agent_id = concierge_agent_id
         self.event_bus = event_bus
+        self.focus_checker = focus_checker
+        self.message_buffer = message_buffer
 
         self.space_id = space_id
         self._poll_task: Optional[asyncio.Task] = None
@@ -404,6 +411,28 @@ class ChatBridge:
         if thread_id and detect_catchup_intent(merged_text):
             await self._handle_catchup(persona, thread_id, session_id)
             return
+
+        # Focus-time guard — intercept when target agent's user is in focus time.
+        if self.focus_checker and self.message_buffer:
+            focus_event = self.focus_checker.get_focus_event(user_id)
+            if focus_event is not None:
+                self.message_buffer.add(
+                    target_id,
+                    BufferedMessage(
+                        sender_name=sender.get("name", "unknown"),
+                        text=merged_text,
+                        thread_id=thread_id or "",
+                        timestamp=datetime.now(tz=timezone.utc).isoformat(),
+                    ),
+                )
+                end_str = focus_event.end_time.strftime("%-I:%M %p")
+                event_label = "Focus Time" if focus_event.event_type == "focus" else "Out of Office"
+                await self.send_message(
+                    f"{persona.emoji} {persona.name} is in {event_label} "
+                    f"until {end_str}. Message saved — I'll deliver a summary when they're back.",
+                    thread_id=thread_id,
+                )
+                return
 
 
         task = Task(

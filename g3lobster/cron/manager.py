@@ -41,6 +41,8 @@ class CronManager:
         gemini_cwd: Optional[str] = None,
         standup_orchestrator: Optional[object] = None,
         incident_store: Optional["IncidentStore"] = None,
+        focus_checker=None,
+        calendar_cron_schedule: Optional[str] = None,
     ) -> None:
         self._store = cron_store
         self._registry = registry
@@ -55,6 +57,8 @@ class CronManager:
         self._gemini_args = gemini_args
         self._gemini_timeout_s = gemini_timeout_s
         self._gemini_cwd = gemini_cwd
+        self._focus_checker = focus_checker
+        self._calendar_cron_schedule = calendar_cron_schedule
 
     def _get_scheduler(self):
         if self._scheduler is None:
@@ -73,6 +77,7 @@ class CronManager:
         if scheduler is None:
             return
         self._load_tasks()
+        self._register_calendar_job()
         if not scheduler.running:
             scheduler.start()
             logger.info("CronManager started")
@@ -93,6 +98,7 @@ class CronManager:
             return
         scheduler.remove_all_jobs()
         self._load_tasks()
+        self._register_calendar_job()
 
     def _load_tasks(self) -> None:
         scheduler = self._get_scheduler()
@@ -143,6 +149,44 @@ class CronManager:
                         "Invalid consolidation schedule %r — skipping",
                         self._consolidation_schedule,
                     )
+
+    def _register_calendar_job(self) -> None:
+        """Register the periodic calendar focus-time check if configured."""
+        if not self._focus_checker or not self._calendar_cron_schedule:
+            return
+        scheduler = self._get_scheduler()
+        if scheduler is None:
+            return
+        try:
+            from apscheduler.triggers.cron import CronTrigger
+        except ImportError:
+            return
+
+        job_id = "calendar_focus_check"
+        if scheduler.get_job(job_id):
+            return
+
+        try:
+            trigger = CronTrigger.from_crontab(self._calendar_cron_schedule)
+        except Exception:
+            logger.warning("Invalid calendar cron schedule %r — skipping", self._calendar_cron_schedule)
+            return
+
+        scheduler.add_job(
+            self._check_calendar,
+            trigger=trigger,
+            id=job_id,
+            misfire_grace_time=60,
+        )
+        logger.info("Registered calendar focus-time check (%s)", self._calendar_cron_schedule)
+
+    async def _check_calendar(self) -> None:
+        """Cron callback: refresh focus-time state for all monitored users."""
+        logger.debug("Running calendar focus-time check")
+        try:
+            self._focus_checker.refresh()
+        except Exception:
+            logger.exception("Calendar focus-time check failed")
 
     async def _fire(self, agent_id: str, task_id: str, instruction: str, dm_target: str | None = None) -> None:
         import time as time_mod
