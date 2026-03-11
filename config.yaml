@@ -34,6 +34,9 @@ alerts:
   email_address: ""
   min_severity: warning
   rate_limit_s: 300
+auth:
+  enabled: false
+  api_key: ""
 control_plane:
   enabled: true
   queue_depth: 5

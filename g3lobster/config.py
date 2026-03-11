@@ -103,6 +103,12 @@ class ControlPlaneConfig:
 
 
 @dataclass
+class AuthConfig:
+    enabled: bool = False
+    api_key: str = ""
+
+
+@dataclass
 class AppConfig:
     agents: AgentsConfig = field(default_factory=AgentsConfig)
     gemini: GeminiConfig = field(default_factory=GeminiConfig)
@@ -114,6 +120,7 @@ class AppConfig:
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
     subagent: SubagentConfig = field(default_factory=SubagentConfig)
     control_plane: ControlPlaneConfig = field(default_factory=ControlPlaneConfig)
+    auth: AuthConfig = field(default_factory=AuthConfig)
     debug_mode: bool = False
 
 
@@ -215,6 +222,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         control_plane=ControlPlaneConfig(
             **_filter_fields(ControlPlaneConfig, data.get("control_plane") or {}, "control_plane")
         ),
+        auth=AuthConfig(**_filter_fields(AuthConfig, data.get("auth") or {}, "auth")),
         debug_mode=bool(data.get("debug_mode", False)),
     )
 
@@ -228,6 +236,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     _apply_env_overrides("alerts", config.alerts)
     _apply_env_overrides("subagent", config.subagent)
     _apply_env_overrides("control_plane", config.control_plane)
+    _apply_env_overrides("auth", config.auth)
 
     debug_env = os.environ.get("G3LOBSTER_DEBUG_MODE", "")
     if debug_env:
