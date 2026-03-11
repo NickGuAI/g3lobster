@@ -274,12 +274,16 @@ class ChatBridge:
 
         # Slash-command interception — handle locally without hitting the AI.
         if self.cron_store is not None:
-            cmd_reply = handle_command(text, target_id, self.cron_store)
+            cmd_reply = await handle_command(text, target_id, self.cron_store, registry=self.registry)
             if cmd_reply is not None:
-                await self.send_message(
-                    f"{persona.emoji} {persona.name}: {cmd_reply}",
-                    thread_id=thread_id,
-                )
+                if isinstance(cmd_reply, dict):
+                    # Cards v2 response (e.g. /status)
+                    await self.send_message("", thread_id=thread_id, cards_v2=cmd_reply.get("cardsV2"))
+                else:
+                    await self.send_message(
+                        f"{persona.emoji} {persona.name}: {cmd_reply}",
+                        thread_id=thread_id,
+                    )
                 return
 
         task = Task(
@@ -342,10 +346,17 @@ class ChatBridge:
         else:
             await self.send_message(reply_text, thread_id=thread_id)
 
-    async def send_message(self, text: str, thread_id: Optional[str] = None) -> dict:
-        body = {"text": text}
+    async def send_message(
+        self,
+        text: str,
+        thread_id: Optional[str] = None,
+        cards_v2: Optional[list] = None,
+    ) -> dict:
+        body: Dict[str, object] = {"text": text}
         if thread_id:
             body["thread"] = {"name": thread_id}
+        if cards_v2:
+            body["cardsV2"] = cards_v2
 
         result = await asyncio.to_thread(
             self.service.spaces().messages().create(parent=self.space_id, body=body).execute
