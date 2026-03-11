@@ -192,6 +192,7 @@ def build_runtime(config: AppConfig):
             cron_store=cron_store,
             debug_mode=config.debug_mode,
             agent_filter=agent_filter,
+            concierge_agent_id=config.chat.concierge_agent_id,
         )
 
     bridge_manager = BridgeManager(

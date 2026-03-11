@@ -81,6 +81,7 @@ class ChatBridge:
         seen_content_max_size: int = 10_000,
         debug_mode: bool = False,
         agent_filter: Optional[Set[str]] = None,
+        concierge_agent_id: Optional[str] = None,
     ):
         self.registry = registry
         self.poll_interval_s = poll_interval_s
@@ -90,6 +91,7 @@ class ChatBridge:
         self.auth_data_dir = auth_data_dir
         self.cron_store = cron_store
         self.debug_mode = debug_mode
+        self.concierge_agent_id = concierge_agent_id
 
         self.space_id = space_id
         self._poll_task: Optional[asyncio.Task] = None
@@ -226,6 +228,10 @@ class ChatBridge:
             if f"@{persona.id}".lower() in lowered:
                 return persona.id
 
+        if self.concierge_agent_id:
+            logger.info("No @-mention found, routing to concierge agent: %s", self.concierge_agent_id)
+            return self.concierge_agent_id
+
         return None
 
     async def handle_message(self, message: dict) -> None:
@@ -322,6 +328,16 @@ class ChatBridge:
             final_error = task.error or "unknown error"
         if not final_result:
             final_result = (task.result or accumulate_text(stream_events)).strip()
+
+        # Attribution swap: if the concierge delegated, attribute to the specialist.
+        if target_id == self.concierge_agent_id and hasattr(self.registry, "subagent_registry"):
+            runs = self.registry.subagent_registry.list_runs(parent_agent_id=target_id)
+            if runs:
+                latest = runs[0]  # sorted newest first
+                child_runtime = self.registry.get_agent(latest.child_agent_id)
+                if child_runtime:
+                    persona = child_runtime.persona
+                    logger.info("Concierge delegated to %s, attributing response", latest.child_agent_id)
 
         if task.status == TaskStatus.FAILED and final_error:
             reply_text = f"{persona.emoji} {persona.name}: error: {final_error}"

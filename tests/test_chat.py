@@ -495,3 +495,130 @@ async def test_chat_bridge_uses_task_error_when_stream_ends_silently(tmp_path) -
     assert len(service.messages_api.created) == 1
     assert len(service.messages_api.updated) == 1
     assert service.messages_api.updated[0]["body"]["text"] == "🦀 Luna: error: stream blew up"
+
+
+@pytest.mark.asyncio
+async def test_unmentioned_message_routes_to_concierge(tmp_path) -> None:
+    """Messages without @-mention are routed to concierge when configured."""
+    data_dir = str(tmp_path / "data")
+    concierge = save_persona(
+        data_dir,
+        AgentPersona(
+            id="concierge",
+            name="Concierge",
+            emoji="\U0001f9ed",
+            soul="",
+            model="gemini",
+            mcp_servers=["*"],
+        ),
+    )
+
+    service = FakeService()
+    registry = FakeRegistry(data_dir, concierge)
+
+    bridge = ChatBridge(
+        registry=registry,
+        space_id="spaces/test",
+        service=service,
+        spaces_config=str(tmp_path / "spaces.json"),
+        concierge_agent_id="concierge",
+    )
+
+    message = {
+        "text": "What's on my calendar tomorrow?",
+        "sender": {"type": "HUMAN", "name": "users/123", "displayName": "Ada"},
+        "thread": {"name": "spaces/test/threads/abc"},
+    }
+
+    await bridge.handle_message(message)
+
+    assert len(service.messages_api.created) == 1
+    assert "Concierge" in service.messages_api.created[0]["body"]["text"]
+    assert len(service.messages_api.updated) == 1
+    assert "\U0001f9ed Concierge: reply" == service.messages_api.updated[0]["body"]["text"]
+
+
+@pytest.mark.asyncio
+async def test_unmentioned_message_dropped_without_concierge(tmp_path) -> None:
+    """Messages without @-mention are dropped when concierge is not configured."""
+    data_dir = str(tmp_path / "data")
+    persona = save_persona(
+        data_dir,
+        AgentPersona(
+            id="luna",
+            name="Luna",
+            emoji="\U0001f980",
+            soul="",
+            model="gemini",
+            mcp_servers=["*"],
+            bot_user_id="users/999",
+        ),
+    )
+
+    service = FakeService()
+    registry = FakeRegistry(data_dir, persona)
+
+    bridge = ChatBridge(
+        registry=registry,
+        space_id="spaces/test",
+        service=service,
+        spaces_config=str(tmp_path / "spaces.json"),
+    )
+
+    message = {
+        "text": "Hello there with no mention",
+        "sender": {"type": "HUMAN", "name": "users/123", "displayName": "Ada"},
+        "thread": {"name": "spaces/test/threads/abc"},
+    }
+
+    await bridge.handle_message(message)
+
+    assert service.messages_api.created == []
+
+
+@pytest.mark.asyncio
+async def test_explicit_mention_routes_correctly_with_concierge_enabled(tmp_path) -> None:
+    """Explicit @-mention still routes to the specific agent even when concierge is enabled."""
+    data_dir = str(tmp_path / "data")
+    persona = save_persona(
+        data_dir,
+        AgentPersona(
+            id="luna",
+            name="Luna",
+            emoji="\U0001f980",
+            soul="",
+            model="gemini",
+            mcp_servers=["*"],
+            bot_user_id="users/999",
+        ),
+    )
+
+    service = FakeService()
+    registry = FakeRegistry(data_dir, persona)
+
+    bridge = ChatBridge(
+        registry=registry,
+        space_id="spaces/test",
+        service=service,
+        spaces_config=str(tmp_path / "spaces.json"),
+        concierge_agent_id="concierge",
+    )
+
+    message = {
+        "text": "Hello there",
+        "sender": {"type": "HUMAN", "name": "users/123", "displayName": "Ada"},
+        "thread": {"name": "spaces/test/threads/abc"},
+        "annotations": [
+            {
+                "type": "USER_MENTION",
+                "userMention": {"user": {"type": "BOT", "name": "users/999"}},
+            }
+        ],
+    }
+
+    await bridge.handle_message(message)
+
+    assert len(service.messages_api.created) == 1
+    assert "\U0001f980 _Luna is thinking..._" == service.messages_api.created[0]["body"]["text"]
+    assert len(service.messages_api.updated) == 1
+    assert "\U0001f980 Luna: reply" == service.messages_api.updated[0]["body"]["text"]

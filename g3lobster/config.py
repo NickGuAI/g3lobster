@@ -52,6 +52,7 @@ class ChatConfig:
     space_id: Optional[str] = None
     space_name: Optional[str] = None
     poll_interval_s: float = 2.0
+    concierge_agent_id: Optional[str] = None
 
 
 @dataclass
