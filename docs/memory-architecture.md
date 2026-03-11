@@ -20,8 +20,10 @@ data/
     │   ├── MEMORY.md                 # Agent short-term memory
     │   ├── PROCEDURES.md             # Agent-specific permanent procedures
     │   ├── CANDIDATES.json           # Candidate procedures (learning)
+    │   ├── associations.jsonl        # Association graph edges
     │   └── daily/
-    │       └── YYYY-MM-DD.md         # Long-term daily notes
+    │       ├── YYYY-MM-DD.md         # Long-term daily notes
+    │       └── YYYY-MM-DD.jsonl      # Structured journal entries
     └── sessions/
         └── {session_id}.jsonl        # Append-only session transcripts
 ```
@@ -69,6 +71,47 @@ Session reaches 40 messages
 ```
 
 **Key class:** `MemoryManager` in `memory/manager.py`
+
+### 2b. Journal Layer — Salience-Classified Entries
+
+The journal layer sits alongside daily notes, providing structured, salience-classified entries with an association graph. Each day gets a `.jsonl` file alongside the existing `.md` daily note.
+
+**SalienceLevel enum:** `critical`, `high`, `normal`, `low`, `noise`
+
+**JournalEntry fields:** `id`, `timestamp`, `content`, `salience`, `tags`, `source_session`, `associations`
+
+**JournalStore** (`daily/YYYY-MM-DD.jsonl`):
+- Append-only JSONL storage per day
+- Query by salience level, tags, date range
+- Backward compatible — existing `.md` files are unaffected
+
+**AssociationGraph** (`associations.jsonl`):
+- Edges stored as `{source_id, target_id, relation_type, weight}`
+- Automatic edges from shared tags and explicit associations
+- Traversable from any entry to find related entries
+
+**Journal entry format:**
+```json
+{"id": "uuid", "timestamp": "2026-03-11T...", "content": "...", "salience": "high", "tags": ["deploy"], "source_session": "sess-1", "associations": ["other-entry-id"]}
+```
+
+**Salience-weighted search:** When searching daily notes, JSONL journal files are also scanned. Results are weighted by salience level (critical=5x, high=3x, normal=1x, low=0.5x, noise=0.1x) for ranking.
+
+**Compaction integration:** When messages are compacted, they are classified by salience (user preferences → high, other content → normal) and written as structured `JournalEntry` objects in addition to the markdown highlights.
+
+**API endpoints:**
+- `GET /agents/{id}/journal` — Query entries with salience/tag/date filters
+- `POST /agents/{id}/journal` — Create a manual journal entry
+- `GET /agents/{id}/journal/{entry_id}/associations` — Traverse association graph
+
+**Configuration:**
+```yaml
+agents:
+  journal_salience_default: normal     # Default salience for new entries
+  journal_association_decay_days: 90   # Days before association edges age out
+```
+
+**Key classes:** `SalienceLevel`, `JournalEntry`, `JournalStore`, `AssociationGraph` in `memory/journal.py`
 
 ### 3. Procedure System — Learning from Patterns
 
@@ -173,6 +216,7 @@ MemoryManager.append_message(session_id, "user", text)
     │       ├── Summarize old messages (Gemini CLI)
     │       ├── Rewrite JSONL (compaction record + kept messages)
     │       ├── Append highlights to MEMORY.md
+    │       ├── Write structured JournalEntry objects (salience-classified)
     │       └── Extract + ingest procedure candidates
     │
     ▼

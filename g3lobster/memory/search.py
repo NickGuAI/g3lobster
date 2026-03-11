@@ -3,13 +3,23 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Set
+from typing import Dict, Iterable, List, Optional, Sequence, Set
+
+from g3lobster.memory.journal import JournalEntry, JournalStore, SalienceLevel
 
 
 SUPPORTED_MEMORY_TYPES = {"memory", "procedures", "daily", "session", "knowledge"}
+
+_SALIENCE_SEARCH_WEIGHTS: Dict[str, float] = {
+    SalienceLevel.CRITICAL.value: 5.0,
+    SalienceLevel.HIGH.value: 3.0,
+    SalienceLevel.NORMAL.value: 1.0,
+    SalienceLevel.LOW.value: 0.5,
+    SalienceLevel.NOISE.value: 0.1,
+}
 
 
 @dataclass
@@ -20,6 +30,7 @@ class MemorySearchHit:
     snippet: str
     line_number: int
     timestamp: Optional[str] = None
+    salience_weight: float = 1.0
 
     def as_dict(self) -> dict:
         return {
@@ -282,6 +293,17 @@ class MemorySearchEngine:
                             file_date=file_date,
                         )
                     )
+                # Also scan JSONL journal files for salience-weighted hits.
+                hits.extend(
+                    self._search_journal_jsonl(
+                        daily_dir=daily_dir,
+                        agent_id=agent_id,
+                        query=normalized_query,
+                        query_terms=query_terms,
+                        start=start,
+                        end=end,
+                    )
+                )
 
             if "session" in selected_types:
                 hits.extend(
@@ -315,5 +337,69 @@ class MemorySearchEngine:
                         )
                     )
 
-        hits.sort(key=self._sort_key, reverse=True)
+        hits.sort(key=self._weighted_sort_key, reverse=True)
         return hits[:capped_limit]
+
+    @staticmethod
+    def _weighted_sort_key(hit: MemorySearchHit) -> float:
+        """Sort by timestamp weighted by salience."""
+        base = MemorySearchEngine._sort_key(hit)
+        return base * hit.salience_weight
+
+    def _search_journal_jsonl(
+        self,
+        *,
+        daily_dir: Path,
+        agent_id: str,
+        query: str,
+        query_terms: Sequence[str],
+        start: Optional[date],
+        end: Optional[date],
+    ) -> List[MemorySearchHit]:
+        """Search JSONL journal files and apply salience-based weighting."""
+        hits: List[MemorySearchHit] = []
+        for path in sorted(daily_dir.glob("*.jsonl")):
+            file_date = self._parse_date(path.stem)
+            if not self._date_in_range(file_date, start, end):
+                continue
+
+            line_number = 0
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except UnicodeDecodeError:
+                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+
+            for raw in lines:
+                line_number += 1
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+
+                content = str(data.get("content", ""))
+                if not self._matches(content, query, query_terms):
+                    continue
+
+                salience = str(data.get("salience", "normal"))
+                weight = _SALIENCE_SEARCH_WEIGHTS.get(salience, 1.0)
+                timestamp = data.get("timestamp")
+
+                tags = data.get("tags", [])
+                tag_str = f" [{', '.join(tags)}]" if tags else ""
+                snippet = f"[{salience}]{tag_str} {content}".strip()
+
+                hits.append(
+                    MemorySearchHit(
+                        agent_id=agent_id,
+                        memory_type="daily",
+                        source=self._relative_source(path),
+                        snippet=snippet,
+                        line_number=line_number,
+                        timestamp=timestamp if isinstance(timestamp, str) else None,
+                        salience_weight=weight,
+                    )
+                )
+        return hits

@@ -22,6 +22,11 @@ from g3lobster.api.models import (
     AgentDetailResponse,
     AgentResponse,
     AgentUpdateRequest,
+    AssociationListResponse,
+    AssociationResponse,
+    JournalEntryCreateRequest,
+    JournalEntryResponse,
+    JournalQueryResponse,
     KnowledgeListResponse,
     LinkBotRequest,
     MemorySearchRequest,
@@ -42,6 +47,7 @@ from g3lobster.api.models import (
 from g3lobster.config import normalize_space_id
 from g3lobster.memory.global_memory import GlobalMemoryManager
 from g3lobster.memory.manager import MemoryManager
+from g3lobster.memory.journal import JournalEntry, SalienceLevel
 from g3lobster.memory.search import MemorySearchEngine
 from g3lobster.tasks.types import Task, TaskStatus
 
@@ -719,6 +725,98 @@ async def link_agent_bot(agent_id: str, payload: LinkBotRequest, request: Reques
         runtime.persona = saved
 
     return {"linked": True, "bot_user_id": saved.bot_user_id}
+
+
+@router.get("/{agent_id}/journal", response_model=JournalQueryResponse)
+async def query_journal(
+    agent_id: str,
+    request: Request,
+    salience_min: Optional[str] = Query(default=None),
+    tag: List[str] = Query(default=[]),
+    start_date: Optional[str] = Query(default=None),
+    end_date: Optional[str] = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=500),
+) -> JournalQueryResponse:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+
+    manager = _memory_manager(request, agent_id)
+    sal_min = SalienceLevel.from_value(salience_min) if salience_min else None
+    tags = tag if tag else None
+
+    from g3lobster.memory.search import MemorySearchEngine
+    parse_date = MemorySearchEngine._parse_date
+    start = parse_date(start_date)
+    end = parse_date(end_date)
+
+    entries = manager.query_journal(
+        salience_min=sal_min,
+        tags=tags,
+        start_date=start,
+        end_date=end,
+        limit=limit,
+    )
+    return JournalQueryResponse(
+        entries=[
+            JournalEntryResponse(
+                id=e.id,
+                timestamp=e.timestamp,
+                content=e.content,
+                salience=e.salience.value,
+                tags=e.tags,
+                source_session=e.source_session,
+                associations=e.associations,
+            )
+            for e in entries
+        ]
+    )
+
+
+@router.post("/{agent_id}/journal", response_model=JournalEntryResponse, status_code=201)
+async def create_journal_entry(
+    agent_id: str, payload: JournalEntryCreateRequest, request: Request
+) -> JournalEntryResponse:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+
+    manager = _memory_manager(request, agent_id)
+    entry = JournalEntry(
+        content=payload.content,
+        salience=SalienceLevel.from_value(payload.salience),
+        tags=payload.tags,
+        source_session=payload.source_session,
+        associations=payload.associations,
+    )
+    saved = manager.append_journal_entry(entry)
+    return JournalEntryResponse(
+        id=saved.id,
+        timestamp=saved.timestamp,
+        content=saved.content,
+        salience=saved.salience.value,
+        tags=saved.tags,
+        source_session=saved.source_session,
+        associations=saved.associations,
+    )
+
+
+@router.get("/{agent_id}/journal/{entry_id}/associations", response_model=AssociationListResponse)
+async def get_journal_associations(agent_id: str, entry_id: str, request: Request) -> AssociationListResponse:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+
+    manager = _memory_manager(request, agent_id)
+    edges = manager.association_graph.get_associations(entry_id)
+    return AssociationListResponse(
+        associations=[
+            AssociationResponse(
+                source_id=e.source_id,
+                target_id=e.target_id,
+                relation_type=e.relation_type,
+                weight=e.weight,
+            )
+            for e in edges
+        ]
+    )
 
 
 @router.post("/{agent_id}/test")
