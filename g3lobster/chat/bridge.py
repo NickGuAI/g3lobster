@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 from g3lobster.chat.auth import get_authenticated_service
 from g3lobster.chat.commands import handle as handle_command
+from g3lobster.chat.memory_inspector import build_memory_response, detect_memory_query
 from g3lobster.cli.parser import get_content_id
 from g3lobster.cli.streaming import StreamEventType, accumulate_text
 from g3lobster.tasks.types import Task, TaskStatus
@@ -272,9 +273,29 @@ class ChatBridge:
         thread_id_safe = (thread_id or "no-thread").replace("/", "_")
         session_id = f"{self.space_id}__{user_id}__{thread_id_safe}"
 
+        # Memory query interception — natural language, before slash commands.
+        if detect_memory_query(text):
+            global_memory = getattr(self.registry, "global_memory", None)
+            card_payload = build_memory_response(
+                agent_name=persona.name,
+                agent_emoji=persona.emoji,
+                agent_id=target_id,
+                memory_manager=runtime.memory_manager,
+                global_memory=global_memory,
+                user_id=user_id,
+                use_cards=True,
+            )
+            await self.send_card_message(card_payload, thread_id=thread_id)
+            return
+
         # Slash-command interception — handle locally without hitting the AI.
         if self.cron_store is not None:
-            cmd_reply = handle_command(text, target_id, self.cron_store)
+            cmd_reply = handle_command(
+                text, target_id, self.cron_store,
+                memory_manager=runtime.memory_manager,
+                global_memory=getattr(self.registry, "global_memory", None),
+                persona=persona,
+            )
             if cmd_reply is not None:
                 await self.send_message(
                     f"{persona.emoji} {persona.name}: {cmd_reply}",
@@ -341,6 +362,37 @@ class ChatBridge:
             await self.update_message(thinking_name, reply_text)
         else:
             await self.send_message(reply_text, thread_id=thread_id)
+
+    async def send_card_message(
+        self, card_payload: dict, thread_id: Optional[str] = None,
+    ) -> dict:
+        """Send a Cards v2 message to the space.
+
+        *card_payload* should be a dict with a ``cardsV2`` key.  If the API
+        call fails (e.g. Cards v2 not supported), falls back to a plain-text
+        representation.
+        """
+        body: dict = dict(card_payload)
+        if thread_id:
+            body["thread"] = {"name": thread_id}
+
+        try:
+            result = await asyncio.to_thread(
+                self.service.spaces().messages().create(parent=self.space_id, body=body).execute
+            )
+            return result or {}
+        except Exception:
+            logger.debug("Cards v2 send failed, falling back to text", exc_info=True)
+            # Fallback: rebuild as text
+            from g3lobster.chat.cards import build_memory_inspector_text
+            cards = card_payload.get("cardsV2", [])
+            if cards:
+                card = cards[0].get("card", {})
+                header = card.get("header", {})
+                fallback_text = f"*{header.get('title', 'Memory Inspector')}*\n(Card rendering unavailable)"
+            else:
+                fallback_text = "Memory inspector data unavailable."
+            return await self.send_message(fallback_text, thread_id=thread_id)
 
     async def send_message(self, text: str, thread_id: Optional[str] = None) -> dict:
         body = {"text": text}

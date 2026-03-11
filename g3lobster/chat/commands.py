@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import re
 import shlex
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from g3lobster.cron.store import CronStore
@@ -31,6 +31,10 @@ _SLASH_RE = re.compile(r"(?:^|\s)/([a-zA-Z][a-zA-Z0-9_-]*)(?:\s+(.*))?", re.DOTA
 HELP_TEXT = """\
 *Available commands*
 • `/help` — show this message
+• `/memory` — show what this agent remembers about you
+• `/forget <type> <id>` — forget a specific memory item
+  _type_: `preference` or `procedure`
+  _id_: item index (for preferences) or title (for procedures)
 • `/cron list` — list scheduled tasks for this agent
 • `/cron add "<schedule>" "<instruction>"` — create a new cron task
   _schedule_: standard 5-field cron expression, e.g. `0 9 * * *`
@@ -44,7 +48,7 @@ HELP_TEXT = """\
 def detect_command(text: str) -> Optional[tuple[str, str]]:
     """Return ``(command, rest)`` if text contains a ``/`` command, else ``None``.
 
-    Recognised commands: ``help``, ``cron``, ``sleep``.
+    Recognised commands: ``help``, ``memory``, ``forget``, ``cron``, ``sleep``.
     """
     m = _SLASH_RE.search(text)
     if not m:
@@ -54,7 +58,14 @@ def detect_command(text: str) -> Optional[tuple[str, str]]:
     return cmd, rest
 
 
-def handle(text: str, agent_id: str, cron_store: "CronStore") -> Optional[str]:
+def handle(
+    text: str,
+    agent_id: str,
+    cron_store: "CronStore",
+    memory_manager: Any = None,
+    global_memory: Any = None,
+    persona: Any = None,
+) -> Optional[str]:
     """Intercept and handle a slash command.
 
     Returns a reply string when the command is handled, or ``None`` when
@@ -69,6 +80,12 @@ def handle(text: str, agent_id: str, cron_store: "CronStore") -> Optional[str]:
     if cmd == "help":
         return HELP_TEXT
 
+    if cmd == "memory":
+        return _handle_memory(agent_id, memory_manager, global_memory, persona)
+
+    if cmd == "forget":
+        return _handle_forget(rest, agent_id, memory_manager)
+
     if cmd == "cron":
         return _handle_cron(rest, agent_id, cron_store)
 
@@ -77,6 +94,68 @@ def handle(text: str, agent_id: str, cron_store: "CronStore") -> Optional[str]:
 
     # Unknown command — fall through to AI
     return None
+
+
+def _handle_memory(
+    agent_id: str,
+    memory_manager: Any = None,
+    global_memory: Any = None,
+    persona: Any = None,
+) -> str:
+    """Handle /memory — return a text-format memory inspector."""
+    if memory_manager is None:
+        return "Memory system not available for this agent."
+
+    from g3lobster.chat.memory_inspector import build_memory_response
+
+    name = getattr(persona, "name", agent_id) if persona else agent_id
+    emoji = getattr(persona, "emoji", "") if persona else ""
+
+    result = build_memory_response(
+        agent_name=name,
+        agent_emoji=emoji,
+        agent_id=agent_id,
+        memory_manager=memory_manager,
+        global_memory=global_memory,
+        use_cards=False,
+    )
+    return result.get("text", "No memory data available.")
+
+
+def _handle_forget(args: str, agent_id: str, memory_manager: Any = None) -> str:
+    """Handle /forget <type> <id> — remove a specific memory item."""
+    if memory_manager is None:
+        return "Memory system not available for this agent."
+
+    parts = args.split(None, 1)
+    if len(parts) < 2:
+        return "Usage: `/forget <type> <id>`\n_type_: `preference` or `procedure`\n_id_: item index or title"
+
+    item_type, item_id = parts[0].lower(), parts[1].strip()
+
+    if item_type == "preference":
+        try:
+            index = int(item_id)
+        except ValueError:
+            return f"Invalid preference index: `{item_id}`. Must be a number."
+        deleted = memory_manager.delete_tagged_memory("user preference", index)
+        if deleted:
+            return f"Forgot preference #{index}."
+        return f"Preference #{index} not found."
+
+    if item_type == "procedure":
+        procedures = memory_manager.list_procedures()
+        matched = [p for p in procedures if p.title.lower() == item_id.lower()]
+        if not matched:
+            matched = [p for p in procedures if item_id.lower() in p.title.lower()]
+        if not matched:
+            return f"No procedure found matching `{item_id}`."
+        # Remove from PROCEDURES.md by rewriting without the matched procedure
+        remaining = [p for p in procedures if p not in matched]
+        memory_manager.procedure_store.save_procedures(remaining)
+        return f"Forgot procedure: *{matched[0].title}*."
+
+    return f"Unknown memory type: `{item_type}`. Use `preference` or `procedure`."
 
 
 def _handle_sleep(args: str, agent_id: str) -> str:

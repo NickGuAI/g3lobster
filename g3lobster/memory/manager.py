@@ -166,6 +166,48 @@ class MemoryManager:
         _flush()
         return entries
 
+    def delete_tagged_memory(self, tag: str, index: int) -> bool:
+        """Delete the *index*-th entry with the given tag from MEMORY.md.
+
+        Returns ``True`` if the entry was found and removed.
+        """
+        normalized_tag = self._normalize_tag(tag).lower()
+        if not normalized_tag:
+            return False
+
+        content = self.read_memory()
+        lines = content.splitlines(keepends=True)
+
+        # Identify section boundaries.
+        sections: list[tuple[int, int, str | None]] = []  # (start, end, tag_or_none)
+        current_start = 0
+        current_tag: str | None = None
+
+        for i, line in enumerate(lines):
+            if line.startswith("## "):
+                if current_start < i:
+                    sections.append((current_start, i, current_tag))
+                current_start = i
+                match = re.fullmatch(r"##\s+\[(.+)\]\s*", line.strip())
+                current_tag = self._normalize_tag(match.group(1)).lower() if match else None
+                continue
+        sections.append((current_start, len(lines), current_tag))
+
+        # Find the index-th section matching the tag.
+        match_count = 0
+        for start, end, section_tag in sections:
+            if section_tag != normalized_tag:
+                continue
+            if match_count == index:
+                # Remove this section.
+                del lines[start:end]
+                with self._memory_lock:
+                    self.write_memory("".join(lines))
+                return True
+            match_count += 1
+
+        return False
+
     def _trim_memory(self, content: str) -> str:
         """Keep at most ``memory_max_sections`` ## sections.
 
