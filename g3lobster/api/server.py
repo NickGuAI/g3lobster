@@ -25,8 +25,10 @@ from g3lobster.api.routes_standup import router as standup_router
 from g3lobster.api.routes_delegation import router as delegation_router
 from g3lobster.api.routes_export import router as export_router
 from g3lobster.api.routes_health import router as health_router
+from g3lobster.api.routes_thinking import router as thinking_router
 from g3lobster.api.routes_metrics import router as metrics_router
 from g3lobster.api.routes_setup import router as setup_router
+from g3lobster.api.event_bus import EventBus
 from g3lobster.config import AppConfig
 
 
@@ -46,6 +48,7 @@ def create_app(
     control_plane: Optional[object] = None,
     standup_store: Optional[object] = None,
     standup_orchestrator: Optional[object] = None,
+    event_bus: Optional[EventBus] = None,
 ) -> FastAPI:
     runtime_config = config or AppConfig()
     runtime_config_path = str(Path(config_path or "config.yaml").expanduser().resolve())
@@ -98,6 +101,7 @@ def create_app(
     app.state.standup_store = standup_store
     app.state.standup_orchestrator = standup_orchestrator
     app.state._stopped_memory_managers = {}
+    app.state.event_bus = event_bus or EventBus()
 
     _AUTH_EXEMPT_PREFIXES = ("/health", "/setup", "/chat/events", "/docs", "/openapi.json", "/ui")
 
@@ -128,6 +132,7 @@ def create_app(
     app.include_router(standup_router)
     app.include_router(calendar_router)
     app.include_router(calendar_setup_router)
+    app.include_router(thinking_router)
 
     static_dir = Path(__file__).resolve().parent.parent / "static"
     if static_dir.is_dir():

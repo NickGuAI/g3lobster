@@ -91,6 +91,7 @@ class ChatBridge:
         concierge_agent_id: Optional[str] = None,
         debounce_window_ms: int = 2000,
         stream_update_interval_s: float = 1.0,
+        event_bus: Optional[object] = None,
     ):
         self.registry = registry
         self.poll_interval_s = poll_interval_s
@@ -103,6 +104,7 @@ class ChatBridge:
         self.standup_orchestrator = standup_orchestrator
         self.debug_mode = debug_mode
         self.concierge_agent_id = concierge_agent_id
+        self.event_bus = event_bus
 
         self.space_id = space_id
         self._poll_task: Optional[asyncio.Task] = None
@@ -402,6 +404,15 @@ class ChatBridge:
             space_id=self.space_id,
         )
 
+        # Emit user_input event to SSE subscribers
+        if self.event_bus:
+            sender_name = sender.get("displayName") or sender.get("name") or "unknown"
+            self.event_bus.publish(target_id, {
+                "type": "user_input",
+                "sender": sender_name,
+                "text": text,
+            })
+
         thinking_msg = await self.send_message(
             f"{persona.emoji} _{persona.name} is thinking..._",
             thread_id=thread_id,
@@ -417,6 +428,15 @@ class ChatBridge:
 
         async for event in runtime.assign_stream(task):
             stream_events.append(event)
+
+            # Publish streaming event to SSE subscribers
+            if self.event_bus:
+                self.event_bus.publish(target_id, {
+                    "type": event.event_type.value,
+                    "data": event.data,
+                    "text": event.text or None,
+                })
+
             if event.event_type == StreamEventType.TOOL_USE:
                 tool_name = _tool_name_for_display(event.data)
                 progress_text = _format_progress_text(persona, tool_name)
@@ -470,6 +490,15 @@ class ChatBridge:
         else:
             reply_text = f"{reply_persona.emoji} {reply_persona.name}: task finished with no output"
 
+        # Emit response event to SSE subscribers
+        if self.event_bus:
+            self.event_bus.publish(target_id, {
+                "type": "response",
+                "text": final_result or final_error or "no output",
+                "status": "error" if (task.status == TaskStatus.FAILED or final_error) else "success",
+            })
+
+        # Update the thinking message in-place (no extra new message).
         if thinking_name:
             await self.update_message(thinking_name, reply_text)
         else:
