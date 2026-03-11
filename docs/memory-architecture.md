@@ -20,8 +20,10 @@ data/
     │   ├── MEMORY.md                 # Agent short-term memory
     │   ├── PROCEDURES.md             # Agent-specific permanent procedures
     │   ├── CANDIDATES.json           # Candidate procedures (learning)
+    │   ├── associations.jsonl            # Association graph edges
     │   └── daily/
-    │       └── YYYY-MM-DD.md         # Long-term daily notes
+    │       ├── YYYY-MM-DD.md         # Long-term daily notes (human-readable)
+    │       └── YYYY-MM-DD.jsonl      # Structured journal entries (JSONL)
     └── sessions/
         └── {session_id}.jsonl        # Append-only session transcripts
 ```
@@ -69,6 +71,46 @@ Session reaches 40 messages
 ```
 
 **Key class:** `MemoryManager` in `memory/manager.py`
+
+### 2a. Journal Layer — Salience-Classified Entries
+
+Alongside flat `.md` daily notes, a structured JSONL journal captures entries with metadata:
+
+**Entry format in `daily/YYYY-MM-DD.jsonl`:**
+```json
+{"id": "uuid", "timestamp": "ISO8601", "content": "...", "salience": "high", "tags": ["ops"], "source_session": "sess-1", "associations": ["other-entry-id"]}
+```
+
+**Salience levels** (with search ranking weights):
+| Level | Weight | Use Case |
+|-------|--------|----------|
+| critical | 5.0x | System-critical decisions, security events |
+| high | 3.0x | User preferences, important decisions |
+| normal | 1.0x | Standard observations (default) |
+| low | 0.5x | Routine chitchat, minor notes |
+| noise | 0.1x | Auto-generated filler |
+
+**Association graph** (`associations.jsonl`):
+Edges link related entries by shared tags, entities, or explicit references:
+```json
+{"source_id": "uuid-1", "target_id": "uuid-2", "relation_type": "shared_tag:ops", "weight": 1.0}
+```
+
+During compaction, entries are auto-classified:
+- User preferences → `high` salience, tagged `user_preference`
+- Tool outputs → `normal` salience, tagged `tool_output`
+- Chitchat → `low` salience, tagged `chitchat`
+
+Entries sharing tags are automatically linked via the association graph.
+
+**Key classes:** `JournalEntry`, `JournalStore`, `AssociationGraph` in `memory/journal.py`
+
+**Configuration** (`config.yaml` → `agents` section):
+```yaml
+agents:
+  journal_salience_default: normal    # Default salience for new entries
+  journal_association_decay_days: 90  # Days before association edges decay
+```
 
 ### 3. Procedure System — Learning from Patterns
 

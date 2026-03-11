@@ -196,3 +196,47 @@ class SpaceConfigRequest(BaseModel):
 
 class SleepAgentRequest(BaseModel):
     duration_s: float = Field(gt=0, le=86400, description="Sleep duration in seconds (max 24h)")
+
+
+# --- Journal models ---
+
+
+class JournalEntryResponse(BaseModel):
+    id: str
+    timestamp: str
+    content: str
+    salience: str
+    tags: List[str] = Field(default_factory=list)
+    source_session: str = ""
+    associations: List[str] = Field(default_factory=list)
+
+
+class JournalEntryCreateRequest(BaseModel):
+    content: str = Field(min_length=1)
+    salience: Optional[str] = None
+    tags: List[str] = Field(default_factory=list)
+    source_session: str = ""
+
+
+class JournalQueryRequest(BaseModel):
+    salience_min: Optional[str] = None
+    tags: List[str] = Field(default_factory=list)
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    limit: int = Field(default=50, ge=1, le=500)
+
+
+class JournalQueryResponse(BaseModel):
+    entries: List[JournalEntryResponse] = Field(default_factory=list)
+
+
+class AssociationResponse(BaseModel):
+    source_id: str
+    target_id: str
+    relation_type: str = "related"
+    weight: float = 1.0
+
+
+class AssociationListResponse(BaseModel):
+    associations: List[AssociationResponse] = Field(default_factory=list)
+    related_ids: List[str] = Field(default_factory=list)
