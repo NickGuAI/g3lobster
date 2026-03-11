@@ -1,5 +1,4 @@
 """Google Calendar API client."""
-
 from __future__ import annotations
 
 import logging
@@ -41,4 +40,4 @@ def get_calendar_service(auth_data_dir: Optional[str] = None):
         token_path.parent.mkdir(parents=True, exist_ok=True)
         token_path.write_text(creds.to_json(), encoding="utf-8")
 
-    return build("calendar", "v3", credentials=creds)
+    return build("calendar", "v3", credentials=creds, cache_discovery=False)

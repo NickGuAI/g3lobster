@@ -1,1 +1,1 @@
-"""Google Calendar integration for g3lobster."""
+"""Google Calendar conflict resolver package."""
