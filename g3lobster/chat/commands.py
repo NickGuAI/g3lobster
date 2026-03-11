@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from g3lobster.agents.registry import AgentRegistry
     from g3lobster.cron.store import CronStore
     from g3lobster.memory.global_memory import GlobalMemoryManager
+    from g3lobster.memory.manager import MemoryManager
 
 # Matches a leading slash command token anywhere after optional whitespace /
 # (handles both "/cron list" and "@robo /cron list" after the mention is stripped).
@@ -48,13 +49,16 @@ HELP_TEXT = """\
 • `/teach <fact>` — teach the agents something new
 • `/teach list` — list all taught knowledge
 • `/teach forget <keyword>` — remove a knowledge entry
+• `/memory` — show what the agent remembers about you
+• `/forget preference <number>` — remove a stored preference
+• `/forget procedure <title>` — remove a learned procedure
 """
 
 
 def detect_command(text: str) -> Optional[tuple[str, str]]:
     """Return ``(command, rest)`` if text contains a ``/`` command, else ``None``.
 
-    Recognised commands: ``help``, ``status``, ``quick``, ``teach``, ``cron``, ``sleep``.
+    Recognised commands: ``help``, ``status``, ``quick``, ``teach``, ``cron``, ``sleep``, ``memory``, ``forget``.
     """
     m = _SLASH_RE.search(text)
     if not m:
@@ -99,6 +103,12 @@ async def handle(
 
     if cmd == "teach":
         return _handle_teach(rest, global_memory)
+
+    if cmd == "memory":
+        return await _handle_memory(agent_id, registry, global_memory)
+
+    if cmd == "forget":
+        return _handle_forget(rest, agent_id, registry)
 
     # Unknown command — fall through to AI
     return None
@@ -212,6 +222,108 @@ def _handle_teach(args: str, global_memory: Optional["GlobalMemoryManager"]) -> 
     key = "_".join(words[:5])
     global_memory.add_knowledge(key, args)
     return f"\u2705 Learned: _{args}_"
+
+
+# ---------------------------------------------------------------------------
+# /memory — Memory Inspector Card
+# ---------------------------------------------------------------------------
+
+
+async def _handle_memory(
+    agent_id: str,
+    registry: Optional["AgentRegistry"],
+    global_memory: Optional["GlobalMemoryManager"],
+) -> Union[str, Dict[str, Any]]:
+    """Handle /memory — returns a Cards v2 memory inspector card."""
+    if registry is None:
+        return "\u26a0\ufe0f Memory inspector unavailable — registry not connected."
+
+    from g3lobster.chat.memory_inspector import build_memory_card
+
+    card_payload = await build_memory_card(
+        agent_id=agent_id,
+        user_id="unknown",  # slash commands don't carry user context
+        registry=registry,
+        global_memory=global_memory,
+    )
+    return card_payload
+
+
+# ---------------------------------------------------------------------------
+# /forget — Delete memory items
+# ---------------------------------------------------------------------------
+
+
+def _handle_forget(
+    args: str,
+    agent_id: str,
+    registry: Optional["AgentRegistry"],
+) -> str:
+    """Handle /forget — remove specific memory items."""
+    if registry is None:
+        return "\u26a0\ufe0f Forget unavailable — registry not connected."
+
+    args = args.strip()
+    if not args:
+        return (
+            "*Usage:*\n"
+            "\u2022 `/forget preference <number>` \u2014 remove a stored preference by index\n"
+            "\u2022 `/forget procedure <title>` \u2014 remove a learned procedure by title keyword"
+        )
+
+    parts = args.split(None, 1)
+    sub = parts[0].lower()
+    rest = parts[1].strip() if len(parts) > 1 else ""
+
+    runtime = registry.get_agent(agent_id)
+    if not runtime:
+        return f"\u26a0\ufe0f Agent `{agent_id}` is not running."
+
+    mm = runtime.memory_manager
+
+    if sub == "preference":
+        return _forget_preference(mm, rest)
+
+    if sub == "procedure":
+        return _forget_procedure(mm, rest)
+
+    return f"Unknown forget target: `{sub}`. Use `preference` or `procedure`."
+
+
+def _forget_preference(mm: "MemoryManager", index_str: str) -> str:
+    """Remove a tagged preference entry by 1-based index."""
+    if not index_str:
+        return "Usage: `/forget preference <number>`"
+    try:
+        index = int(index_str)
+    except ValueError:
+        return f"Invalid preference index: `{index_str}`. Must be a number."
+
+    removed = mm.delete_tagged_memory("user preference", index - 1)
+    if removed:
+        return f"\U0001f5d1 Removed preference #{index}."
+    return f"No preference found at index #{index}."
+
+
+def _forget_procedure(mm: "MemoryManager", keyword: str) -> str:
+    """Remove a procedure by title keyword."""
+    if not keyword:
+        return "Usage: `/forget procedure <title>`"
+
+    keyword_lower = keyword.lower()
+    procedures = mm.list_procedures()
+    matched = [p for p in procedures if keyword_lower in p.title.lower()]
+
+    if not matched:
+        return f"No procedure matching `{keyword}` found."
+
+    # Remove matching procedures by rewriting PROCEDURES.md without them
+    remaining = [p for p in procedures if keyword_lower not in p.title.lower()]
+    mm.procedure_store.save_procedures(remaining)
+
+    count = len(matched)
+    titles = ", ".join(p.title for p in matched[:3])
+    return f"\U0001f5d1 Removed {count} procedure{'s' if count > 1 else ''}: {titles}"
 
 
 # ---------------------------------------------------------------------------

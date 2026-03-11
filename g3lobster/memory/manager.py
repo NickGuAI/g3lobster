@@ -175,6 +175,58 @@ class MemoryManager:
         _flush()
         return entries
 
+    def delete_tagged_memory(self, tag: str, index: int) -> bool:
+        """Remove the *index*-th (0-based) entry with the given tag.
+
+        Rewrites MEMORY.md with that section removed.  Returns True if a
+        section was found and deleted.
+        """
+        normalized_tag = self._normalize_tag(tag).lower()
+        if not normalized_tag:
+            return False
+
+        content = self.read_memory()
+        lines = content.splitlines(keepends=True)
+
+        # Parse into (tag_or_none, section_text) tuples.
+        sections: list[tuple[Optional[str], str]] = []
+        current_tag: Optional[str] = None
+        buf: list[str] = []
+
+        def _flush() -> None:
+            sections.append((current_tag, "".join(buf)))
+
+        for line in lines:
+            if line.rstrip().startswith("## "):
+                if buf:
+                    _flush()
+                match = re.fullmatch(r"##\s+\[(.+)\]\s*", line.strip())
+                current_tag = self._normalize_tag(match.group(1)).lower() if match else None
+                buf = [line]
+                continue
+            buf.append(line)
+
+        if buf:
+            _flush()
+
+        # Find the N-th section with the matching tag.
+        target_idx = -1
+        match_count = 0
+        for i, (section_tag, _text) in enumerate(sections):
+            if section_tag == normalized_tag:
+                if match_count == index:
+                    target_idx = i
+                    break
+                match_count += 1
+
+        if target_idx < 0:
+            return False
+
+        del sections[target_idx]
+        with self._memory_lock:
+            self.write_memory("".join(text for _, text in sections))
+        return True
+
     def _trim_memory(self, content: str) -> str:
         """Keep at most ``memory_max_sections`` ## sections.
 
