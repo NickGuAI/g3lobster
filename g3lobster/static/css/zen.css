@@ -155,6 +155,7 @@ h3 {
   flex-shrink: 0;
 }
 
+.status-pill.active .status-dot,
 .status-pill.busy .status-dot,
 .status-pill.running .status-dot,
 .status-pill.starting .status-dot {
