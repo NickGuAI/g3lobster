@@ -196,6 +196,11 @@ def build_runtime(config: AppConfig):
         registry=registry,
     )
 
+    # Wire standup orchestrator into cron manager so __standup_*  instructions
+    # are intercepted instead of being sent to the agent as raw prompts.
+    if cron_manager is not None:
+        cron_manager._standup_orchestrator = standup_orchestrator
+
     def chat_bridge_factory(
         space_id: str,
         service=None,
