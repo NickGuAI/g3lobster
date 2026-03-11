@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -137,47 +136,6 @@ async def configure_space(payload: SpaceConfigRequest, request: Request) -> dict
         bridge_manager.set_legacy_space_id(config.chat.space_id)
     save_chat_config(config.chat, request.app.state.config_path)
     return {"configured": True, "space_id": config.chat.space_id}
-
-
-@router.get("/space-bots")
-async def list_space_bots(request: Request, space_id: Optional[str] = None) -> dict:
-    """List bot members of the configured space so users can grab bot_user_id."""
-    config = request.app.state.config
-    chat_auth_dir = request.app.state.chat_auth_dir
-
-    target_space = normalize_space_id(space_id) or normalize_space_id(config.chat.space_id)
-    if not target_space:
-        raise HTTPException(status_code=400, detail="Configure a chat space first (step 2)")
-    if not token_exists(chat_auth_dir):
-        raise HTTPException(status_code=400, detail="Complete OAuth first (step 1)")
-
-    try:
-        service = get_authenticated_service(chat_auth_dir)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Auth error: {exc}") from exc
-
-    try:
-        result = await asyncio.to_thread(
-            service.spaces().members().list(
-                parent=target_space,
-                filter='member.type = "BOT"',
-                pageSize=100,
-            ).execute
-        )
-    except Exception as exc:
-        msg = str(exc) or repr(exc)
-        raise HTTPException(status_code=400, detail=f"Failed to list space members: {msg}") from exc
-
-    bots = []
-    for member in result.get("memberships", []):
-        m = member.get("member", {})
-        if m.get("type") == "BOT":
-            bots.append({
-                "user_id": m.get("name", ""),
-                "display_name": m.get("displayName", ""),
-            })
-
-    return {"bots": bots}
 
 
 @router.post("/start")

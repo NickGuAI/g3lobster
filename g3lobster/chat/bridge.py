@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -218,50 +219,37 @@ class ChatBridge:
             last_dt = _parse_ts(create_time)
             await self.handle_message(message)
 
-    def _resolve_target_agent(self, message: dict, text: str) -> Optional[str]:
+    _AGENT_SLUG_RE = re.compile(r"^/([a-z0-9][a-z0-9_-]*)\s*(.*)", re.DOTALL | re.IGNORECASE)
+
+    def _resolve_target_agent(self, message: dict, text: str) -> tuple[Optional[str], str]:
+        """Route a message to an agent via ``/slug`` prefix in text.
+
+        Returns ``(agent_id, remaining_text)`` where *remaining_text* has the
+        ``/slug`` prefix stripped.  Falls back to the concierge agent when no
+        ``/slug`` is present.
+        """
         personas = self.registry.list_enabled_personas()
         if self._agent_filter is not None:
             personas = [persona for persona in personas if persona.id in self._agent_filter]
         if not personas:
-            return None
+            return None, text
 
-        for annotation in message.get("annotations", []):
-            if annotation.get("type") != "USER_MENTION":
-                continue
-            user = annotation.get("userMention", {}).get("user", {})
-            if user.get("type") != "BOT":
-                continue
-
-            bot_name = str(user.get("name", "")).strip()
-            bot_display = str(user.get("displayName", "")).strip()
-            logger.info("Bot mentioned \u2014 user_id: %s  display: %s", bot_name, bot_display)
-
-            candidates = {bot_name, bot_display}
-            candidates = {item for item in candidates if item}
+        # Check for /agent-slug prefix
+        match = self._AGENT_SLUG_RE.match(text)
+        if match:
+            slug = match.group(1).lower()
+            rest = match.group(2).strip()
             for persona in personas:
-                if persona.bot_user_id and persona.bot_user_id in candidates:
-                    return persona.id
+                if slug == persona.id or slug in persona.aliases:
+                    logger.info("Slash-mention routed to agent '%s' via /%s", persona.id, slug)
+                    return persona.id, rest or text
 
-            logger.warning(
-                "Bot %s is not linked to any agent. "
-                "Go to the wizard step 4 and paste this as the Bot User ID: %s",
-                bot_display or bot_name,
-                bot_name,
-            )
-
-        lowered = text.lower()
-        for persona in personas:
-            if f"@{persona.name}".lower() in lowered:
-                return persona.id
-            if f"@{persona.id}".lower() in lowered:
-                return persona.id
-
-        # Fallback to concierge agent for unmentioned messages
+        # Fallback to concierge agent for messages without /slug prefix
         if self.concierge_agent_id:
-            logger.info("No @-mention found, routing to concierge agent '%s'", self.concierge_agent_id)
-            return self.concierge_agent_id
+            logger.info("No /agent-slug found, routing to concierge agent '%s'", self.concierge_agent_id)
+            return self.concierge_agent_id, text
 
-        return None
+        return None, text
 
     def _resolve_delegation_persona(self, parent_agent_id: str):
         """Check if the parent agent delegated to a child and return the child's persona."""
@@ -297,7 +285,37 @@ class ChatBridge:
             return
         self._seen_content.add(content_id)
 
-        target_id = self._resolve_target_agent(message, text)
+        thread_id = message.get("thread", {}).get("name")
+        user_id = sender.get("name") or "unknown"
+
+        # Resolve agent target via /slug prefix or concierge fallback.
+        target_id, routed_text = self._resolve_target_agent(message, text)
+
+        # Slash-command interception — handle immediately, bypass debounce.
+        # Check routed_text first (for "/agent /help"), then fall back to
+        # original text (for bare "/help" when no agent matched).
+        cmd_text = routed_text if target_id else text
+        if detect_command(cmd_text) is not None and self.cron_store is not None:
+            cmd_agent_id = target_id or self.concierge_agent_id or "unknown"
+            cmd_reply = await handle_command(cmd_text, cmd_agent_id, self.cron_store, registry=self.registry, global_memory=getattr(self.registry, 'global_memory_manager', None), incident_store=self.incident_store, thread_id=thread_id or "", space_id=self.space_id or "", user_id=sender.get("name") or "unknown")
+            if cmd_reply is not None:
+                # Intercept __CATCHUP__ marker from /catchup command
+                if cmd_reply == "__CATCHUP__":
+                    # Need persona for catchup — resolve from target_id
+                    runtime = self.registry.get_agent(cmd_agent_id)
+                    catchup_persona = runtime.persona if runtime else None
+                    if catchup_persona:
+                        user_id_safe = (sender.get("name") or "unknown")
+                        thread_id_safe = (thread_id or "no-thread").replace("/", "_")
+                        session_id = f"{self.space_id}__{user_id_safe}__{thread_id_safe}"
+                        await self._handle_catchup(catchup_persona, thread_id, session_id)
+                    return
+                if isinstance(cmd_reply, dict):
+                    await self.send_message("", thread_id=thread_id, cards_v2=cmd_reply.get("cardsV2"))
+                else:
+                    await self.send_message(cmd_reply, thread_id=thread_id)
+                return
+
         if not target_id:
             return
 
@@ -328,12 +346,9 @@ class ChatBridge:
                 if sender_name not in allowlist and sender_email not in allowlist:
                     return
 
-        thread_id = message.get("thread", {}).get("name")
-        user_id = sender.get("name") or "unknown"
-
         # Memory query interception -- before slash commands since these are
         # natural language, not /-prefixed.
-        if detect_memory_query(text) is not None:
+        if detect_memory_query(routed_text) is not None:
             card_payload = await build_memory_card(
                 agent_id=target_id,
                 user_id=user_id,
@@ -347,42 +362,22 @@ class ChatBridge:
             )
             return
 
-        # Slash-command interception -- handle immediately, bypass debounce.
-        if detect_command(text) is not None and self.cron_store is not None:
-            cmd_reply = await handle_command(text, target_id, self.cron_store, registry=self.registry, global_memory=getattr(self.registry, 'global_memory_manager', None), incident_store=self.incident_store, thread_id=thread_id or "", space_id=self.space_id or "", user_id=sender.get("name") or "unknown")
-            if cmd_reply is not None:
-                # Intercept __CATCHUP__ marker from /catchup command
-                if cmd_reply == "__CATCHUP__":
-                    user_id_safe = (sender.get("name") or "unknown")
-                    thread_id_safe = (thread_id or "no-thread").replace("/", "_")
-                    session_id = f"{self.space_id}__{user_id_safe}__{thread_id_safe}"
-                    await self._handle_catchup(persona, thread_id, session_id)
-                    return
-                if isinstance(cmd_reply, dict):
-                    await self.send_message("", thread_id=thread_id, cards_v2=cmd_reply.get("cardsV2"))
-                else:
-                    await self.send_message(
-                        f"{persona.emoji} {persona.name}: {cmd_reply}",
-                        thread_id=thread_id,
-                    )
-                return
-
-        # Standup response collection -- collect response from tracked team members.
+        # Standup response collection — collect response from tracked team members.
         if self.standup_orchestrator is not None:
             sender_name = sender.get("name") or ""
             if self.standup_orchestrator.is_standup_participant(target_id, sender_name):
                 sender_display = sender.get("displayName") or sender_name
                 self.standup_orchestrator.collect_response(
-                    target_id, sender_name, sender_display, text,
+                    target_id, sender_name, sender_display, routed_text,
                 )
 
         # Route through debouncer for non-command messages.
         # When debounce window is zero, dispatch directly (no timer overhead).
         if self._debouncer.window_s == 0:
-            await self._dispatch_to_agent(text, message, persona, thread_id, target_id)
+            await self._dispatch_to_agent(routed_text, message, persona, thread_id, target_id)
         else:
             key: DebounceKey = (self.space_id or "", user_id, thread_id or "no-thread")
-            self._debouncer.add(key, text, message, persona, thread_id, target_id)
+            self._debouncer.add(key, routed_text, message, persona, thread_id, target_id)
 
     async def _dispatch_to_agent(
         self,

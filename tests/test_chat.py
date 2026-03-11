@@ -183,7 +183,7 @@ class FakeToolRuntime:
 
 
 @pytest.mark.asyncio
-async def test_chat_bridge_routes_to_named_agent_by_bot_user_id(tmp_path) -> None:
+async def test_chat_bridge_routes_to_named_agent_by_slash_mention(tmp_path) -> None:
     data_dir = str(tmp_path / "data")
     persona = save_persona(
         data_dir,
@@ -194,7 +194,6 @@ async def test_chat_bridge_routes_to_named_agent_by_bot_user_id(tmp_path) -> Non
             soul="",
             model="gemini",
             mcp_servers=["*"],
-            bot_user_id="users/999",
         ),
     )
 
@@ -210,15 +209,9 @@ async def test_chat_bridge_routes_to_named_agent_by_bot_user_id(tmp_path) -> Non
     )
 
     message = {
-        "text": "Hello there",
+        "text": "/luna Hello there",
         "sender": {"type": "HUMAN", "name": "users/123", "displayName": "Ada"},
         "thread": {"name": "spaces/test/threads/abc"},
-        "annotations": [
-            {
-                "type": "USER_MENTION",
-                "userMention": {"user": {"type": "BOT", "name": "users/999"}},
-            }
-        ],
     }
 
     await bridge.handle_message(message)
@@ -243,7 +236,7 @@ async def test_chat_bridge_session_key_is_space_and_user(tmp_path) -> None:
             soul="",
             model="gemini",
             mcp_servers=["*"],
-            bot_user_id="users/999",
+            # bot_user_id no longer needed for routing
         ),
     )
 
@@ -269,18 +262,11 @@ async def test_chat_bridge_session_key_is_space_and_user(tmp_path) -> None:
     )
 
     base_message = {
-        "text": "Hello there",
         "sender": {"type": "HUMAN", "name": "users/123", "displayName": "Ada"},
-        "annotations": [
-            {
-                "type": "USER_MENTION",
-                "userMention": {"user": {"type": "BOT", "name": "users/999"}},
-            }
-        ],
     }
 
-    msg1 = {**base_message, "text": "Hello from thread A", "thread": {"name": "spaces/test/threads/aaa"}}
-    msg2 = {**base_message, "text": "Hello from thread B", "thread": {"name": "spaces/test/threads/bbb"}}
+    msg1 = {**base_message, "text": "/luna Hello from thread A", "thread": {"name": "spaces/test/threads/aaa"}}
+    msg2 = {**base_message, "text": "/luna Hello from thread B", "thread": {"name": "spaces/test/threads/bbb"}}
 
     await bridge.handle_message(msg1)
     await asyncio.sleep(0.05)
@@ -296,7 +282,8 @@ async def test_chat_bridge_session_key_is_space_and_user(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_chat_bridge_ignores_unlinked_mentions(tmp_path) -> None:
+async def test_chat_bridge_ignores_unknown_slug_without_concierge(tmp_path) -> None:
+    """A /slug that matches no agent is dropped when no concierge is set."""
     data_dir = str(tmp_path / "data")
     persona = save_persona(
         data_dir,
@@ -307,7 +294,6 @@ async def test_chat_bridge_ignores_unlinked_mentions(tmp_path) -> None:
             soul="",
             model="gemini",
             mcp_servers=["*"],
-            bot_user_id="users/999",
         ),
     )
 
@@ -320,18 +306,13 @@ async def test_chat_bridge_ignores_unlinked_mentions(tmp_path) -> None:
         service=service,
         spaces_config=str(tmp_path / "spaces.json"),
         debounce_window_ms=0,
+        # concierge_agent_id not set
     )
 
     message = {
-        "text": "Hello there",
+        "text": "/unknown-agent Hello there",
         "sender": {"type": "HUMAN", "name": "users/123", "displayName": "Ada"},
         "thread": {"name": "spaces/test/threads/abc"},
-        "annotations": [
-            {
-                "type": "USER_MENTION",
-                "userMention": {"user": {"type": "BOT", "name": "users/777"}},
-            }
-        ],
     }
 
     await bridge.handle_message(message)
@@ -352,7 +333,7 @@ async def test_debug_mode_shows_error_detail_in_chat(tmp_path) -> None:
             soul="",
             model="gemini",
             mcp_servers=["*"],
-            bot_user_id="users/999",
+            # bot_user_id no longer needed for routing
         ),
     )
 
@@ -370,15 +351,9 @@ async def test_debug_mode_shows_error_detail_in_chat(tmp_path) -> None:
     )
 
     message = {
-        "text": "Do something",
+        "text": "/luna Do something",
         "sender": {"type": "HUMAN", "name": "users/123", "displayName": "Ada"},
         "thread": {"name": "spaces/test/threads/abc"},
-        "annotations": [
-            {
-                "type": "USER_MENTION",
-                "userMention": {"user": {"type": "BOT", "name": "users/999"}},
-            }
-        ],
     }
 
     await bridge.handle_message(message)
@@ -403,7 +378,7 @@ async def test_debug_off_hides_error_code_block(tmp_path) -> None:
             soul="",
             model="gemini",
             mcp_servers=["*"],
-            bot_user_id="users/999",
+            # bot_user_id no longer needed for routing
         ),
     )
 
@@ -421,15 +396,9 @@ async def test_debug_off_hides_error_code_block(tmp_path) -> None:
     )
 
     message = {
-        "text": "Do something else",
+        "text": "/luna Do something else",
         "sender": {"type": "HUMAN", "name": "users/123", "displayName": "Ada"},
         "thread": {"name": "spaces/test/threads/abc"},
-        "annotations": [
-            {
-                "type": "USER_MENTION",
-                "userMention": {"user": {"type": "BOT", "name": "users/999"}},
-            }
-        ],
     }
 
     await bridge.handle_message(message)
@@ -453,7 +422,7 @@ async def test_chat_bridge_updates_original_message_for_tool_use(tmp_path) -> No
             soul="",
             model="gemini",
             mcp_servers=["*"],
-            bot_user_id="users/999",
+            # bot_user_id no longer needed for routing
         ),
     )
 
@@ -470,15 +439,9 @@ async def test_chat_bridge_updates_original_message_for_tool_use(tmp_path) -> No
     )
 
     message = {
-        "text": "Search for something",
+        "text": "/luna Search for something",
         "sender": {"type": "HUMAN", "name": "users/123", "displayName": "Ada"},
         "thread": {"name": "spaces/test/threads/abc"},
-        "annotations": [
-            {
-                "type": "USER_MENTION",
-                "userMention": {"user": {"type": "BOT", "name": "users/999"}},
-            }
-        ],
     }
 
     await bridge.handle_message(message)
@@ -516,7 +479,7 @@ async def test_chat_bridge_uses_task_error_when_stream_ends_silently(tmp_path) -
             soul="",
             model="gemini",
             mcp_servers=["*"],
-            bot_user_id="users/999",
+            # bot_user_id no longer needed for routing
         ),
     )
 
@@ -541,15 +504,9 @@ async def test_chat_bridge_uses_task_error_when_stream_ends_silently(tmp_path) -
     )
 
     message = {
-        "text": "Hello there",
+        "text": "/luna Hello there",
         "sender": {"type": "HUMAN", "name": "users/123", "displayName": "Ada"},
         "thread": {"name": "spaces/test/threads/abc"},
-        "annotations": [
-            {
-                "type": "USER_MENTION",
-                "userMention": {"user": {"type": "BOT", "name": "users/999"}},
-            }
-        ],
     }
 
     await bridge.handle_message(message)
@@ -629,7 +586,7 @@ async def test_unmentioned_message_routes_to_concierge(tmp_path) -> None:
             soul="",
             model="gemini",
             mcp_servers=["*"],
-            bot_user_id="users/999",
+            # bot_user_id no longer needed for routing
         ),
     )
 
@@ -689,7 +646,7 @@ async def test_unmentioned_message_dropped_when_concierge_disabled(tmp_path) -> 
             soul="",
             model="gemini",
             mcp_servers=["*"],
-            bot_user_id="users/999",
+            # bot_user_id no longer needed for routing
         ),
     )
 
@@ -717,8 +674,8 @@ async def test_unmentioned_message_dropped_when_concierge_disabled(tmp_path) -> 
 
 
 @pytest.mark.asyncio
-async def test_explicit_mention_still_routes_directly_with_concierge(tmp_path) -> None:
-    """Explicit @-mention bypasses concierge and routes to the mentioned agent."""
+async def test_explicit_slash_mention_routes_directly_with_concierge(tmp_path) -> None:
+    """Explicit /luna routes directly to luna, bypassing concierge."""
     data_dir = str(tmp_path / "data")
     concierge_persona = save_persona(
         data_dir,
@@ -740,7 +697,7 @@ async def test_explicit_mention_still_routes_directly_with_concierge(tmp_path) -
             soul="",
             model="gemini",
             mcp_servers=["*"],
-            bot_user_id="users/999",
+            # bot_user_id no longer needed for routing
         ),
     )
 
@@ -762,15 +719,9 @@ async def test_explicit_mention_still_routes_directly_with_concierge(tmp_path) -
     )
 
     message = {
-        "text": "Hello Luna",
+        "text": "/luna Hello there",
         "sender": {"type": "HUMAN", "name": "users/123", "displayName": "Ada"},
         "thread": {"name": "spaces/test/threads/abc"},
-        "annotations": [
-            {
-                "type": "USER_MENTION",
-                "userMention": {"user": {"type": "BOT", "name": "users/999"}},
-            }
-        ],
     }
 
     await bridge.handle_message(message)
