@@ -15,6 +15,7 @@ from g3lobster.agents.subagent_registry import SubagentRegistry, SubagentRun
 from g3lobster.alerts import AlertManager, make_event
 from g3lobster.memory.context import ContextBuilder
 from g3lobster.memory.global_memory import GlobalMemoryManager
+from g3lobster.memory.handoff import HandoffBuilder
 from g3lobster.memory.manager import MemoryManager
 from g3lobster.pool.health import HealthInspector
 from g3lobster.pool.types import AgentState
@@ -480,8 +481,11 @@ class AgentRegistry:
         # Mark as running (records started_at and persists)
         self.subagent_registry.mark_running(run.run_id)
 
+        # Enrich task prompt with parent's context
+        enriched_prompt = self._build_handoff(parent_agent_id, task_prompt)
+
         # Assign task to child agent
-        child_task = Task(prompt=task_prompt, session_id=run.session_id, timeout_s=timeout_s)
+        child_task = Task(prompt=enriched_prompt, session_id=run.session_id, timeout_s=timeout_s)
         result_task = await child.assign(child_task)
 
         # Record result
@@ -526,7 +530,10 @@ class AgentRegistry:
 
         self.subagent_registry.mark_running(run.run_id)
 
-        child_task = Task(prompt=task_prompt, session_id=run.session_id, timeout_s=timeout_s)
+        # Enrich task prompt with parent's context
+        enriched_prompt = self._build_handoff(parent_agent_id, task_prompt)
+
+        child_task = Task(prompt=enriched_prompt, session_id=run.session_id, timeout_s=timeout_s)
 
         collected_text = []
         try:
@@ -544,6 +551,19 @@ class AgentRegistry:
         except Exception as exc:
             self.subagent_registry.fail_run(run.run_id, str(exc))
             raise
+
+    def _build_handoff(self, parent_agent_id: str, task_prompt: str) -> str:
+        """Enrich a delegation prompt with the parent agent's context."""
+        parent = self._agents.get(parent_agent_id)
+        if not parent:
+            return task_prompt
+        builder = HandoffBuilder()
+        return builder.build(
+            task_prompt=task_prompt,
+            parent_memory=parent.memory_manager,
+            global_memory=self.global_memory_manager,
+            parent_persona_name=parent.persona.name,
+        )
 
     @staticmethod
     def _soul_summary(soul: str) -> str:
