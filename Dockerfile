@@ -9,6 +9,9 @@ COPY config ./config
 
 RUN pip install --no-cache-dir .
 
-EXPOSE 20001
+# Cloud Run injects PORT (default 8080); the app reads it at startup.
+ENV PORT=8080
+EXPOSE ${PORT}
 
-CMD ["python", "-m", "g3lobster"]
+# Use shell form so $PORT is expanded at runtime.
+CMD python -m g3lobster --port $PORT
