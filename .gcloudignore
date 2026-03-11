@@ -1,0 +1,24 @@
+#!include:.gitignore
+
+# Version control
+.git/
+.github/
+
+# Testing and development
+tests/
+.pytest_cache/
+.venv/
+
+# Documentation (not needed at runtime)
+docs/
+*.md
+
+# Environment and local config
+.env*
+
+# Development tooling
+.claude/
+CLAUDE.md
+
+# Node dependencies (if any)
+node_modules/
