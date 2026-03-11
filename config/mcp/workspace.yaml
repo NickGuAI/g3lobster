@@ -1,0 +1,13 @@
+name: g3lobster-workspace
+enabled: true
+transport:
+  type: stdio
+  command: python
+  args:
+    - -m
+    - g3lobster.mcp.workspace_server
+description: Google Workspace document query tools (Drive, Docs, Sheets)
+tool_patterns:
+  - search_drive
+  - read_doc
+  - read_sheet
