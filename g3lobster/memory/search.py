@@ -8,7 +8,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Set
 
-from g3lobster.memory.journal import JournalStore, SalienceLevel
+from g3lobster.memory.journal import JournalEntry, SalienceLevel
 
 
 SUPPORTED_MEMORY_TYPES = {"memory", "procedures", "daily", "session", "knowledge", "journal"}
@@ -102,9 +102,8 @@ class MemorySearchEngine:
 
     @staticmethod
     def _sort_key(hit: MemorySearchHit) -> float:
-        if not hit.timestamp:
-            base = 0.0
-        else:
+        base = 0.0
+        if hit.timestamp:
             text = hit.timestamp.replace("Z", "+00:00")
             try:
                 base = datetime.fromisoformat(text).timestamp()
@@ -212,43 +211,58 @@ class MemorySearchEngine:
                 )
         return hits
 
-    def _search_journal(
+    def _search_journal_file(
         self,
         *,
-        daily_dir: Path,
+        path: Path,
         agent_id: str,
         query: str,
         query_terms: Sequence[str],
-        start: Optional[date],
-        end: Optional[date],
+        file_date: Optional[date],
     ) -> List[MemorySearchHit]:
-        """Search JSONL journal files with salience-weighted ranking."""
-        if not daily_dir.exists():
+        if not path.exists() or not path.is_file():
             return []
 
         hits: List[MemorySearchHit] = []
-        store = JournalStore(str(daily_dir))
-        for path in sorted(daily_dir.glob("*.jsonl")):
-            file_date = self._parse_date(path.stem)
-            if not self._date_in_range(file_date, start, end):
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (UnicodeDecodeError, OSError):
+            return []
+
+        for line_number, raw in enumerate(lines, start=1):
+            raw = raw.strip()
+            if not raw:
                 continue
-            for entry in store._read_jsonl(path):
-                if not self._matches(entry.content, query, query_terms):
-                    # Also check tags.
-                    tag_text = " ".join(entry.tags)
-                    if not self._matches(tag_text, query, query_terms):
-                        continue
-                hits.append(
-                    MemorySearchHit(
-                        agent_id=agent_id,
-                        memory_type="journal",
-                        source=self._relative_source(path),
-                        snippet=f"[{entry.salience.value}] {entry.content[:200]}",
-                        line_number=0,
-                        timestamp=entry.timestamp,
-                        salience_weight=entry.salience.weight,
-                    )
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+
+            content = str(data.get("content", ""))
+            if not self._matches(content, query, query_terms):
+                # Also check tags.
+                tag_text = " ".join(data.get("tags", []))
+                if not self._matches(tag_text, query, query_terms):
+                    continue
+
+            salience = SalienceLevel.from_value(data.get("salience"))
+            timestamp = data.get("timestamp")
+            tags = data.get("tags", [])
+            snippet = f"[{salience.value}] {content}"
+            if tags:
+                snippet += f" (tags: {', '.join(tags)})"
+
+            hits.append(
+                MemorySearchHit(
+                    agent_id=agent_id,
+                    memory_type="journal",
+                    source=self._relative_source(path),
+                    snippet=snippet,
+                    line_number=line_number,
+                    timestamp=timestamp if isinstance(timestamp, str) else None,
+                    salience_weight=salience.weight,
                 )
+            )
         return hits
 
     def search(
@@ -330,17 +344,20 @@ class MemorySearchEngine:
                         )
                     )
 
-            if "journal" in selected_types:
-                hits.extend(
-                    self._search_journal(
-                        daily_dir=daily_dir,
-                        agent_id=agent_id,
-                        query=normalized_query,
-                        query_terms=query_terms,
-                        start=start,
-                        end=end,
+            if "journal" in selected_types and daily_dir.exists():
+                for journal_path in sorted(daily_dir.glob("*.jsonl")):
+                    file_date = self._parse_date(journal_path.stem)
+                    if not self._date_in_range(file_date, start, end):
+                        continue
+                    hits.extend(
+                        self._search_journal_file(
+                            path=journal_path,
+                            agent_id=agent_id,
+                            query=normalized_query,
+                            query_terms=query_terms,
+                            file_date=file_date,
+                        )
                     )
-                )
 
             if "session" in selected_types:
                 hits.extend(

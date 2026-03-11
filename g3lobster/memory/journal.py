@@ -1,9 +1,7 @@
-"""Salience-classified journal with association graph.
+"""Salience-classified journal system.
 
-Journal entries are structured records stored as JSONL files alongside
-the existing daily markdown notes.  Each entry carries a salience level
-that drives search-result ranking and a set of tags used to build an
-explicit association graph between related entries.
+Entries are persisted as JSONL files organised by day (daily/YYYY-MM-DD.jsonl).
+An association graph tracks relationships between entries via a separate JSONL file.
 """
 
 from __future__ import annotations
@@ -11,72 +9,87 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-
-# ---------------------------------------------------------------------------
-# Salience classification
-# ---------------------------------------------------------------------------
-
-class SalienceLevel(str, Enum):
-    """Importance tier for journal entries."""
-
-    CRITICAL = "critical"
-    HIGH = "high"
-    NORMAL = "normal"
-    LOW = "low"
-    NOISE = "noise"
-
-    # Search-result weight multipliers.
-    @property
-    def weight(self) -> float:
-        return _SALIENCE_WEIGHTS[self]
-
-    @classmethod
-    def from_value(cls, value: str | None) -> "SalienceLevel":
-        if value is None:
-            return cls.NORMAL
-        normalized = str(value).strip().lower()
-        for member in cls:
-            if member.value == normalized:
-                return member
-        return cls.NORMAL
-
-
-_SALIENCE_WEIGHTS: Dict[SalienceLevel, float] = {
-    SalienceLevel.CRITICAL: 5.0,
-    SalienceLevel.HIGH: 3.0,
-    SalienceLevel.NORMAL: 1.0,
-    SalienceLevel.LOW: 0.5,
-    SalienceLevel.NOISE: 0.1,
+_SALIENCE_ORDER: Dict[str, int] = {
+    "noise": 0,
+    "low": 1,
+    "normal": 2,
+    "high": 3,
+    "critical": 4,
 }
 
 
-# ---------------------------------------------------------------------------
-# JournalEntry
-# ---------------------------------------------------------------------------
+class SalienceLevel(str, Enum):
+    NOISE = "noise"
+    LOW = "low"
+    NORMAL = "normal"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+    @property
+    def weight(self) -> float:
+        weights = {
+            SalienceLevel.CRITICAL: 5.0,
+            SalienceLevel.HIGH: 3.0,
+            SalienceLevel.NORMAL: 1.0,
+            SalienceLevel.LOW: 0.5,
+            SalienceLevel.NOISE: 0.1,
+        }
+        return weights[self]
+
+    @classmethod
+    def from_value(cls, value: str | None) -> SalienceLevel:
+        if value is None:
+            return cls.NORMAL
+        normalized = str(value).strip().lower()
+        mapping = {
+            "noise": cls.NOISE,
+            "low": cls.LOW,
+            "normal": cls.NORMAL,
+            "high": cls.HIGH,
+            "critical": cls.CRITICAL,
+        }
+        return mapping.get(normalized, cls.NORMAL)
+
+    def __ge__(self, other: object) -> bool:
+        if not isinstance(other, SalienceLevel):
+            return NotImplemented
+        return _SALIENCE_ORDER[self.value] >= _SALIENCE_ORDER[other.value]
+
+    def __gt__(self, other: object) -> bool:
+        if not isinstance(other, SalienceLevel):
+            return NotImplemented
+        return _SALIENCE_ORDER[self.value] > _SALIENCE_ORDER[other.value]
+
+    def __le__(self, other: object) -> bool:
+        if not isinstance(other, SalienceLevel):
+            return NotImplemented
+        return _SALIENCE_ORDER[self.value] <= _SALIENCE_ORDER[other.value]
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, SalienceLevel):
+            return NotImplemented
+        return _SALIENCE_ORDER[self.value] < _SALIENCE_ORDER[other.value]
+
 
 @dataclass
 class JournalEntry:
-    """A single structured journal entry."""
-
-    id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    timestamp: str = field(
-        default_factory=lambda: datetime.now(tz=timezone.utc).isoformat(),
-    )
-    content: str = ""
+    id: str
+    timestamp: str
+    content: str
     salience: SalienceLevel = SalienceLevel.NORMAL
     tags: List[str] = field(default_factory=list)
     source_session: str = ""
     associations: List[str] = field(default_factory=list)
 
-    def as_dict(self) -> Dict[str, Any]:
+    def as_dict(self) -> dict:
         return {
             "id": self.id,
             "timestamp": self.timestamp,
@@ -88,223 +101,178 @@ class JournalEntry:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "JournalEntry":
+    def from_dict(cls, data: dict) -> JournalEntry:
         return cls(
-            id=str(data.get("id") or uuid.uuid4()),
+            id=str(data.get("id", "")),
             timestamp=str(data.get("timestamp", "")),
             content=str(data.get("content", "")),
             salience=SalienceLevel.from_value(data.get("salience")),
-            tags=list(data.get("tags") or []),
+            tags=list(data.get("tags", [])),
             source_session=str(data.get("source_session", "")),
-            associations=list(data.get("associations") or []),
+            associations=list(data.get("associations", [])),
         )
 
 
-# ---------------------------------------------------------------------------
-# JournalStore — JSONL-backed per-day journal
-# ---------------------------------------------------------------------------
-
 class JournalStore:
-    """Persists journal entries as ``daily/YYYY-MM-DD.jsonl`` files.
+    """Persists journal entries as JSONL files in a daily directory."""
 
-    Lives alongside the existing ``.md`` daily notes inside the agent's
-    ``.memory/daily/`` directory.
-    """
-
-    def __init__(self, daily_dir: str | Path):
+    def __init__(self, daily_dir: str):
         self.daily_dir = Path(daily_dir)
         self.daily_dir.mkdir(parents=True, exist_ok=True)
 
-    def _path_for_day(self, day: Optional[date] = None) -> Path:
+    def journal_path(self, day: Optional[date] = None) -> Path:
         target = day or date.today()
         return self.daily_dir / f"{target.isoformat()}.jsonl"
 
-    # -- write ---------------------------------------------------------------
+    def append(self, entry: JournalEntry) -> JournalEntry:
+        if not entry.id:
+            entry.id = str(uuid.uuid4())
+        if not entry.timestamp:
+            entry.timestamp = datetime.now(tz=timezone.utc).isoformat()
 
-    def append(self, entry: JournalEntry, day: Optional[date] = None) -> JournalEntry:
-        """Append a journal entry to the day's JSONL file."""
-        path = self._path_for_day(day)
-        line = json.dumps(entry.as_dict(), ensure_ascii=False)
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
+        path = self.journal_path()
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry.as_dict(), ensure_ascii=False) + "\n")
         return entry
-
-    # -- read ----------------------------------------------------------------
-
-    def read_day(self, day: Optional[date] = None) -> List[JournalEntry]:
-        """Read all journal entries for a given day."""
-        path = self._path_for_day(day)
-        if not path.exists():
-            return []
-        return self._read_jsonl(path)
-
-    def get_entry(self, entry_id: str) -> Optional[JournalEntry]:
-        """Find a single entry by id across all daily files."""
-        for path in sorted(self.daily_dir.glob("*.jsonl"), reverse=True):
-            for entry in self._read_jsonl(path):
-                if entry.id == entry_id:
-                    return entry
-        return None
 
     def query(
         self,
         *,
         salience_min: Optional[SalienceLevel] = None,
-        tags: Optional[Sequence[str]] = None,
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
+        tags: Optional[List[str]] = None,
+        date_start: Optional[date] = None,
+        date_end: Optional[date] = None,
         limit: int = 50,
     ) -> List[JournalEntry]:
-        """Query journal entries with optional filters."""
-        salience_order = list(SalienceLevel)  # ordered by declaration
-        min_index = salience_order.index(salience_min) if salience_min else len(salience_order) - 1
-        allowed_salience = set(salience_order[: min_index + 1])
-
-        tag_set = {t.lower() for t in tags} if tags else None
-
         results: List[JournalEntry] = []
-        for path in sorted(self.daily_dir.glob("*.jsonl"), reverse=True):
-            file_date = self._parse_date(path.stem)
-            if file_date is not None:
-                if start_date and file_date < start_date:
-                    continue
-                if end_date and file_date > end_date:
-                    continue
+        for day in self.list_dates():
+            if date_start and day < date_start:
+                continue
+            if date_end and day > date_end:
+                continue
+            results.extend(self._read_file(self.journal_path(day)))
 
-            for entry in self._read_jsonl(path):
-                if entry.salience not in allowed_salience:
-                    continue
-                if tag_set and not tag_set.intersection(t.lower() for t in entry.tags):
-                    continue
-                results.append(entry)
-                if len(results) >= limit:
-                    return results
+        if salience_min is not None:
+            results = [e for e in results if e.salience >= salience_min]
 
-        return results
+        if tags:
+            tag_set = set(tags)
+            results = [e for e in results if tag_set & set(e.tags)]
 
-    # -- helpers -------------------------------------------------------------
+        results.sort(key=lambda e: e.timestamp, reverse=True)
+        return results[:limit]
+
+    def get(self, entry_id: str) -> Optional[JournalEntry]:
+        for day in self.list_dates():
+            for entry in self._read_file(self.journal_path(day)):
+                if entry.id == entry_id:
+                    return entry
+        return None
+
+    def list_dates(self) -> List[date]:
+        dates: List[date] = []
+        for path in sorted(self.daily_dir.glob("*.jsonl")):
+            try:
+                dates.append(date.fromisoformat(path.stem))
+            except ValueError:
+                continue
+        return dates
 
     @staticmethod
-    def _read_jsonl(path: Path) -> List[JournalEntry]:
+    def _read_file(path: Path) -> List[JournalEntry]:
         entries: List[JournalEntry] = []
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        if not path.exists():
             return entries
-        for line in text.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                data = json.loads(line)
-                entries.append(JournalEntry.from_dict(data))
-            except (json.JSONDecodeError, Exception):
-                continue
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entries.append(JournalEntry.from_dict(json.loads(line)))
+                except (json.JSONDecodeError, KeyError):
+                    logger.warning("Skipping malformed journal line in %s", path)
+        except OSError:
+            logger.warning("Could not read journal file %s", path)
         return entries
 
-    @staticmethod
-    def _parse_date(stem: str) -> Optional[date]:
-        try:
-            return date.fromisoformat(stem)
-        except (ValueError, TypeError):
-            return None
-
-
-# ---------------------------------------------------------------------------
-# AssociationGraph — JSONL-backed edge store
-# ---------------------------------------------------------------------------
 
 @dataclass
 class AssociationEdge:
-    """A directed edge between two journal entries."""
-
     source_id: str
     target_id: str
-    relation_type: str = "related"
+    relation_type: str
     weight: float = 1.0
 
-    def as_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+    def as_dict(self) -> dict:
+        return {
+            "source_id": self.source_id,
+            "target_id": self.target_id,
+            "relation_type": self.relation_type,
+            "weight": self.weight,
+        }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "AssociationEdge":
+    def from_dict(cls, data: dict) -> AssociationEdge:
         return cls(
             source_id=str(data.get("source_id", "")),
             target_id=str(data.get("target_id", "")),
-            relation_type=str(data.get("relation_type", "related")),
+            relation_type=str(data.get("relation_type", "")),
             weight=float(data.get("weight", 1.0)),
         )
 
 
 class AssociationGraph:
-    """Persists edges as ``associations.jsonl`` under ``.memory/``."""
+    """JSONL-backed association graph between journal entries."""
 
-    def __init__(self, memory_dir: str | Path):
-        self.memory_dir = Path(memory_dir)
-        self.memory_dir.mkdir(parents=True, exist_ok=True)
-        self.path = self.memory_dir / "associations.jsonl"
+    def __init__(self, graph_path: str):
+        self.path = Path(graph_path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def add_edge(self, edge: AssociationEdge) -> None:
-        line = json.dumps(edge.as_dict(), ensure_ascii=False)
-        with self.path.open("a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
+        with open(self.path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(edge.as_dict(), ensure_ascii=False) + "\n")
 
-    def add_edges_for_entry(self, entry: JournalEntry, store: JournalStore) -> List[AssociationEdge]:
-        """Auto-link *entry* to existing entries sharing tags and explicit refs."""
+    def get_associations(self, entry_id: str) -> List[AssociationEdge]:
+        edges: List[AssociationEdge] = []
+        if not self.path.exists():
+            return edges
+        try:
+            for line in self.path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    edge = AssociationEdge.from_dict(json.loads(line))
+                    if edge.source_id == entry_id or edge.target_id == entry_id:
+                        edges.append(edge)
+                except (json.JSONDecodeError, KeyError):
+                    continue
+        except OSError:
+            logger.warning("Could not read association graph at %s", self.path)
+        return edges
+
+    def add_edges_for_entry(
+        self, entry: JournalEntry, existing_entries: List[JournalEntry]
+    ) -> List[AssociationEdge]:
         new_edges: List[AssociationEdge] = []
+        if not entry.tags:
+            return new_edges
 
-        # Link by shared tags.
-        if entry.tags:
-            entry_tags = {t.lower() for t in entry.tags}
-            for path in sorted(store.daily_dir.glob("*.jsonl"), reverse=True):
-                for other in store._read_jsonl(path):
-                    if other.id == entry.id:
-                        continue
-                    other_tags = {t.lower() for t in other.tags}
-                    shared = entry_tags & other_tags
-                    if not shared:
-                        continue
-                    edge = AssociationEdge(
-                        source_id=entry.id,
-                        target_id=other.id,
-                        relation_type="shared_tags",
-                        weight=len(shared),
-                    )
-                    self.add_edge(edge)
-                    new_edges.append(edge)
-
-        # Add explicit association references.
-        for assoc_id in entry.associations:
+        entry_tags = set(entry.tags)
+        for other in existing_entries:
+            if other.id == entry.id:
+                continue
+            shared = entry_tags & set(other.tags)
+            if not shared:
+                continue
             edge = AssociationEdge(
                 source_id=entry.id,
-                target_id=assoc_id,
-                relation_type="explicit",
-                weight=2.0,
+                target_id=other.id,
+                relation_type="shared_tag",
+                weight=1.0,
             )
             self.add_edge(edge)
             new_edges.append(edge)
 
         return new_edges
-
-    def get_associations(self, entry_id: str) -> List[AssociationEdge]:
-        """Return all edges where *entry_id* is source or target."""
-        edges = self._read_all()
-        return [e for e in edges if e.source_id == entry_id or e.target_id == entry_id]
-
-    def _read_all(self) -> List[AssociationEdge]:
-        if not self.path.exists():
-            return []
-        edges: List[AssociationEdge] = []
-        try:
-            text = self.path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            return edges
-        for line in text.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                edges.append(AssociationEdge.from_dict(json.loads(line)))
-            except (json.JSONDecodeError, Exception):
-                continue
-        return edges
