@@ -48,7 +48,35 @@ def test_unknown_event_returns_empty_json(tmp_path):
     with _make_client(tmp_path) as client:
         resp = client.post(
             "/chat/events",
-            json={"type": "CARD_CLICKED"},
+            json={"type": "SOME_FUTURE_EVENT"},
         )
         assert resp.status_code == 200
         assert resp.json() == {}
+
+
+def test_card_clicked_returns_prompt(tmp_path):
+    with _make_client(tmp_path) as client:
+        resp = client.post(
+            "/chat/events",
+            json={
+                "type": "CARD_CLICKED",
+                "action": {
+                    "parameters": [
+                        {"key": "action", "value": "morning_briefing"},
+                        {"key": "prompt", "value": "Give me my morning briefing"},
+                    ],
+                },
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["text"] == "Give me my morning briefing"
+
+
+def test_card_clicked_no_params_returns_fallback(tmp_path):
+    with _make_client(tmp_path) as client:
+        resp = client.post(
+            "/chat/events",
+            json={"type": "CARD_CLICKED"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["text"] == "Action received."

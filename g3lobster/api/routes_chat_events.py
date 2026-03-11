@@ -34,9 +34,35 @@ async def handle_chat_event(request: Request) -> JSONResponse:
         # Returning empty JSON suppresses "not responding".
         return JSONResponse({})
 
+    if event_type == "CARD_CLICKED":
+        return _handle_card_clicked(body)
+
     if event_type == "REMOVED_FROM_SPACE":
         logger.info("Bot removed from space")
         return JSONResponse({})
 
     # Default: acknowledge unknown events.
     return JSONResponse({})
+
+
+def _handle_card_clicked(body: dict) -> JSONResponse:
+    """Handle a card button click from /quick action card.
+
+    Extracts the prompt from the button parameters and returns it
+    as a text response, which Google Chat will display as a message
+    from the bot. The poll loop will then pick up any @-mention
+    messages naturally.
+    """
+    action = body.get("action", {}) or body.get("common", {}).get("invokedFunction", {})
+    parameters = action.get("parameters", [])
+
+    param_map = {p["key"]: p["value"] for p in parameters if "key" in p and "value" in p}
+    prompt = param_map.get("prompt", "")
+    action_name = param_map.get("action", "unknown")
+
+    logger.info("Card clicked: action=%s, prompt=%s", action_name, prompt[:50])
+
+    if prompt:
+        return JSONResponse({"text": prompt})
+
+    return JSONResponse({"text": "Action received."})

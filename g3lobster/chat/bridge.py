@@ -304,7 +304,7 @@ class ChatBridge:
 
         # Slash-command interception — handle locally without hitting the AI.
         if self.cron_store is not None:
-            cmd_reply = await handle_command(text, target_id, self.cron_store, registry=self.registry)
+            cmd_reply = await handle_command(text, target_id, self.cron_store, registry=self.registry, global_memory=getattr(self.registry, 'global_memory_manager', None))
             if cmd_reply is not None:
                 if isinstance(cmd_reply, dict):
                     # Cards v2 response (e.g. /status)

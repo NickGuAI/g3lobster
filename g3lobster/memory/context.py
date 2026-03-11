@@ -63,6 +63,7 @@ _DISPLAY_ORDER = [
     "persona",
     "available_agents",
     "user_prefs",
+    "knowledge",
     "memory",
     "recollection",
     "procedures",
@@ -136,6 +137,10 @@ class ContextBuilder:
             user_memory = user_memory_text or "(empty)"
             global_procedures = self.global_memory_manager.procedures.list_procedures()
 
+        knowledge_entries: Dict[str, str] = {}
+        if self.global_memory_manager:
+            knowledge_entries = self.global_memory_manager.read_all_knowledge()
+
         matched = self.memory_manager.match_procedures(
             prompt,
             global_procedures=global_procedures,
@@ -208,23 +213,35 @@ class ContextBuilder:
                 content="# User Preferences\n" + user_memory,
             ),
             ContextLayer(
-                name="available_agents",
+                name="knowledge",
                 priority=6,
+                content=(
+                    "# Global Knowledge\n"
+                    + (
+                        "\n".join(f"- **{k}**: {v}" for k, v in knowledge_entries.items())
+                        if knowledge_entries
+                        else "(none)"
+                    )
+                ),
+            ),
+            ContextLayer(
+                name="available_agents",
+                priority=7,
                 content=agents_content,
             ),
             ContextLayer(
                 name="recollection",
-                priority=7,
+                priority=8,
                 content=recollection_content,
             ),
             ContextLayer(
                 name="procedures",
-                priority=8,
+                priority=9,
                 content="# Known Procedures\n" + self._format_procedures(matched),
             ),
             ContextLayer(
                 name="compaction",
-                priority=9,
+                priority=10,
                 content=(
                     "# Compaction Summary\n"
                     + (str(compaction.get("summary", "")).strip() or "(none)")

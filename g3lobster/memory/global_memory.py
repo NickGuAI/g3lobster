@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import threading
 from pathlib import Path
-from typing import List
+from typing import Dict, List, Optional
 
 from g3lobster.memory.procedures import ProcedureStore, is_empty_procedure_document
 
@@ -72,3 +72,35 @@ class GlobalMemoryManager:
 
     def list_knowledge(self) -> List[str]:
         return sorted(str(path.relative_to(self.knowledge_dir)) for path in self.knowledge_dir.rglob("*") if path.is_file())
+
+    def add_knowledge(self, key: str, content: str) -> Path:
+        """Write a knowledge entry to knowledge/{sanitized_key}.md."""
+        safe_key = re.sub(r"[^a-zA-Z0-9_.-]", "_", key.strip())[:80] or "entry"
+        path = self.knowledge_dir / f"{safe_key}.md"
+        path.write_text(content.strip() + "\n", encoding="utf-8")
+        return path
+
+    def get_knowledge(self, key: str) -> str | None:
+        """Read a single knowledge entry by key."""
+        safe_key = re.sub(r"[^a-zA-Z0-9_.-]", "_", key.strip())[:80] or "entry"
+        path = self.knowledge_dir / f"{safe_key}.md"
+        if path.exists():
+            return path.read_text(encoding="utf-8").strip()
+        return None
+
+    def remove_knowledge(self, keyword: str) -> int:
+        """Remove knowledge files matching keyword. Returns count removed."""
+        keyword_lower = keyword.lower()
+        removed = 0
+        for path in list(self.knowledge_dir.glob("*.md")):
+            if keyword_lower in path.stem.lower():
+                path.unlink()
+                removed += 1
+        return removed
+
+    def read_all_knowledge(self) -> dict[str, str]:
+        """Read all knowledge files. Returns {filename: content}."""
+        result: dict[str, str] = {}
+        for path in sorted(self.knowledge_dir.glob("*.md")):
+            result[path.stem] = path.read_text(encoding="utf-8").strip()
+        return result
