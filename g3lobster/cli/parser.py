@@ -49,13 +49,24 @@ def clean_text(text: str, strip_markdown: bool = False) -> str:
     return "\n".join(lines)
 
 
+def split_reasoning(text: str) -> tuple[str, str]:
+    """Split model output into (reasoning, response) around the ✦ separator.
+
+    Returns a tuple of (reasoning_text, response_text).  If no separator
+    is present, reasoning is empty and the full text is the response.
+    """
+    if not text:
+        return ("", "")
+    if "✦" in text:
+        reasoning, response = text.split("✦", 1)
+        return (reasoning.strip(), response.strip())
+    return ("", text.strip())
+
+
 def strip_reasoning(text: str) -> str:
     """Heuristic to strip reasoning/thinking from model responses."""
-    if not text:
-        return ""
-    if "✦" in text:
-        return text.split("✦", 1)[1].strip()
-    return text.strip()
+    _, response = split_reasoning(text)
+    return response
 
 
 def get_content_id(content: str) -> str:

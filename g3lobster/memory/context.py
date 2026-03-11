@@ -80,6 +80,7 @@ _DISPLAY_ORDER = [
     "user_prefs",
     "cross_agent_knowledge",
     "memory",
+    "decisions",
     "recollection",
     "procedures",
     "compaction",
@@ -278,6 +279,12 @@ class ContextBuilder:
         # --- recollection stub ---
         recollection_content = self._recollection_layer()
 
+        # --- decisions (issue #80) ---
+        decisions_section = self._format_decisions(prompt)
+        decisions_content = ""
+        if decisions_section:
+            decisions_content = "# Relevant Past Decisions\n" + decisions_section
+
         # --- construct layers ---
         layers: List[ContextLayer] = [
             ContextLayer(
@@ -321,6 +328,11 @@ class ContextBuilder:
                 name="user_prefs",
                 priority=5,
                 content="# User Preferences\n" + user_memory,
+            ),
+            ContextLayer(
+                name="decisions",
+                priority=6,
+                content=decisions_content,
             ),
             ContextLayer(
                 name="available_agents",
@@ -431,6 +443,21 @@ class ContextBuilder:
             entry = f"- {emoji} **{name}** (id: `{agent_id}`)"
             if description:
                 entry += f": {description}"
+            lines.append(entry)
+        return "\n".join(lines)
+
+    def _format_decisions(self, prompt: str, limit: int = 3) -> str:
+        """Query the decision log for entries relevant to the current prompt."""
+        decisions = self.memory_manager.query_decisions(prompt, limit=limit)
+        if not decisions:
+            return ""
+        lines: List[str] = []
+        for decision in decisions:
+            text = decision.get("decision", "")
+            reasoning = decision.get("reasoning", "")
+            entry = f"- {text}"
+            if reasoning:
+                entry += f" (reason: {reasoning[:120]})"
             lines.append(entry)
         return "\n".join(lines)
 

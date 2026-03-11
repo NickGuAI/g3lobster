@@ -699,6 +699,24 @@ async def list_agent_sessions(agent_id: str, request: Request) -> SessionListRes
     return SessionListResponse(sessions=manager.list_sessions())
 
 
+@router.get("/{agent_id}/decisions")
+async def get_agent_decisions(
+    agent_id: str,
+    request: Request,
+    q: str = Query(default=""),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+
+    manager = _memory_manager(request, agent_id)
+    if q:
+        decisions = manager.query_decisions(q, limit=limit)
+    else:
+        decisions = manager.list_decisions(limit=limit)
+    return {"decisions": decisions}
+
+
 @router.get("/{agent_id}/sessions/{session_id}")
 async def get_agent_session(agent_id: str, session_id: str, request: Request) -> dict:
     config = request.app.state.config
