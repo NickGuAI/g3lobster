@@ -74,6 +74,7 @@ class BuildInfo:
 # Display order for assembling the final prompt (layer name -> position).
 _DISPLAY_ORDER = [
     "preamble",
+    "space_context",
     "persona",
     "available_agents",
     "user_prefs",
@@ -105,6 +106,8 @@ class ContextBuilder:
         agent_list_provider: Optional[Callable[[], List[Dict[str, Any]]]] = None,
         token_budget: int = 1_000_000,
         debug: bool = False,
+        space_id: Optional[str] = None,
+        space_name: Optional[str] = None,
     ):
         self.memory_manager = memory_manager
         self.message_limit = message_limit
@@ -116,6 +119,8 @@ class ContextBuilder:
         self.token_budget = token_budget
         self.debug = debug
         self.last_build_info: Optional[BuildInfo] = None
+        self.space_id = space_id
+        self.space_name = space_name
 
     def _structure_preamble(self) -> str:
         data_dir = str(self.memory_manager.data_dir)
@@ -186,13 +191,29 @@ class ContextBuilder:
         """
         return ""
 
-    def build(self, session_id: str, prompt: str) -> str:
+    def build(self, session_id: str, prompt: str, space_id: Optional[str] = None) -> str:
         # --- gather raw content for each layer ---
+        effective_space_id = space_id or self.space_id
         memory_text = self.memory_manager.read_memory().strip()
         recent_entries = self.memory_manager.read_session_messages(
             session_id, limit=self.message_limit
         )
         compaction = self.memory_manager.read_latest_compaction(session_id) or {}
+
+        # When a space_id is active, prefer same-space entries by sorting them
+        # ahead of cross-space entries while preserving chronological order within
+        # each group.
+        if effective_space_id and recent_entries:
+            same_space: List[Dict[str, Any]] = []
+            cross_space: List[Dict[str, Any]] = []
+            for entry in recent_entries:
+                entry_space = (entry.get("metadata") or {}).get("space_id", "")
+                if entry_space == effective_space_id or not entry_space:
+                    same_space.append(entry)
+                else:
+                    cross_space.append(entry)
+            # Show cross-space context first (older), then same-space (recent focus)
+            recent_entries = cross_space + same_space
 
         user_memory = "(empty)"
         global_procedures: List[Procedure] = []
@@ -218,6 +239,17 @@ class ContextBuilder:
             if not role or not content:
                 continue
             history_lines.append(f"{role}: {content}")
+
+        # --- build space context layer ---
+        space_context_content = ""
+        if effective_space_id:
+            space_label = self.space_name or effective_space_id
+            space_context_content = (
+                "# Space Context\n"
+                f"You are currently responding in space: {space_label}\n"
+                f"Space ID: {effective_space_id}\n"
+                "Prefer context from this space. Cross-space recall is available on explicit request."
+            )
 
         # --- build delegation section ---
         delegation_section = self._format_available_agents()
@@ -253,6 +285,12 @@ class ContextBuilder:
                 priority=0,
                 content=self._structure_preamble(),
                 required=True,
+            ),
+            ContextLayer(
+                name="space_context",
+                priority=1,
+                content=space_context_content,
+                required=False,
             ),
             ContextLayer(
                 name="persona",

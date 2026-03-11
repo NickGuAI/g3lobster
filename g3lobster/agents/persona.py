@@ -32,6 +32,7 @@ class AgentPersona:
     dm_allowlist: List[str] = field(default_factory=list)
     space_id: Optional[str] = None
     bridge_enabled: bool = False
+    space_overrides: Dict[str, Dict[str, str]] = field(default_factory=dict)
     created_at: str = field(default_factory=lambda: _utc_now())
     updated_at: str = field(default_factory=lambda: _utc_now())
 
@@ -60,6 +61,14 @@ class AgentPersona:
         else:
             self.space_id = None
         self.bridge_enabled = bool(self.bridge_enabled)
+        if not isinstance(self.space_overrides, dict):
+            self.space_overrides = {}
+
+    def get_soul_for_space(self, space_id: Optional[str] = None) -> str:
+        """Return the soul text, applying space-specific overrides if available."""
+        if space_id and space_id in self.space_overrides:
+            return self.space_overrides[space_id].get("soul", self.soul)
+        return self.soul
 
     def to_agent_json(self) -> Dict[str, object]:
         return {
@@ -74,6 +83,7 @@ class AgentPersona:
             "dm_allowlist": list(self.dm_allowlist),
             "space_id": self.space_id,
             "bridge_enabled": bool(self.bridge_enabled),
+            "space_overrides": dict(self.space_overrides),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -184,6 +194,7 @@ def load_persona(data_dir: str, agent_id: str, *, skip_migration: bool = False) 
         dm_allowlist=list(payload.get("dm_allowlist") or []),
         space_id=payload.get("space_id"),
         bridge_enabled=bool(payload.get("bridge_enabled", False)),
+        space_overrides=dict(payload.get("space_overrides") or {}),
         created_at=str(payload.get("created_at") or _utc_now()),
         updated_at=str(payload.get("updated_at") or _utc_now()),
     )
@@ -210,6 +221,7 @@ def save_persona(data_dir: str, persona: AgentPersona) -> AgentPersona:
         dm_allowlist=list(persona.dm_allowlist),
         space_id=persona.space_id,
         bridge_enabled=persona.bridge_enabled,
+        space_overrides=dict(persona.space_overrides),
         created_at=(existing.created_at if existing else persona.created_at) or now,
         updated_at=now,
     )
