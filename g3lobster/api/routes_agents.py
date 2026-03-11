@@ -22,6 +22,11 @@ from g3lobster.api.models import (
     AgentDetailResponse,
     AgentResponse,
     AgentUpdateRequest,
+    AssociationResponse,
+    JournalCreateRequest,
+    JournalEntryResponse,
+    JournalQueryRequest,
+    JournalQueryResponse,
     KnowledgeListResponse,
     LinkBotRequest,
     MemorySearchRequest,
@@ -41,6 +46,7 @@ from g3lobster.api.models import (
 )
 from g3lobster.config import normalize_space_id
 from g3lobster.memory.global_memory import GlobalMemoryManager
+from g3lobster.memory.journal import JournalEntry, SalienceLevel
 from g3lobster.memory.manager import MemoryManager
 from g3lobster.memory.search import MemorySearchEngine
 from g3lobster.tasks.types import Task, TaskStatus
@@ -703,6 +709,72 @@ async def get_agent_session(agent_id: str, session_id: str, request: Request) ->
     if not entries:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"session_id": session_id, "entries": entries}
+
+
+@router.get("/{agent_id}/journal", response_model=JournalQueryResponse)
+async def query_journal(
+    agent_id: str,
+    request: Request,
+    salience_min: Optional[str] = Query(default=None),
+    tag: List[str] = Query(default=[]),
+    start_date: Optional[str] = Query(default=None),
+    end_date: Optional[str] = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=500),
+) -> JournalQueryResponse:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+    manager = _memory_manager(request, agent_id)
+
+    salience = SalienceLevel.from_value(salience_min) if salience_min else None
+    from g3lobster.memory.search import MemorySearchEngine
+    s_date = MemorySearchEngine._parse_date(start_date)
+    e_date = MemorySearchEngine._parse_date(end_date)
+
+    entries = manager.query_journal(
+        salience_min=salience,
+        tags=tag or None,
+        start_date=s_date,
+        end_date=e_date,
+        limit=limit,
+    )
+    return JournalQueryResponse(
+        entries=[JournalEntryResponse(**e.as_dict()) for e in entries],
+    )
+
+
+@router.post("/{agent_id}/journal", response_model=JournalEntryResponse)
+async def create_journal_entry(
+    agent_id: str,
+    payload: JournalCreateRequest,
+    request: Request,
+) -> JournalEntryResponse:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+    manager = _memory_manager(request, agent_id)
+
+    entry = JournalEntry(
+        content=payload.content,
+        salience=SalienceLevel.from_value(payload.salience),
+        tags=payload.tags,
+        source_session=payload.source_session,
+        associations=payload.associations,
+    )
+    saved = manager.append_journal_entry(entry)
+    return JournalEntryResponse(**saved.as_dict())
+
+
+@router.get("/{agent_id}/journal/{entry_id}/associations", response_model=List[AssociationResponse])
+async def get_journal_associations(
+    agent_id: str,
+    entry_id: str,
+    request: Request,
+) -> List[AssociationResponse]:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+    manager = _memory_manager(request, agent_id)
+
+    edges = manager.get_journal_associations(entry_id)
+    return [AssociationResponse(**e) for e in edges]
 
 
 @router.post("/{agent_id}/link-bot")

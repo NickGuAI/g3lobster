@@ -8,8 +8,10 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Set
 
+from g3lobster.memory.journal import JournalStore, SalienceLevel
 
-SUPPORTED_MEMORY_TYPES = {"memory", "procedures", "daily", "session", "knowledge"}
+
+SUPPORTED_MEMORY_TYPES = {"memory", "procedures", "daily", "session", "knowledge", "journal"}
 
 
 @dataclass
@@ -20,6 +22,7 @@ class MemorySearchHit:
     snippet: str
     line_number: int
     timestamp: Optional[str] = None
+    salience_weight: float = 1.0
 
     def as_dict(self) -> dict:
         return {
@@ -29,6 +32,7 @@ class MemorySearchHit:
             "snippet": self.snippet,
             "line_number": self.line_number,
             "timestamp": self.timestamp,
+            "salience_weight": self.salience_weight,
         }
 
 
@@ -99,12 +103,16 @@ class MemorySearchEngine:
     @staticmethod
     def _sort_key(hit: MemorySearchHit) -> float:
         if not hit.timestamp:
-            return 0.0
-        text = hit.timestamp.replace("Z", "+00:00")
-        try:
-            return datetime.fromisoformat(text).timestamp()
-        except ValueError:
-            return 0.0
+            base = 0.0
+        else:
+            text = hit.timestamp.replace("Z", "+00:00")
+            try:
+                base = datetime.fromisoformat(text).timestamp()
+            except ValueError:
+                base = 0.0
+        # Salience weighting: multiply time-based score by salience weight
+        # so higher-salience entries rank above equal-time lower ones.
+        return base * hit.salience_weight
 
     def _search_text_file(
         self,
@@ -204,6 +212,45 @@ class MemorySearchEngine:
                 )
         return hits
 
+    def _search_journal(
+        self,
+        *,
+        daily_dir: Path,
+        agent_id: str,
+        query: str,
+        query_terms: Sequence[str],
+        start: Optional[date],
+        end: Optional[date],
+    ) -> List[MemorySearchHit]:
+        """Search JSONL journal files with salience-weighted ranking."""
+        if not daily_dir.exists():
+            return []
+
+        hits: List[MemorySearchHit] = []
+        store = JournalStore(str(daily_dir))
+        for path in sorted(daily_dir.glob("*.jsonl")):
+            file_date = self._parse_date(path.stem)
+            if not self._date_in_range(file_date, start, end):
+                continue
+            for entry in store._read_jsonl(path):
+                if not self._matches(entry.content, query, query_terms):
+                    # Also check tags.
+                    tag_text = " ".join(entry.tags)
+                    if not self._matches(tag_text, query, query_terms):
+                        continue
+                hits.append(
+                    MemorySearchHit(
+                        agent_id=agent_id,
+                        memory_type="journal",
+                        source=self._relative_source(path),
+                        snippet=f"[{entry.salience.value}] {entry.content[:200]}",
+                        line_number=0,
+                        timestamp=entry.timestamp,
+                        salience_weight=entry.salience.weight,
+                    )
+                )
+        return hits
+
     def search(
         self,
         query: str,
@@ -282,6 +329,18 @@ class MemorySearchEngine:
                             file_date=file_date,
                         )
                     )
+
+            if "journal" in selected_types:
+                hits.extend(
+                    self._search_journal(
+                        daily_dir=daily_dir,
+                        agent_id=agent_id,
+                        query=normalized_query,
+                        query_terms=query_terms,
+                        start=start,
+                        end=end,
+                    )
+                )
 
             if "session" in selected_types:
                 hits.extend(

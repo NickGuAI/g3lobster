@@ -27,6 +27,8 @@ class AgentsConfig:
     context_messages: int = 12
     health_check_interval_s: int = 30
     stuck_timeout_s: int = 0  # 0 disables stuck-agent auto-restart
+    journal_salience_default: str = "normal"
+    journal_association_decay_days: int = 90
     consolidation_enabled: bool = True
     consolidation_schedule: str = "0 2 * * *"
     consolidation_days_window: int = 7
