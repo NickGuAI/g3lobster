@@ -940,21 +940,22 @@ def _make_message(text="Hello there", name="spaces/test/messages/user1"):
 
 @pytest.mark.asyncio
 async def test_reaction_progression_success(tmp_path) -> None:
-    """On a successful task, reactions progress: 👀 → 🤔 → ✅."""
+    """On a successful task, reactions progress: 👀 → 🤔 → 🔥 → ✅."""
     bridge, service = _make_bridge_and_service(tmp_path)
     reactions_api = service.messages_api._reactions_api
 
     await bridge.handle_message(_make_message())
 
     user_msg = "spaces/test/messages/user1"
-    # Created: 👀, 🤔, ✅
-    assert len(reactions_api.created) == 3
+    # Created: 👀, 🤔, 🔥 (on first MESSAGE event), ✅
+    assert len(reactions_api.created) == 4
     assert reactions_api.created[0]["body"] == {"emoji": {"unicode": "👀"}}
     assert reactions_api.created[0]["parent"] == user_msg
     assert reactions_api.created[1]["body"] == {"emoji": {"unicode": "🤔"}}
-    assert reactions_api.created[2]["body"] == {"emoji": {"unicode": "✅"}}
-    # Deleted: 👀 (when 🤔 added), 🤔 (when ✅ added)
-    assert len(reactions_api.deleted) == 2
+    assert reactions_api.created[2]["body"] == {"emoji": {"unicode": "🔥"}}
+    assert reactions_api.created[3]["body"] == {"emoji": {"unicode": "✅"}}
+    # Deleted: 👀, 🤔, 🔥
+    assert len(reactions_api.deleted) == 3
 
 
 @pytest.mark.asyncio

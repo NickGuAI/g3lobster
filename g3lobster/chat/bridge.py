@@ -442,6 +442,12 @@ class ChatBridge:
                     last_progress_text = progress_text
                     last_update_time = time.monotonic()
             elif event.event_type == StreamEventType.MESSAGE:
+                # 🔥 — generating (first message event, if no tool use triggered it)
+                if not _first_tool_use and user_message_name:
+                    _first_tool_use = True
+                    reaction_name = await self.transition_reaction(
+                        user_message_name, reaction_name, "🔥"
+                    )
                 if event.text:
                     accumulated_text += event.text
                     now = time.monotonic()
