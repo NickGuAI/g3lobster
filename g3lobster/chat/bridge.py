@@ -382,6 +382,7 @@ class ChatBridge:
             prompt=merged_text,
             session_id=session_id,
             timeout_s=_resolve_task_timeout_s(persona, self.registry),
+            space_id=self.space_id,
         )
 
         thinking_msg = await self.send_message(

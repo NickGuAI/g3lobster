@@ -315,7 +315,11 @@ class MemoryManager:
         role: str,
         content: str,
         metadata: Optional[Dict[str, Any]] = None,
+        space_id: Optional[str] = None,
     ) -> None:
+        if space_id:
+            metadata = dict(metadata) if metadata else {}
+            metadata.setdefault("space_id", space_id)
         with self.sessions.session_lock(session_id):
             self.sessions.append_message(session_id, role, content, metadata=metadata)
             count = self.sessions.message_count(session_id)
@@ -333,6 +337,25 @@ class MemoryManager:
 
     def read_session_messages(self, session_id: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         return self.sessions.read_messages(session_id, limit=limit)
+
+    def read_session_messages_for_space(
+        self,
+        session_id: str,
+        space_id: str,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Read messages filtered by space_id metadata, with fallback to unscoped recall."""
+        all_messages = self.sessions.read_messages(session_id)
+        matched = [
+            entry for entry in all_messages
+            if (entry.get("metadata") or {}).get("space_id") == space_id
+        ]
+        if not matched:
+            # Fallback: return unscoped messages when no space-tagged entries exist
+            matched = all_messages
+        if limit is not None:
+            return matched[-limit:]
+        return matched
 
     def read_latest_compaction(self, session_id: str) -> Optional[Dict[str, Any]]:
         return self.sessions.read_latest_compaction(session_id)

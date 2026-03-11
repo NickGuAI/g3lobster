@@ -98,8 +98,8 @@ class GeminiAgent:
         task.add_event("started", {"agent_id": self.id})
 
         try:
-            prompt = self.context_builder.build(task.session_id, task.prompt)
-            self.memory_manager.append_message(task.session_id, "user", task.prompt, {"task_id": task.id})
+            prompt = self.context_builder.build(task.session_id, task.prompt, space_id=task.space_id)
+            self.memory_manager.append_message(task.session_id, "user", task.prompt, {"task_id": task.id}, space_id=task.space_id)
             raw_output = await self.process.ask(
                 prompt,
                 timeout=_normalize_timeout(task.timeout_s),
@@ -110,7 +110,7 @@ class GeminiAgent:
             task.status = TaskStatus.COMPLETED
             task.completed_at = time.time()
             task.add_event("completed", {"chars": len(parsed or "")})
-            self.memory_manager.append_message(task.session_id, "assistant", parsed, {"task_id": task.id})
+            self.memory_manager.append_message(task.session_id, "assistant", parsed, {"task_id": task.id}, space_id=task.space_id)
         except Exception as exc:  # pragma: no cover - defensive path
             if task.status != TaskStatus.CANCELED:
                 task.error = str(exc)
@@ -178,8 +178,8 @@ class GeminiAgent:
         task.add_event("started", {"agent_id": self.id})
 
         try:
-            prompt = self.context_builder.build(task.session_id, task.prompt)
-            self.memory_manager.append_message(task.session_id, "user", task.prompt, {"task_id": task.id})
+            prompt = self.context_builder.build(task.session_id, task.prompt, space_id=task.space_id)
+            self.memory_manager.append_message(task.session_id, "user", task.prompt, {"task_id": task.id}, space_id=task.space_id)
             timeout_s = _normalize_timeout(task.timeout_s)
 
             collected_events = []
@@ -211,7 +211,7 @@ class GeminiAgent:
                 task.result = parsed
                 task.status = TaskStatus.COMPLETED
                 task.add_event("completed", {"chars": len(parsed)})
-                self.memory_manager.append_message(task.session_id, "assistant", parsed, {"task_id": task.id})
+                self.memory_manager.append_message(task.session_id, "assistant", parsed, {"task_id": task.id}, space_id=task.space_id)
         except Exception as exc:
             if task.status != TaskStatus.CANCELED:
                 task.error = str(exc)

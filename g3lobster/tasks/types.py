@@ -64,6 +64,7 @@ class Task:
     result: Optional[str] = None
     error: Optional[str] = None
     agent_id: Optional[str] = None
+    space_id: Optional[str] = None
     created_at: float = field(default_factory=time.time)
     started_at: Optional[float] = None
     completed_at: Optional[float] = None
@@ -84,6 +85,7 @@ class Task:
             "result": self.result,
             "error": self.error,
             "agent_id": self.agent_id,
+            "space_id": self.space_id,
             "created_at": self.created_at,
             "started_at": self.started_at,
             "completed_at": self.completed_at,
