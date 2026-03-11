@@ -39,6 +39,7 @@ HELP_TEXT = """\
 • `/help` — show this message
 • `/status` — fleet dashboard showing all agents at a glance
 • `/quick` — show quick action buttons
+• `/catchup` — summarize this thread with cross-referenced context
 • `/cron list` — list scheduled tasks for this agent
 • `/cron add "<schedule>" "<instruction>"` — create a new cron task
   _schedule_: standard 5-field cron expression, e.g. `0 9 * * *`
@@ -58,7 +59,7 @@ HELP_TEXT = """\
 def detect_command(text: str) -> Optional[tuple[str, str]]:
     """Return ``(command, rest)`` if text contains a ``/`` command, else ``None``.
 
-    Recognised commands: ``help``, ``status``, ``quick``, ``teach``, ``cron``, ``sleep``, ``memory``, ``forget``.
+    Recognised commands: ``help``, ``status``, ``quick``, ``teach``, ``cron``, ``sleep``, ``memory``, ``forget``, ``catchup``.
     """
     m = _SLASH_RE.search(text)
     if not m:
@@ -109,6 +110,9 @@ async def handle(
 
     if cmd == "forget":
         return _handle_forget(rest, agent_id, registry)
+
+    if cmd == "catchup":
+        return "__CATCHUP__"
 
     # Unknown command — fall through to AI
     return None
