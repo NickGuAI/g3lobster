@@ -22,6 +22,10 @@ from g3lobster.api.models import (
     AgentDetailResponse,
     AgentResponse,
     AgentUpdateRequest,
+    AssociationResponse,
+    JournalEntryCreate,
+    JournalEntryResponse,
+    JournalQueryRequest,
     KnowledgeListResponse,
     LinkBotRequest,
     MemorySearchRequest,
@@ -41,6 +45,7 @@ from g3lobster.api.models import (
 )
 from g3lobster.config import normalize_space_id
 from g3lobster.memory.global_memory import GlobalMemoryManager
+from g3lobster.memory.journal import JournalEntry, SalienceLevel
 from g3lobster.memory.manager import MemoryManager
 from g3lobster.memory.search import MemorySearchEngine
 from g3lobster.tasks.types import Task, TaskStatus
@@ -734,3 +739,77 @@ async def test_agent(agent_id: str, payload: TestAgentRequest, request: Request)
     message = f"{persona.emoji} {persona.name} test: {payload.text}"
     await chat_bridge.send_message(message)
     return {"sent": True}
+
+
+def _parse_date_optional(value: Optional[str]) -> Optional["date"]:
+    from datetime import date as _date
+
+    if not value:
+        return None
+    try:
+        return _date.fromisoformat(value.strip())
+    except ValueError:
+        return None
+
+
+@router.get("/{agent_id}/journal", response_model=List[JournalEntryResponse])
+async def query_journal(
+    agent_id: str,
+    request: Request,
+    salience_min: Optional[str] = Query(default=None),
+    tag: List[str] = Query(default=[]),
+    start_date: Optional[str] = Query(default=None),
+    end_date: Optional[str] = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=500),
+) -> List[JournalEntryResponse]:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+
+    manager = _memory_manager(request, agent_id)
+    sal_min = SalienceLevel.from_value(salience_min) if salience_min else None
+    entries = manager.query_journal(
+        salience_min=sal_min,
+        tags=tag or None,
+        start_date=_parse_date_optional(start_date),
+        end_date=_parse_date_optional(end_date),
+        limit=limit,
+    )
+    return [JournalEntryResponse(**e.to_dict()) for e in entries]
+
+
+@router.post("/{agent_id}/journal", response_model=JournalEntryResponse, status_code=201)
+async def create_journal_entry(
+    agent_id: str,
+    payload: JournalEntryCreate,
+    request: Request,
+) -> JournalEntryResponse:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+
+    manager = _memory_manager(request, agent_id)
+    entry = JournalEntry(
+        content=payload.content,
+        salience=SalienceLevel.from_value(payload.salience),
+        tags=payload.tags,
+        source_session=payload.source_session,
+        associations=payload.associations,
+    )
+    manager.append_journal_entry(entry)
+    return JournalEntryResponse(**entry.to_dict())
+
+
+@router.get(
+    "/{agent_id}/journal/{entry_id}/associations",
+    response_model=List[AssociationResponse],
+)
+async def get_journal_associations(
+    agent_id: str,
+    entry_id: str,
+    request: Request,
+) -> List[AssociationResponse]:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+
+    manager = _memory_manager(request, agent_id)
+    edges = manager.association_graph.get_associations(entry_id)
+    return [AssociationResponse(**e.to_dict()) for e in edges]

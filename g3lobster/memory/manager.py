@@ -9,6 +9,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from g3lobster.memory.compactor import CompactionEngine
+from g3lobster.memory.journal import (
+    AssociationGraph,
+    JournalEntry,
+    JournalStore,
+    SalienceLevel,
+)
 from g3lobster.memory.procedures import (
     CandidateStore,
     Procedure,
@@ -60,6 +66,9 @@ class MemoryManager:
             self.memory_file.write_text("# MEMORY\n\n", encoding="utf-8")
         if not self.procedures_file.exists():
             self.procedures_file.write_text("# PROCEDURES\n\n", encoding="utf-8")
+
+        self.journal_store = JournalStore(str(self.daily_dir))
+        self.association_graph = AssociationGraph(str(self.memory_dir))
 
         self.sessions = SessionStore(str(self.sessions_dir))
         self.procedure_store = ProcedureStore(
@@ -212,6 +221,33 @@ class MemoryManager:
         with path.open("a", encoding="utf-8") as handle:
             handle.write(text.strip() + "\n")
 
+    def append_journal_entry(self, entry: JournalEntry, day: Optional[date] = None) -> None:
+        """Write a structured journal entry and append a human-readable line to the daily note."""
+        self.journal_store.append(entry, day=day)
+        self.association_graph.add_edges_from_entry(entry, self.journal_store)
+        # Backward-compatible: also append to the .md daily note.
+        tag_str = f" [{', '.join(entry.tags)}]" if entry.tags else ""
+        md_line = f"- [{entry.salience.value}]{tag_str} {entry.content}"
+        self.append_daily_note(md_line, day=day)
+
+    def query_journal(
+        self,
+        *,
+        salience_min: Optional[SalienceLevel] = None,
+        tags: Optional[List[str]] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        limit: int = 50,
+    ) -> List[JournalEntry]:
+        """Query journal entries with optional filters."""
+        return self.journal_store.query(
+            salience_min=salience_min,
+            tags=tags,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+        )
+
     def append_message(
         self,
         session_id: str,
@@ -283,8 +319,23 @@ class MemoryManager:
                     continue
                 if role == "user" and self._is_user_preference(content):
                     highlights.append(f"- user preference: {content[:180]}")
-                elif len(highlights) < 6:
+                    salience = SalienceLevel.HIGH
+                elif role == "assistant":
                     highlights.append(f"- {role}: {content[:180]}")
+                    salience = SalienceLevel.NORMAL
+                else:
+                    highlights.append(f"- {role}: {content[:180]}")
+                    salience = SalienceLevel.LOW
+
+                # Write as structured journal entry.
+                if len(highlights) <= 8:
+                    journal_entry = JournalEntry(
+                        content=content[:300],
+                        salience=salience,
+                        tags=["compaction"],
+                        source_session=session_id,
+                    )
+                    self.journal_store.append(journal_entry)
 
             if highlights:
                 self.append_memory_section(f"Compaction {session_id}", "\n".join(highlights[:8]))

@@ -8,6 +8,8 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Set
 
+from g3lobster.memory.journal import JournalEntry, SalienceLevel
+
 
 SUPPORTED_MEMORY_TYPES = {"memory", "procedures", "daily", "session", "knowledge"}
 
@@ -98,13 +100,16 @@ class MemorySearchEngine:
 
     @staticmethod
     def _sort_key(hit: MemorySearchHit) -> float:
-        if not hit.timestamp:
-            return 0.0
-        text = hit.timestamp.replace("Z", "+00:00")
-        try:
-            return datetime.fromisoformat(text).timestamp()
-        except ValueError:
-            return 0.0
+        base = 0.0
+        if hit.timestamp:
+            text = hit.timestamp.replace("Z", "+00:00")
+            try:
+                base = datetime.fromisoformat(text).timestamp()
+            except ValueError:
+                pass
+        # Apply salience weight multiplier for journal hits.
+        salience_weight = getattr(hit, "_salience_weight", 1.0)
+        return base * salience_weight
 
     def _search_text_file(
         self,
@@ -204,6 +209,62 @@ class MemorySearchEngine:
                 )
         return hits
 
+    def _search_journal_file(
+        self,
+        *,
+        path: Path,
+        agent_id: str,
+        query: str,
+        query_terms: Sequence[str],
+        file_date: Optional[date],
+    ) -> List[MemorySearchHit]:
+        """Search a JSONL journal file and return salience-weighted hits."""
+        if not path.exists() or not path.is_file():
+            return []
+
+        hits: List[MemorySearchHit] = []
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except UnicodeDecodeError:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+
+        for line_num, raw in enumerate(lines, start=1):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+
+            content = str(data.get("content", ""))
+            if not self._matches(content, query, query_terms):
+                continue
+
+            entry = JournalEntry.from_dict(data)
+            timestamp = entry.timestamp
+            if file_date and not timestamp:
+                timestamp = datetime.combine(
+                    file_date, datetime.min.time(), tzinfo=timezone.utc
+                ).isoformat()
+
+            tags_str = f" [{', '.join(entry.tags)}]" if entry.tags else ""
+            snippet = f"[{entry.salience.value}]{tags_str} {content[:200]}"
+
+            hit = MemorySearchHit(
+                agent_id=agent_id,
+                memory_type="daily",
+                source=self._relative_source(path),
+                snippet=snippet,
+                line_number=line_num,
+                timestamp=timestamp,
+            )
+            # Store salience weight for ranking.
+            hit._salience_weight = entry.salience.weight  # type: ignore[attr-defined]
+            hits.append(hit)
+
+        return hits
+
     def search(
         self,
         query: str,
@@ -277,6 +338,21 @@ class MemorySearchEngine:
                             path=daily_path,
                             agent_id=agent_id,
                             memory_type="daily",
+                            query=normalized_query,
+                            query_terms=query_terms,
+                            file_date=file_date,
+                        )
+                    )
+
+                # Also scan JSONL journal files for salience-weighted results.
+                for jsonl_path in sorted(daily_dir.glob("*.jsonl")):
+                    file_date = self._parse_date(jsonl_path.stem)
+                    if not self._date_in_range(file_date, start, end):
+                        continue
+                    hits.extend(
+                        self._search_journal_file(
+                            path=jsonl_path,
+                            agent_id=agent_id,
                             query=normalized_query,
                             query_terms=query_terms,
                             file_date=file_date,
