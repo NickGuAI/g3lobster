@@ -62,11 +62,20 @@ class ContextBuilder:
         compaction = self.memory_manager.read_latest_compaction(session_id) or {}
 
         user_memory = "(empty)"
+        global_knowledge = "(none)"
         global_procedures: List[Procedure] = []
         if self.global_memory_manager:
             user_memory_text = self.global_memory_manager.read_user_memory().strip()
             user_memory = user_memory_text or "(empty)"
             global_procedures = self.global_memory_manager.procedures.list_procedures()
+            knowledge_entries = self.global_memory_manager.read_all_knowledge()
+            if knowledge_entries:
+                klines: List[str] = []
+                for key, content in knowledge_entries.items():
+                    klines.append(f"## {key}")
+                    klines.append(content.strip())
+                    klines.append("")
+                global_knowledge = "\n".join(klines).rstrip()
 
         matched = self.memory_manager.match_procedures(
             prompt,
@@ -108,6 +117,9 @@ class ContextBuilder:
             [
                 "# User Preferences",
                 user_memory,
+                "",
+                "# Global Knowledge",
+                global_knowledge,
                 "",
                 "# Agent Memory",
                 memory_text or "(empty)",
