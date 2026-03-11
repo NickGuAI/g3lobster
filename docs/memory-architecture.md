@@ -112,9 +112,24 @@ Manages shared state under `data/.memory/`:
 | `USER.md` | Global user preferences (fallback for all agents) |
 | `users/{id}/USER.md` | Per-user preferences (overrides global) |
 | `PROCEDURES.md` | Global procedures shared across all agents |
-| `knowledge/*.md` | Custom knowledge files |
+| `knowledge/*.md` | Cross-agent knowledge files with YAML frontmatter |
 
 User IDs are sanitized (`re.sub(r"[^a-zA-Z0-9_.-]", "_", user_id)`) to prevent path traversal.
+
+**Knowledge file format:**
+```markdown
+---
+source: research-agent
+topic: api-migration
+created: 2026-03-11T04:30:00Z
+---
+
+# API Migration Delayed
+
+The API migration has been delayed until Q2.
+```
+
+Knowledge files are written via `GlobalMemoryManager.write_knowledge()` (thread-safe) and automatically injected into agent prompts by `ContextBuilder` when relevant to the current query.
 
 **Key class:** `GlobalMemoryManager` in `memory/global_memory.py`
 
@@ -130,9 +145,10 @@ When an agent receives a task, `ContextBuilder.build()` assembles the full promp
 │ 4. User preferences (USER.md)          │
 │ 5. Agent memory (MEMORY.md)            │
 │ 6. Matched procedures (top 3)          │
-│ 7. Latest compaction summary           │
-│ 8. Recent conversation (last N msgs)   │
-│ 9. New user prompt                     │
+│ 7. Cross-agent knowledge (top 3)       │
+│ 8. Latest compaction summary           │
+│ 9. Recent conversation (last N msgs)   │
+│ 10. New user prompt                    │
 └─────────────────────────────────────────┘
 ```
 
