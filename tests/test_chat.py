@@ -695,3 +695,30 @@ async def test_explicit_mention_still_routes_directly_with_concierge(tmp_path) -
     assert "Concierge" not in service.messages_api.created[0]["body"]["text"]
     assert len(service.messages_api.updated) == 1
     assert "🦀 Luna: reply" in service.messages_api.updated[0]["body"]["text"]
+
+
+def test_save_chat_config_persists_concierge_fields(tmp_path) -> None:
+    """save_chat_config must round-trip the concierge_enabled and concierge_agent_id fields."""
+    from g3lobster.config import ChatConfig, save_chat_config
+
+    cfg = ChatConfig(
+        enabled=True,
+        space_id="spaces/abc",
+        space_name="Test Space",
+        poll_interval_s=3.0,
+        concierge_enabled=True,
+        concierge_agent_id="my-concierge",
+    )
+    config_path = str(tmp_path / "config.yaml")
+    save_chat_config(cfg, config_path)
+
+    import yaml
+
+    with open(config_path) as f:
+        saved = yaml.safe_load(f)
+
+    chat = saved["chat"]
+    assert chat["concierge_enabled"] is True
+    assert chat["concierge_agent_id"] == "my-concierge"
+    assert chat["enabled"] is True
+    assert chat["space_id"] == "spaces/abc"
