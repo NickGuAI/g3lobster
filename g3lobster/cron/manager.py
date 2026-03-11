@@ -17,8 +17,11 @@ from g3lobster.tasks.types import Task
 
 if TYPE_CHECKING:
     from g3lobster.agents.registry import AgentRegistry
+    from g3lobster.incident.store import IncidentStore
 
 logger = logging.getLogger(__name__)
+
+_INCIDENT_PROMPT_PREFIX = "__INCIDENT_PROMPT__"
 
 
 class CronManager:
@@ -37,9 +40,11 @@ class CronManager:
         gemini_timeout_s: float = 45.0,
         gemini_cwd: Optional[str] = None,
         standup_orchestrator: Optional[object] = None,
+        incident_store: Optional["IncidentStore"] = None,
     ) -> None:
         self._store = cron_store
         self._registry = registry
+        self._incident_store = incident_store
         self._scheduler = None  # initialised lazily to avoid import-time dependency
         self._standup_orchestrator = standup_orchestrator
         self._consolidation_enabled = consolidation_enabled
@@ -164,6 +169,27 @@ class CronManager:
                 duration_s=duration, result_preview=preview,
             ))
             return
+
+        # Handle __INCIDENT_PROMPT__ tasks — rewrite instruction to a status prompt.
+        if instruction.startswith(_INCIDENT_PROMPT_PREFIX) and self._incident_store:
+            incident_id = instruction[len(_INCIDENT_PROMPT_PREFIX) + 1:]
+            incident = self._incident_store.get(agent_id, incident_id)
+            if not incident:
+                # Incident was deleted or resolved; auto-clean the cron task.
+                self._store.delete_task(agent_id, task_id)
+                return
+            from g3lobster.incident.model import IncidentStatus
+            if incident.status != IncidentStatus.ACTIVE:
+                self._store.delete_task(agent_id, task_id)
+                return
+            from g3lobster.incident.formatter import format_status_prompt
+            last_ts = incident.timeline[-1].timestamp if incident.timeline else incident.created_at
+            try:
+                last_dt = datetime.fromisoformat(last_ts)
+                minutes = int((datetime.now(tz=timezone.utc) - last_dt).total_seconds() / 60)
+            except (ValueError, TypeError):
+                minutes = 15
+            instruction = format_status_prompt(incident, minutes)
 
         runtime = self._registry.get_agent(agent_id)
         if not runtime:

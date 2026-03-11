@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Dict, Optional, Set
 if TYPE_CHECKING:
     from g3lobster.cron.store import CronStore
     from g3lobster.standup.orchestrator import StandupOrchestrator
+    from g3lobster.incident.store import IncidentStore
 
 from g3lobster.chat.auth import get_authenticated_service
 from g3lobster.chat.commands import detect_command, handle as handle_command
@@ -85,6 +86,7 @@ class ChatBridge:
         auth_data_dir: Optional[str] = None,
         cron_store: Optional["CronStore"] = None,
         standup_orchestrator: Optional["StandupOrchestrator"] = None,
+        incident_store: Optional["IncidentStore"] = None,
         seen_content_max_size: int = 10_000,
         debug_mode: bool = False,
         agent_filter: Optional[Set[str]] = None,
@@ -101,6 +103,7 @@ class ChatBridge:
         self.auth_data_dir = auth_data_dir
         self.cron_store = cron_store
         self.standup_orchestrator = standup_orchestrator
+        self.incident_store = incident_store
         self.debug_mode = debug_mode
         self.concierge_agent_id = concierge_agent_id
 
