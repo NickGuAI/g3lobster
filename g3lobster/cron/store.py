@@ -35,6 +35,7 @@ class CronTask:
     enabled: bool = True
     last_run: Optional[str] = None
     next_run: Optional[str] = None
+    dm_target: Optional[str] = None  # email address for DM delivery of cron result
     created_at: str = field(default_factory=lambda: datetime.now(tz=timezone.utc).isoformat())
 
 
@@ -132,7 +133,7 @@ class CronStore:
         tasks = self._read_tasks(agent_id)
         for i, task in enumerate(tasks):
             if task.id == task_id:
-                allowed = {"schedule", "instruction", "enabled", "last_run", "next_run"}
+                allowed = {"schedule", "instruction", "enabled", "last_run", "next_run", "dm_target"}
                 for key, value in kwargs.items():
                     if key in allowed:
                         setattr(tasks[i], key, value)

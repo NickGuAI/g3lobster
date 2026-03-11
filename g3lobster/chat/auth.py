@@ -11,6 +11,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/chat.spaces",
     "https://www.googleapis.com/auth/chat.memberships.readonly",
     "https://www.googleapis.com/auth/chat.users.spacesettings",
+    "https://www.googleapis.com/auth/calendar.events.readonly",
 ]
 
 WORKSPACE_SCOPES = [

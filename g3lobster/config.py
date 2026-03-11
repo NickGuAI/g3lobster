@@ -77,7 +77,7 @@ class CalendarConfig:
     poll_interval_s: float = 300.0
     lookahead_minutes: int = 15
     max_attendees: int = 15
-    auth_data_dir: str = "./data/calendar_auth"
+    auth_data_dir: str = ""  # defaults to chat auth dir when empty
 
 
 @dataclass
@@ -134,9 +134,9 @@ class AppConfig:
     chat: ChatConfig = field(default_factory=ChatConfig)
     email: EmailConfig = field(default_factory=EmailConfig)
     cron: CronConfig = field(default_factory=CronConfig)
+    calendar: CalendarConfig = field(default_factory=CalendarConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
-    calendar: CalendarConfig = field(default_factory=CalendarConfig)
     subagent: SubagentConfig = field(default_factory=SubagentConfig)
     control_plane: ControlPlaneConfig = field(default_factory=ControlPlaneConfig)
     auth: AuthConfig = field(default_factory=AuthConfig)
@@ -267,7 +267,8 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     config.agents.data_dir = _resolve_path(config.agents.data_dir, path)
     config.gemini.workspace_dir = _resolve_path(config.gemini.workspace_dir, path)
     config.email.auth_data_dir = _resolve_path(config.email.auth_data_dir, path)
-    config.calendar.auth_data_dir = _resolve_path(config.calendar.auth_data_dir, path)
+    if config.calendar.auth_data_dir:
+        config.calendar.auth_data_dir = _resolve_path(config.calendar.auth_data_dir, path)
 
     return config
 
