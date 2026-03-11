@@ -1,0 +1,137 @@
+%%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#4285F4', 'primaryTextColor': '#fff', 'primaryBorderColor': '#3367D6', 'lineColor': '#5F6368', 'secondaryColor': '#34A853', 'tertiaryColor': '#FBBC04', 'background': '#ffffff', 'fontSize': '14px'}}}%%
+
+flowchart TB
+    %% External
+    USER["👤 User"]
+    GCHAT["Google Chat API"]
+    GEMINI_API["Gemini CLI / ADK"]
+
+    %% ── Setup Wizard ──
+    subgraph SETUP["🧙 Setup Wizard"]
+        direction LR
+        SETUP_UI["Web UI\n/ui"]
+        SETUP_API["Setup API\n/setup/*"]
+    end
+
+    %% ── Chat Bridge ──
+    subgraph BRIDGE["💬 Google Chat Bridge"]
+        direction LR
+        POLLER["Space Poller\n(async loop)"]
+        ROUTER["Mention Router\n(bot ID matching)"]
+        CMD["Command Interceptor\n(/pause, /resume)"]
+    end
+
+    %% ── Agent Registry ──
+    subgraph REGISTRY["🤖 Agent Registry"]
+        direction LR
+        LIFECYCLE["Lifecycle Manager\n(start/stop/restart)"]
+        QUEUE["FIFO Task Queue\n(per-agent lock)"]
+        PERSONA["Named Personas\n(agent.json + SOUL.md)"]
+    end
+
+    %% ── Memory v2 ──
+    subgraph MEMORY["🧠 Memory v2"]
+        direction TB
+        SESSIONS["Session Store\n(JSONL transcripts)"]
+        COMPACTOR["Auto-Compaction\n(Gemini summarizer)"]
+        PROCEDURES["Procedural Memory\n(BM25 matching)"]
+        GLOBAL["Global Memory\n(USER.md + knowledge)"]
+        CONTEXT["Context Builder\n(system prompt assembly)"]
+    end
+
+    %% ── MCP Delegation ──
+    subgraph MCP["🔗 Inter-Agent Delegation"]
+        direction LR
+        MCP_SERVER["MCP Server\n(stdio JSON-RPC)"]
+        MCP_TOOLS["Tools: delegate_task\nlist_agents, sleep"]
+    end
+
+    %% ── Gemini CLI Backend ──
+    subgraph CLI["⚡ Gemini CLI Backend"]
+        direction LR
+        PROCESS["GeminiProcess\n(subprocess per task)"]
+        STREAM["Stream Parser\n(JSON event stream)"]
+        TMUX["TmuxSubagent\n(persistent sessions)"]
+    end
+
+    %% ── Cron Scheduler ──
+    subgraph CRON["⏰ Cron Scheduler"]
+        direction LR
+        SCHED["APScheduler\n(crontab expressions)"]
+        STORE["CronStore\n(task configs + runs)"]
+    end
+
+    %% ── Health Monitor + Alerts ──
+    subgraph HEALTH["🏥 Health Monitor + Alerts"]
+        direction LR
+        INSPECTOR["Health Inspector\n(dead/stuck detection)"]
+        ALERTS["Alert Manager\n(Chat, webhook, email)"]
+    end
+
+    %% ── Data Flows ──
+
+    %% User interactions
+    USER -->|"messages"| GCHAT
+    USER -->|"browser"| SETUP_UI
+    SETUP_UI --> SETUP_API
+    SETUP_API -->|"start/stop bridge"| POLLER
+
+    %% Chat Bridge flow
+    GCHAT -->|"poll responses"| POLLER
+    POLLER --> ROUTER
+    ROUTER -->|"slash commands"| CMD
+    CMD -->|"cron commands"| STORE
+    ROUTER -->|"agent tasks"| QUEUE
+
+    %% Agent Registry flow
+    QUEUE -->|"assign task"| LIFECYCLE
+    LIFECYCLE -->|"spawn process"| PROCESS
+    LIFECYCLE -->|"build context"| CONTEXT
+
+    %% Memory flow
+    CONTEXT -->|"load"| SESSIONS
+    CONTEXT -->|"load"| PROCEDURES
+    CONTEXT -->|"load"| GLOBAL
+    SESSIONS -->|"threshold exceeded"| COMPACTOR
+    COMPACTOR -->|"extract"| PROCEDURES
+
+    %% CLI Backend flow
+    PROCESS -->|"stream events"| STREAM
+    STREAM -->|"response"| ROUTER
+    ROUTER -->|"reply"| GCHAT
+    PROCESS --> GEMINI_API
+    TMUX --> GEMINI_API
+
+    %% MCP Delegation flow
+    PROCESS -->|"tool call"| MCP_SERVER
+    MCP_SERVER --> MCP_TOOLS
+    MCP_TOOLS -->|"HTTP to\ncontrol plane"| LIFECYCLE
+
+    %% Cron flow
+    SCHED -->|"fire task"| QUEUE
+
+    %% Health flow
+    INSPECTOR -->|"inspect agents"| LIFECYCLE
+    INSPECTOR -->|"alert"| ALERTS
+    ALERTS -->|"notify"| GCHAT
+
+    %% ── Styles ──
+    classDef bridge fill:#4285F4,stroke:#3367D6,color:#fff
+    classDef registry fill:#34A853,stroke:#2D8E47,color:#fff
+    classDef memory fill:#9C27B0,stroke:#7B1FA2,color:#fff
+    classDef mcp fill:#FF6D00,stroke:#E65100,color:#fff
+    classDef cli fill:#00ACC1,stroke:#00838F,color:#fff
+    classDef cron fill:#FBBC04,stroke:#F09D00,color:#333
+    classDef health fill:#EA4335,stroke:#C62828,color:#fff
+    classDef setup fill:#607D8B,stroke:#455A64,color:#fff
+    classDef external fill:#f5f5f5,stroke:#9E9E9E,color:#333
+
+    class POLLER,ROUTER,CMD bridge
+    class LIFECYCLE,QUEUE,PERSONA registry
+    class SESSIONS,COMPACTOR,PROCEDURES,GLOBAL,CONTEXT memory
+    class MCP_SERVER,MCP_TOOLS mcp
+    class PROCESS,STREAM,TMUX cli
+    class SCHED,STORE cron
+    class INSPECTOR,ALERTS health
+    class SETUP_UI,SETUP_API setup
+    class USER,GCHAT,GEMINI_API external
