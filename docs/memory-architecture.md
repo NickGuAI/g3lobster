@@ -188,13 +188,12 @@ When an agent receives a task, `ContextBuilder.build()` assembles the full promp
 │  2. Agent persona (SOUL.md)                      │
 │  3. Available agents for delegation              │
 │  4. User preferences (USER.md)                   │
-│  5. Global knowledge (all entries)               │
-│  6. Cross-agent knowledge (relevance-filtered)   │
-│  7. Agent memory (MEMORY.md)                     │
-│  8. Matched procedures (top 3)                   │
-│  9. Latest compaction summary                    │
-│ 10. Recent conversation (last N msgs)            │
-│ 11. New user prompt                              │
+│  5. Cross-agent knowledge (relevance-filtered)   │
+│  6. Agent memory (MEMORY.md)                     │
+│  7. Matched procedures (top 3)                   │
+│  8. Latest compaction summary                    │
+│  9. Recent conversation (last N msgs)            │
+│ 10. New user prompt                              │
 └──────────────────────────────────────────────────┘
 ```
 
