@@ -10,6 +10,7 @@ import subprocess
 import threading
 from typing import Callable, Dict, List, Optional
 
+from g3lobster.memory.decisions import DecisionLog
 from g3lobster.memory.procedures import CandidateStore, ProcedureStore
 from g3lobster.memory.sessions import SessionStore
 
@@ -19,11 +20,18 @@ logger = logging.getLogger(__name__)
 class CompactionEngine:
     """Compacts long JSONL sessions by summarizing old messages."""
 
+    _DECISION_PATTERNS = re.compile(
+        r"(?:I decided|let's go with|the approach is|we chose|because we|"
+        r"decision:|decided to|going with|opting for|settled on)",
+        re.IGNORECASE,
+    )
+
     def __init__(
         self,
         session_store: SessionStore,
         procedure_store: ProcedureStore,
         candidate_store: Optional[CandidateStore] = None,
+        decision_log: Optional[DecisionLog] = None,
         compact_threshold: int = 40,
         compact_keep_ratio: float = 0.25,
         compact_chunk_size: int = 10,
@@ -37,6 +45,7 @@ class CompactionEngine:
         self.session_store = session_store
         self.procedure_store = procedure_store
         self.candidate_store = candidate_store
+        self.decision_log = decision_log
         self.compact_threshold = max(1, int(compact_threshold))
         self.compact_keep_ratio = min(0.9, max(0.05, float(compact_keep_ratio)))
         self.compact_chunk_size = max(1, int(compact_chunk_size))
@@ -101,12 +110,44 @@ class CompactionEngine:
             if promoted:
                 self._upsert_procedures_locked(promoted)
 
+        # Extract decisions from compacted messages.
+        try:
+            self._extract_decisions(session_id, compacted)
+        except Exception as exc:
+            logger.warning("Decision extraction failed (compaction persisted): %s", exc)
+
         return True
 
     def _upsert_procedures_locked(self, procedures: List) -> None:
         """Write to PROCEDURES.md under a lock to prevent concurrent clobber."""
         with self._procedure_lock:
             self.procedure_store.upsert_procedures(procedures)
+
+    def _extract_decisions(self, session_id: str, messages: List[Dict[str, object]]) -> None:
+        """Scan compacted messages for decision-indicating patterns and log them."""
+        if not self.decision_log:
+            return
+        for entry in messages:
+            message = entry.get("message", {})
+            if not isinstance(message, dict):
+                continue
+            role = str(message.get("role", "")).strip().lower()
+            if role != "assistant":
+                continue
+            content = str(message.get("content", "")).strip()
+            if not content:
+                continue
+            if self._DECISION_PATTERNS.search(content):
+                # Use the first 200 chars as the decision summary
+                decision_text = content[:200].rstrip()
+                if len(content) > 200:
+                    decision_text += "..."
+                self.decision_log.append(
+                    session_id=session_id,
+                    decision=decision_text,
+                    context=content[:500] if len(content) > 200 else "",
+                    tags=["auto-extracted"],
+                )
 
     def maybe_extract_candidates(
         self,

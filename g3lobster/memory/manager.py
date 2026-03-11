@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from g3lobster.memory.compactor import CompactionEngine
+from g3lobster.memory.decisions import DecisionLog
 from g3lobster.memory.journal import (
     AssociationGraph,
     JournalEntry,
@@ -71,6 +72,7 @@ class MemoryManager:
         self.association_graph = AssociationGraph(str(self.memory_dir))
 
         self.sessions = SessionStore(str(self.sessions_dir))
+        self.decision_log = DecisionLog(str(self.memory_dir / "decisions.jsonl"))
         self.procedure_store = ProcedureStore(
             str(self.procedures_file),
             min_frequency=self.procedure_min_frequency,
@@ -80,6 +82,7 @@ class MemoryManager:
             session_store=self.sessions,
             procedure_store=self.procedure_store,
             candidate_store=self.candidate_store,
+            decision_log=self.decision_log,
             compact_threshold=self.compact_threshold,
             compact_keep_ratio=compact_keep_ratio,
             compact_chunk_size=compact_chunk_size,
@@ -362,6 +365,22 @@ class MemoryManager:
 
     def list_sessions(self) -> List[str]:
         return self.sessions.list_sessions()
+
+    def append_decision(
+        self,
+        session_id: str,
+        decision: str,
+        context: str = "",
+        reasoning: str = "",
+        tags: Optional[List[str]] = None,
+    ) -> None:
+        self.decision_log.append(session_id, decision, context=context, reasoning=reasoning, tags=tags)
+
+    def query_decisions(self, query_text: str, limit: int = 10) -> List[Dict[str, Any]]:
+        return self.decision_log.query(query_text, limit=limit)
+
+    def list_decisions(self, limit: int = 50) -> List[Dict[str, Any]]:
+        return self.decision_log.list(limit=limit)
 
     # Pattern matching user preference statements: requires "I" or "you"
     # before the keyword, or the keyword at the start of the sentence.

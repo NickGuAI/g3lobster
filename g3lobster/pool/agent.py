@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Callable, List, Optional
 
-from g3lobster.cli.parser import clean_text, strip_reasoning
+from g3lobster.cli.parser import clean_text, split_reasoning, strip_reasoning
 from g3lobster.memory.context import ContextBuilder
 from g3lobster.memory.manager import MemoryManager
 from g3lobster.mcp.manager import MCPManager
@@ -105,11 +105,14 @@ class GeminiAgent:
                 timeout=_normalize_timeout(task.timeout_s),
                 session_id=task.session_id,
             )
-            parsed = strip_reasoning(clean_text(raw_output))
+            cleaned = clean_text(raw_output)
+            reasoning, parsed = split_reasoning(cleaned)
             task.result = parsed
             task.status = TaskStatus.COMPLETED
             task.completed_at = time.time()
             task.add_event("completed", {"chars": len(parsed or "")})
+            if reasoning:
+                task.add_event("reasoning", {"text": reasoning})
             self.memory_manager.append_message(task.session_id, "assistant", parsed, {"task_id": task.id}, space_id=task.space_id)
         except Exception as exc:  # pragma: no cover - defensive path
             if task.status != TaskStatus.CANCELED:
@@ -208,10 +211,13 @@ class GeminiAgent:
                 task.status = TaskStatus.FAILED
                 task.add_event("failed", {"error": task.error})
             else:
-                task.result = parsed
+                reasoning, response = split_reasoning(parsed)
+                task.result = response
                 task.status = TaskStatus.COMPLETED
-                task.add_event("completed", {"chars": len(parsed)})
-                self.memory_manager.append_message(task.session_id, "assistant", parsed, {"task_id": task.id}, space_id=task.space_id)
+                task.add_event("completed", {"chars": len(response)})
+                if reasoning:
+                    task.add_event("reasoning", {"text": reasoning})
+                self.memory_manager.append_message(task.session_id, "assistant", response, {"task_id": task.id}, space_id=task.space_id)
         except Exception as exc:
             if task.status != TaskStatus.CANCELED:
                 task.error = str(exc)
