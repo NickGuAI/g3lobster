@@ -244,11 +244,8 @@ class ChatBridge:
                     logger.info("Slash-mention routed to agent '%s' via /%s", persona.id, slug)
                     return persona.id, rest or text
 
-        # Fallback to concierge agent for messages without /slug prefix
-        if self.concierge_agent_id:
-            logger.info("No /agent-slug found, routing to concierge agent '%s'", self.concierge_agent_id)
-            return self.concierge_agent_id, text
-
+        # STRICT: only respond to messages with /agent-slug prefix
+        logger.debug("No /agent-slug found, ignoring message")
         return None, text
 
     def _resolve_delegation_persona(self, parent_agent_id: str):
@@ -288,7 +285,7 @@ class ChatBridge:
         thread_id = message.get("thread", {}).get("name")
         user_id = sender.get("name") or "unknown"
 
-        # Resolve agent target via /slug prefix or concierge fallback.
+        # Resolve agent target via /slug prefix (STRICT: no prefix = ignore).
         target_id, routed_text = self._resolve_target_agent(message, text)
 
         # Slash-command interception — handle immediately, bypass debounce.
@@ -443,8 +440,11 @@ class ChatBridge:
             self.event_bus.publish(target_id, {
                 "type": "user_input",
                 "sender": sender_name,
-                "text": text,
+                "text": merged_text,
             })
+
+        user_message_name = message.get("name")
+        reaction_name: Optional[str] = None
 
         thinking_msg = await self.send_message(
             f"{persona.emoji} _{persona.name} is thinking..._",

@@ -69,8 +69,11 @@ class BridgeManager:
                 continue
             if not normalize_space_id(persona.space_id):
                 continue
-            await self.start_bridge(persona.id)
-            started += 1
+            try:
+                await self.start_bridge(persona.id)
+                started += 1
+            except Exception as exc:
+                logger.warning("Failed to start bridge for %s: %s", persona.id, exc)
         return started
 
     async def stop_all(self) -> None:

@@ -7,13 +7,13 @@ agents:
   memory_max_sections: 50
   context_messages: 12
   health_check_interval_s: 30
-  stuck_timeout_s: 0  # 0 = disabled
+  stuck_timeout_s: 0
 gemini:
   command: gemini
   args:
   - -y
   workspace_dir: .
-  response_timeout_s: 0  # 0 = no per-task timeout
+  response_timeout_s: 0
   idle_read_window_s: 0.6
 mcp:
   config_dir: ./config/mcp
@@ -21,28 +21,28 @@ mcp:
   - '*'
 chat:
   enabled: true
-  space_id: spaces/AAQAuxoTw1w
-  space_name: my-space
+  space_id: spaces/AAQAkv5tdu8
+  space_name: myspace
   poll_interval_s: 2
   concierge_enabled: true
   concierge_agent_id: concierge
-  debounce_window_ms: 2000
+  stream_update_interval_s: 1.0
 calendar:
   enabled: false
-  check_interval_cron: "*/5 * * * *"
+  check_interval_cron: '*/5 * * * *'
 server:
   host: 0.0.0.0
   port: 40000
 alerts:
   enabled: false
-  chat_space_id: ""
-  webhook_url: ""
-  email_address: ""
+  chat_space_id: ''
+  webhook_url: ''
+  email_address: ''
   min_severity: warning
   rate_limit_s: 300
 auth:
   enabled: false
-  api_key: ""
+  api_key: ''
 control_plane:
   enabled: true
   queue_depth: 5
