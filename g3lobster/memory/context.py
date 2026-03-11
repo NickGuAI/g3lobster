@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from g3lobster.memory.global_memory import GlobalMemoryManager
 from g3lobster.memory.manager import MemoryManager
 from g3lobster.memory.procedures import Procedure
 
+logger = logging.getLogger(__name__)
 
 _STRUCTURE_PREAMBLE_TEMPLATE = """\
 # G3Lobster Agent Environment
@@ -25,8 +28,56 @@ reaching you — you do not need to implement them yourself.\
 """
 
 
+def _estimate_tokens(text: str) -> int:
+    """Approximate token count using len(text) // 4."""
+    return len(text) // 4
+
+
+@dataclass
+class ContextLayer:
+    """A single layer of context with a name, priority, and content."""
+
+    name: str
+    priority: int
+    content: str
+    required: bool = False
+
+    @property
+    def tokens(self) -> int:
+        return _estimate_tokens(self.content)
+
+
+@dataclass
+class BuildInfo:
+    """Debug info from the last build() call."""
+
+    included: List[Dict[str, Any]] = field(default_factory=list)
+    dropped: List[Dict[str, Any]] = field(default_factory=list)
+    total_tokens: int = 0
+    budget: int = 0
+
+
+# Display order for assembling the final prompt (layer name -> position).
+_DISPLAY_ORDER = [
+    "preamble",
+    "persona",
+    "available_agents",
+    "user_prefs",
+    "memory",
+    "recollection",
+    "procedures",
+    "compaction",
+    "messages",
+    "prompt",
+]
+
+
 class ContextBuilder:
-    """Builds request context from MEMORY.md + recent transcript entries."""
+    """Builds request context from MEMORY.md + recent transcript entries.
+
+    Supports priority-based layer dropping when the assembled context exceeds
+    a configurable token budget.
+    """
 
     def __init__(
         self,
@@ -36,6 +87,8 @@ class ContextBuilder:
         global_memory_manager: Optional[GlobalMemoryManager] = None,
         procedure_limit: int = 3,
         agent_list_provider: Optional[Callable[[], List[Dict[str, Any]]]] = None,
+        token_budget: int = 1_000_000,
+        debug: bool = False,
     ):
         self.memory_manager = memory_manager
         self.message_limit = message_limit
@@ -43,6 +96,9 @@ class ContextBuilder:
         self.global_memory_manager = global_memory_manager
         self.procedure_limit = max(1, int(procedure_limit))
         self.agent_list_provider = agent_list_provider
+        self.token_budget = token_budget
+        self.debug = debug
+        self.last_build_info: Optional[BuildInfo] = None
 
     def _structure_preamble(self) -> str:
         data_dir = str(self.memory_manager.data_dir)
@@ -56,9 +112,21 @@ class ContextBuilder:
             global_data_dir=global_data_dir,
         )
 
+    def _recollection_layer(self) -> str:
+        """Return recollection content from the association graph.
+
+        This is a no-op stub until issue #63 (salience-classified journal /
+        association graph) is merged.  Once #63 lands, this method should query
+        the recollection system for contextually relevant memories.
+        """
+        return ""
+
     def build(self, session_id: str, prompt: str) -> str:
+        # --- gather raw content for each layer ---
         memory_text = self.memory_manager.read_memory().strip()
-        recent_entries = self.memory_manager.read_session_messages(session_id, limit=self.message_limit)
+        recent_entries = self.memory_manager.read_session_messages(
+            session_id, limit=self.message_limit
+        )
         compaction = self.memory_manager.read_latest_compaction(session_id) or {}
 
         user_memory = "(empty)"
@@ -83,49 +151,145 @@ class ContextBuilder:
                 continue
             history_lines.append(f"{role}: {content}")
 
-        parts = [self._structure_preamble(), ""]
-        if self.system_preamble:
-            parts.extend(
-                [
-                    "# Agent Persona",
-                    self.system_preamble,
-                    "",
-                ]
-            )
-
+        # --- build delegation section ---
         delegation_section = self._format_available_agents()
+        agents_content = ""
         if delegation_section:
-            parts.extend(
-                [
-                    "# Available Agents for Delegation",
-                    "You can delegate tasks to other agents using the delegate_to_agent tool.",
-                    delegation_section,
-                    "",
-                ]
+            agents_content = (
+                "# Available Agents for Delegation\n"
+                "You can delegate tasks to other agents using the delegate_to_agent tool.\n"
+                + delegation_section
             )
 
-        parts.extend(
-            [
-                "# User Preferences",
-                user_memory,
-                "",
-                "# Agent Memory",
-                memory_text or "(empty)",
-                "",
-                "# Known Procedures",
-                self._format_procedures(matched),
-                "",
-                "# Compaction Summary",
-                str(compaction.get("summary", "")).strip() or "(none)",
-                "",
-                "# Recent Conversation",
-                "\n".join(history_lines) if history_lines else "(none)",
-                "",
-                "# New User Prompt",
-                prompt.strip(),
-            ]
+        # --- build persona section ---
+        persona_content = ""
+        if self.system_preamble:
+            persona_content = "# Agent Persona\n" + self.system_preamble
+
+        # --- recollection stub ---
+        recollection_content = self._recollection_layer()
+
+        # --- construct layers ---
+        layers: List[ContextLayer] = [
+            ContextLayer(
+                name="preamble",
+                priority=0,
+                content=self._structure_preamble(),
+                required=True,
+            ),
+            ContextLayer(
+                name="persona",
+                priority=1,
+                content=persona_content,
+                required=True,
+            ),
+            ContextLayer(
+                name="prompt",
+                priority=2,
+                content="# New User Prompt\n" + prompt.strip(),
+                required=True,
+            ),
+            ContextLayer(
+                name="messages",
+                priority=3,
+                content=(
+                    "# Recent Conversation\n"
+                    + ("\n".join(history_lines) if history_lines else "(none)")
+                ),
+            ),
+            ContextLayer(
+                name="memory",
+                priority=4,
+                content="# Agent Memory\n" + (memory_text or "(empty)"),
+            ),
+            ContextLayer(
+                name="user_prefs",
+                priority=5,
+                content="# User Preferences\n" + user_memory,
+            ),
+            ContextLayer(
+                name="available_agents",
+                priority=6,
+                content=agents_content,
+            ),
+            ContextLayer(
+                name="recollection",
+                priority=7,
+                content=recollection_content,
+            ),
+            ContextLayer(
+                name="procedures",
+                priority=8,
+                content="# Known Procedures\n" + self._format_procedures(matched),
+            ),
+            ContextLayer(
+                name="compaction",
+                priority=9,
+                content=(
+                    "# Compaction Summary\n"
+                    + (str(compaction.get("summary", "")).strip() or "(none)")
+                ),
+            ),
+        ]
+
+        # --- apply token budget with priority-based dropping ---
+        included, dropped = self._apply_budget(layers)
+
+        # --- record debug info ---
+        if self.debug:
+            info = BuildInfo(budget=self.token_budget)
+            for layer in included:
+                info.included.append(
+                    {"name": layer.name, "tokens": layer.tokens, "priority": layer.priority}
+                )
+            for layer in dropped:
+                info.dropped.append(
+                    {"name": layer.name, "tokens": layer.tokens, "priority": layer.priority}
+                )
+            info.total_tokens = sum(l.tokens for l in included)
+            self.last_build_info = info
+            logger.debug(
+                "context build: %d layers included (%d tokens), %d dropped, budget=%d",
+                len(included),
+                info.total_tokens,
+                len(dropped),
+                self.token_budget,
+            )
+
+        # --- assemble in display order ---
+        layer_map = {layer.name: layer for layer in included}
+        parts: List[str] = []
+        for name in _DISPLAY_ORDER:
+            layer = layer_map.get(name)
+            if layer and layer.content:
+                parts.append(layer.content)
+
+        return "\n\n".join(parts).strip() + "\n"
+
+    def _apply_budget(
+        self, layers: List[ContextLayer]
+    ) -> tuple[List[ContextLayer], List[ContextLayer]]:
+        """Drop lowest-priority (highest priority number) layers until under budget."""
+        total = sum(l.tokens for l in layers)
+        if total <= self.token_budget:
+            return layers, []
+
+        # Sort by priority descending (lowest importance first) for dropping
+        droppable = sorted(
+            [l for l in layers if not l.required],
+            key=lambda l: l.priority,
+            reverse=True,
         )
-        return "\n".join(parts).strip() + "\n"
+        dropped: List[ContextLayer] = []
+        for layer in droppable:
+            if total <= self.token_budget:
+                break
+            total -= layer.tokens
+            dropped.append(layer)
+
+        dropped_names = {l.name for l in dropped}
+        included = [l for l in layers if l.name not in dropped_names]
+        return included, dropped
 
     def _format_available_agents(self) -> str:
         """Format the list of available sibling agents for the preamble."""
