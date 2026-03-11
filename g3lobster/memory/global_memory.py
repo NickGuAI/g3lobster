@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import threading
 from pathlib import Path
-from typing import List
+from typing import Dict, List, Optional
 
 from g3lobster.memory.procedures import ProcedureStore, is_empty_procedure_document
 
@@ -72,3 +72,42 @@ class GlobalMemoryManager:
 
     def list_knowledge(self) -> List[str]:
         return sorted(str(path.relative_to(self.knowledge_dir)) for path in self.knowledge_dir.rglob("*") if path.is_file())
+
+    @staticmethod
+    def _sanitize_key(key: str) -> str:
+        """Sanitize a knowledge key into a safe filename (no extension)."""
+        slug = re.sub(r"[^a-zA-Z0-9_.-]", "_", key.strip().lower())
+        slug = re.sub(r"_+", "_", slug).strip("_") or "untitled"
+        return slug[:80]
+
+    def add_knowledge(self, key: str, content: str) -> str:
+        """Write a knowledge entry. Returns the sanitized filename."""
+        filename = self._sanitize_key(key) + ".md"
+        path = self.knowledge_dir / filename
+        path.write_text(f"# {key.strip()}\n\n{content.strip()}\n", encoding="utf-8")
+        return filename
+
+    def get_knowledge(self, key: str) -> Optional[str]:
+        """Read a knowledge entry by key. Returns content or None."""
+        filename = self._sanitize_key(key) + ".md"
+        path = self.knowledge_dir / filename
+        if path.exists():
+            return path.read_text(encoding="utf-8")
+        return None
+
+    def remove_knowledge(self, keyword: str) -> int:
+        """Remove knowledge files matching the keyword. Returns count removed."""
+        keyword_lower = keyword.strip().lower()
+        removed = 0
+        for path in list(self.knowledge_dir.rglob("*.md")):
+            if keyword_lower in path.stem.lower():
+                path.unlink()
+                removed += 1
+        return removed
+
+    def read_all_knowledge(self) -> Dict[str, str]:
+        """Read all knowledge entries. Returns {filename: content}."""
+        result: Dict[str, str] = {}
+        for path in sorted(self.knowledge_dir.rglob("*.md")):
+            result[path.stem] = path.read_text(encoding="utf-8")
+        return result

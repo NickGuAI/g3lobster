@@ -13,16 +13,22 @@ Supported commands
 ``/cron delete <id>``                  — delete a cron task
 ``/cron enable <id>``                  — enable a disabled task
 ``/cron disable <id>``                 — disable a task without deleting it
+``/quick``                             — show an interactive action card
+``/teach <fact>``                      — add to global knowledge
+``/teach list``                        — list current knowledge entries
+``/teach forget <keyword>``            — remove a knowledge entry
 """
 
 from __future__ import annotations
 
 import re
 import shlex
-from typing import TYPE_CHECKING, Optional
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 if TYPE_CHECKING:
     from g3lobster.cron.store import CronStore
+    from g3lobster.memory.global_memory import GlobalMemoryManager
 
 # Matches a leading slash command token anywhere after optional whitespace /
 # (handles both "/cron list" and "@robo /cron list" after the mention is stripped).
@@ -31,6 +37,10 @@ _SLASH_RE = re.compile(r"(?:^|\s)/([a-zA-Z][a-zA-Z0-9_-]*)(?:\s+(.*))?", re.DOTA
 HELP_TEXT = """\
 *Available commands*
 • `/help` — show this message
+• `/quick` — show an interactive action card with common tasks
+• `/teach <fact>` — add a fact to global knowledge
+• `/teach list` — list current knowledge entries
+• `/teach forget <keyword>` — remove matching knowledge entries
 • `/cron list` — list scheduled tasks for this agent
 • `/cron add "<schedule>" "<instruction>"` — create a new cron task
   _schedule_: standard 5-field cron expression, e.g. `0 9 * * *`
@@ -41,10 +51,117 @@ HELP_TEXT = """\
 """
 
 
+@dataclass
+class CommandResult:
+    """Structured result from a slash command."""
+
+    text: str
+    card: Optional[Dict[str, Any]] = None
+
+
+# ---------------------------------------------------------------------------
+# /quick — action card
+# ---------------------------------------------------------------------------
+
+_QUICK_ACTIONS = [
+    {"label": "Morning Briefing", "emoji": "\U0001f4cb", "action": "morning_briefing", "prompt": "Give me a morning briefing."},
+    {"label": "Summarize Thread", "emoji": "\U0001f4dd", "action": "summarize_thread", "prompt": "Summarize this thread."},
+    {"label": "What's Next?", "emoji": "\U0001f52e", "action": "whats_next", "prompt": "What should I focus on next?"},
+    {"label": "Teach Something", "emoji": "\U0001f4da", "action": "teach_something", "prompt": "Teach me something interesting."},
+    {"label": "Agent Status", "emoji": "\u2699\ufe0f", "action": "agent_status", "prompt": "Show your current status."},
+]
+
+# Map action identifiers back to their prompt text for CARD_CLICKED handling.
+QUICK_ACTION_PROMPTS: Dict[str, str] = {a["action"]: a["prompt"] for a in _QUICK_ACTIONS}
+
+
+def _build_quick_card() -> Dict[str, Any]:
+    """Build a Google Chat cardsV2 payload for /quick."""
+    buttons = []
+    for action in _QUICK_ACTIONS:
+        buttons.append(
+            {
+                "text": f'{action["emoji"]} {action["label"]}',
+                "onClick": {
+                    "action": {
+                        "function": "quick_action",
+                        "parameters": [{"key": "action", "value": action["action"]}],
+                    }
+                },
+            }
+        )
+
+    card = {
+        "cardId": "quick_action_card",
+        "card": {
+            "header": {"title": "Quick Actions", "subtitle": "Pick a task to run"},
+            "sections": [
+                {
+                    "widgets": [
+                        {"buttonList": {"buttons": buttons}},
+                    ]
+                }
+            ],
+        },
+    }
+    return card
+
+
+def _handle_quick() -> CommandResult:
+    return CommandResult(text="Pick an action:", card=_build_quick_card())
+
+
+# ---------------------------------------------------------------------------
+# /teach — global knowledge
+# ---------------------------------------------------------------------------
+
+
+def _handle_teach(args: str, global_memory: "GlobalMemoryManager") -> CommandResult:
+    args = args.strip()
+    if not args:
+        return CommandResult(text="Usage: `/teach <fact>` — add to global knowledge\n`/teach list` — show entries\n`/teach forget <keyword>` — remove entries")
+
+    parts = args.split(None, 1)
+    sub = parts[0].lower()
+
+    if sub == "list":
+        entries = global_memory.read_all_knowledge()
+        if not entries:
+            return CommandResult(text="No knowledge entries yet. Add one with `/teach <fact>`.")
+        lines = ["*Global Knowledge:*"]
+        for key, content in entries.items():
+            # Show first non-header line as preview
+            preview_lines = [l for l in content.split("\n") if l.strip() and not l.startswith("#")]
+            preview = preview_lines[0][:100] if preview_lines else "(empty)"
+            lines.append(f"• `{key}` — {preview}")
+        return CommandResult(text="\n".join(lines))
+
+    if sub == "forget":
+        keyword = parts[1].strip() if len(parts) > 1 else ""
+        if not keyword:
+            return CommandResult(text="Usage: `/teach forget <keyword>`")
+        count = global_memory.remove_knowledge(keyword)
+        if count == 0:
+            return CommandResult(text=f"No knowledge entries matching `{keyword}`.")
+        return CommandResult(text=f"Removed {count} knowledge entry(ies) matching `{keyword}`.")
+
+    # Default: treat the entire args as a fact to store
+    # Use first few words as key, full text as content
+    key_words = args.split()[:5]
+    key = " ".join(key_words)
+    filename = global_memory.add_knowledge(key, args)
+    return CommandResult(text=f"Learned: `{filename}` — {args}")
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
 def detect_command(text: str) -> Optional[tuple[str, str]]:
     """Return ``(command, rest)`` if text contains a ``/`` command, else ``None``.
 
-    Recognised commands: ``help``, ``cron``, ``sleep``.
+    Recognised commands: ``help``, ``cron``, ``sleep``, ``quick``, ``teach``.
     """
     m = _SLASH_RE.search(text)
     if not m:
@@ -54,10 +171,15 @@ def detect_command(text: str) -> Optional[tuple[str, str]]:
     return cmd, rest
 
 
-def handle(text: str, agent_id: str, cron_store: "CronStore") -> Optional[str]:
+def handle(
+    text: str,
+    agent_id: str,
+    cron_store: "CronStore",
+    global_memory: Optional["GlobalMemoryManager"] = None,
+) -> Optional[CommandResult]:
     """Intercept and handle a slash command.
 
-    Returns a reply string when the command is handled, or ``None`` when
+    Returns a ``CommandResult`` when the command is handled, or ``None`` when
     the message should be forwarded to the AI agent instead.
     """
     result = detect_command(text)
@@ -67,16 +189,29 @@ def handle(text: str, agent_id: str, cron_store: "CronStore") -> Optional[str]:
     cmd, rest = result
 
     if cmd == "help":
-        return HELP_TEXT
+        return CommandResult(text=HELP_TEXT)
 
     if cmd == "cron":
-        return _handle_cron(rest, agent_id, cron_store)
+        return CommandResult(text=_handle_cron(rest, agent_id, cron_store))
 
     if cmd == "sleep":
-        return _handle_sleep(rest, agent_id)
+        return CommandResult(text=_handle_sleep(rest, agent_id))
+
+    if cmd == "quick":
+        return _handle_quick()
+
+    if cmd == "teach":
+        if global_memory is None:
+            return CommandResult(text="Global memory is not available. `/teach` requires global memory.")
+        return _handle_teach(rest, global_memory)
 
     # Unknown command — fall through to AI
     return None
+
+
+# ---------------------------------------------------------------------------
+# Existing command handlers (unchanged)
+# ---------------------------------------------------------------------------
 
 
 def _handle_sleep(args: str, agent_id: str) -> str:
@@ -121,7 +256,7 @@ def _cron_list(agent_id: str, cron_store: "CronStore") -> str:
         return f"No cron tasks for `{agent_id}`. Add one with `/cron add`."
     lines = [f"*Cron tasks for {agent_id}:*"]
     for t in tasks:
-        status = "✅" if t.enabled else "⏸"
+        status = "\u2705" if t.enabled else "\u23f8"
         last = t.last_run[:19].replace("T", " ") if t.last_run else "never"
         lines.append(f"{status} `{t.id[:8]}` | `{t.schedule}` | last: {last}\n  _{t.instruction}_")
     return "\n".join(lines)
@@ -137,7 +272,7 @@ def _cron_add(args: str, agent_id: str, cron_store: "CronStore") -> str:
     schedule, instruction = tokens[0], " ".join(tokens[1:])
     try:
         task = cron_store.add_task(agent_id, schedule, instruction)
-        return f"✅ Cron task created: `{task.id[:8]}` | `{schedule}` | _{instruction}_"
+        return f"\u2705 Cron task created: `{task.id[:8]}` | `{schedule}` | _{instruction}_"
     except Exception as exc:
         return f"Failed to create task: {exc}"
 
@@ -150,10 +285,10 @@ def _cron_delete(task_id_prefix: str, agent_id: str, cron_store: "CronStore") ->
     if not matched:
         return f"No task found with ID starting with `{task_id_prefix}`."
     if len(matched) > 1:
-        return f"Ambiguous ID prefix `{task_id_prefix}` — matches {len(matched)} tasks. Use more characters."
+        return f"Ambiguous ID prefix `{task_id_prefix}` \u2014 matches {len(matched)} tasks. Use more characters."
     deleted = cron_store.delete_task(agent_id, matched[0].id)
     if deleted:
-        return f"🗑 Deleted task `{matched[0].id[:8]}`."
+        return f"\U0001f5d1 Deleted task `{matched[0].id[:8]}`."
     return "Failed to delete task."
 
 
@@ -170,5 +305,6 @@ def _cron_toggle(task_id_prefix: str, agent_id: str, cron_store: "CronStore", *,
     updated = cron_store.update_task(agent_id, matched[0].id, enabled=enabled)
     if updated:
         verb = "enabled" if enabled else "disabled"
-        return f"{'▶' if enabled else '⏸'} Task `{matched[0].id[:8]}` {verb}."
+        icon = "\u25b6" if enabled else "\u23f8"
+        return f"{icon} Task `{matched[0].id[:8]}` {verb}."
     return "Failed to update task."

@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from g3lobster.cron.store import CronStore
 
 from g3lobster.chat.auth import get_authenticated_service
-from g3lobster.chat.commands import handle as handle_command
+from g3lobster.chat.commands import CommandResult, handle as handle_command
 from g3lobster.cli.parser import get_content_id
 from g3lobster.cli.streaming import StreamEventType, accumulate_text
 from g3lobster.tasks.types import Task, TaskStatus
@@ -274,11 +274,13 @@ class ChatBridge:
 
         # Slash-command interception — handle locally without hitting the AI.
         if self.cron_store is not None:
-            cmd_reply = handle_command(text, target_id, self.cron_store)
-            if cmd_reply is not None:
+            global_mem = getattr(self.registry, "global_memory_manager", None)
+            cmd_result = handle_command(text, target_id, self.cron_store, global_memory=global_mem)
+            if cmd_result is not None:
                 await self.send_message(
-                    f"{persona.emoji} {persona.name}: {cmd_reply}",
+                    f"{persona.emoji} {persona.name}: {cmd_result.text}",
                     thread_id=thread_id,
+                    card=cmd_result.card,
                 )
                 return
 
@@ -342,10 +344,12 @@ class ChatBridge:
         else:
             await self.send_message(reply_text, thread_id=thread_id)
 
-    async def send_message(self, text: str, thread_id: Optional[str] = None) -> dict:
-        body = {"text": text}
+    async def send_message(self, text: str, thread_id: Optional[str] = None, card: Optional[dict] = None) -> dict:
+        body: Dict[str, object] = {"text": text}
         if thread_id:
             body["thread"] = {"name": thread_id}
+        if card:
+            body["cardsV2"] = [card]
 
         result = await asyncio.to_thread(
             self.service.spaces().messages().create(parent=self.space_id, body=body).execute
