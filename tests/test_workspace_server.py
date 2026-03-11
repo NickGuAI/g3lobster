@@ -287,3 +287,60 @@ def test_auth_workspace_scopes_defined() -> None:
 def test_auth_get_workspace_credentials_exists() -> None:
     from g3lobster.chat.auth import get_workspace_credentials
     assert callable(get_workspace_credentials)
+
+
+# --- Integration test: search by title then read content ---
+
+
+@patch("g3lobster.mcp.workspace_server._get_workspace_credentials")
+def test_search_drive_then_read_doc_integration(mock_creds) -> None:
+    """Integration: agent queries a doc title via search_drive and reads content via read_doc."""
+    mock_creds.return_value = MagicMock()
+
+    handler = WorkspaceMCPHandler()
+
+    # Step 1: Search for a document by title
+    with patch("googleapiclient.discovery.build") as mock_build:
+        mock_service = MagicMock()
+        mock_build.return_value = mock_service
+        mock_service.files().list().execute.return_value = {
+            "files": [
+                {"id": "doc-xyz-123", "name": "Q1 Revenue Tracker", "mimeType": "application/vnd.google-apps.document", "modifiedTime": "2026-03-01T10:00:00Z"}
+            ]
+        }
+
+        search_resp = handler.handle_request({
+            "method": "tools/call",
+            "id": 20,
+            "params": {"name": "search_drive", "arguments": {"query": "Q1 Revenue Tracker", "file_type": "document"}},
+        })
+
+    assert search_resp["result"].get("isError") is not True
+    search_results = json.loads(search_resp["result"]["content"][0]["text"])
+    assert len(search_results) == 1
+    doc_id = search_results[0]["id"]
+    assert doc_id == "doc-xyz-123"
+
+    # Step 2: Read the document content using the discovered ID
+    with patch("googleapiclient.discovery.build") as mock_build:
+        mock_service = MagicMock()
+        mock_build.return_value = mock_service
+        mock_service.documents().get().execute.return_value = {
+            "body": {
+                "content": [
+                    {"paragraph": {"elements": [{"textRun": {"content": "Q1 Revenue Report\n"}}]}},
+                    {"paragraph": {"elements": [{"textRun": {"content": "Total revenue: $1,234,567\n"}}]}},
+                ]
+            }
+        }
+
+        read_resp = handler.handle_request({
+            "method": "tools/call",
+            "id": 21,
+            "params": {"name": "read_doc", "arguments": {"doc_id": doc_id}},
+        })
+
+    assert read_resp["result"].get("isError") is not True
+    content = read_resp["result"]["content"][0]["text"]
+    assert "Q1 Revenue Report" in content
+    assert "$1,234,567" in content
