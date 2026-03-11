@@ -13,7 +13,8 @@ if TYPE_CHECKING:
     from g3lobster.cron.store import CronStore
 
 from g3lobster.chat.auth import get_authenticated_service
-from g3lobster.chat.commands import handle as handle_command
+from g3lobster.chat.commands import detect_command, handle as handle_command
+from g3lobster.chat.debounce import MessageDebouncer
 from g3lobster.cli.parser import get_content_id
 from g3lobster.cli.streaming import StreamEventType, accumulate_text
 from g3lobster.tasks.types import Task, TaskStatus
@@ -81,6 +82,7 @@ class ChatBridge:
         seen_content_max_size: int = 10_000,
         debug_mode: bool = False,
         agent_filter: Optional[Set[str]] = None,
+        debounce_window_ms: int = 2000,
     ):
         self.registry = registry
         self.poll_interval_s = poll_interval_s
@@ -97,6 +99,10 @@ class ChatBridge:
         self._last_message_time: Optional[str] = last_message_time
         self._seen_content: BoundedSet = BoundedSet(seen_content_max_size)
         self._agent_filter: Optional[Set[str]] = set(agent_filter) if agent_filter is not None else None
+        self._debouncer = MessageDebouncer(
+            window_s=debounce_window_ms / 1000.0,
+            flush_callback=self._dispatch_to_agent,
+        )
         if seen_content:
             for item in seen_content:
                 self._seen_content.add(item)
@@ -125,6 +131,7 @@ class ChatBridge:
 
     async def stop(self) -> None:
         self._stop_event.set()
+        self._debouncer.cancel_all()
         if self._poll_task:
             self._poll_task.cancel()
             try:
@@ -269,28 +276,54 @@ class ChatBridge:
 
         thread_id = message.get("thread", {}).get("name")
         user_id = sender.get("name") or "unknown"
+
+        # Slash-command interception — handle immediately, bypassing debounce.
+        if detect_command(text) is not None:
+            if self.cron_store is not None:
+                cmd_reply = handle_command(text, target_id, self.cron_store)
+                if cmd_reply is not None:
+                    await self.send_message(
+                        f"{persona.emoji} {persona.name}: {cmd_reply}",
+                        thread_id=thread_id,
+                    )
+                    return
+
+        # Route through debouncer — messages are merged until the window expires.
+        key = (self.space_id or "", user_id, thread_id or "")
+        self._debouncer.add(key, message, text, target_id, thread_id or "")
+
+    async def _dispatch_to_agent(
+        self,
+        merged_text: str,
+        first_message: dict,
+        persona_id: str,
+        thread_id: str,
+    ) -> None:
+        """Called by the debouncer on flush — sends the merged prompt to the agent."""
+        runtime = self.registry.get_agent(persona_id)
+        if not runtime:
+            started = await self.registry.start_agent(persona_id)
+            if not started:
+                return
+            runtime = self.registry.get_agent(persona_id)
+            if not runtime:
+                return
+
+        persona = runtime.persona
+        sender = first_message.get("sender", {})
+        user_id = sender.get("name") or "unknown"
         thread_id_safe = (thread_id or "no-thread").replace("/", "_")
         session_id = f"{self.space_id}__{user_id}__{thread_id_safe}"
 
-        # Slash-command interception — handle locally without hitting the AI.
-        if self.cron_store is not None:
-            cmd_reply = handle_command(text, target_id, self.cron_store)
-            if cmd_reply is not None:
-                await self.send_message(
-                    f"{persona.emoji} {persona.name}: {cmd_reply}",
-                    thread_id=thread_id,
-                )
-                return
-
         task = Task(
-            prompt=text,
+            prompt=merged_text,
             session_id=session_id,
             timeout_s=_resolve_task_timeout_s(persona, self.registry),
         )
 
         thinking_msg = await self.send_message(
             f"{persona.emoji} _{persona.name} is thinking..._",
-            thread_id=thread_id,
+            thread_id=thread_id or None,
         )
         thinking_name: Optional[str] = thinking_msg.get("name") if thinking_msg else None
         last_progress_text = f"{persona.emoji} _{persona.name} is thinking..._"
@@ -340,7 +373,7 @@ class ChatBridge:
         if thinking_name:
             await self.update_message(thinking_name, reply_text)
         else:
-            await self.send_message(reply_text, thread_id=thread_id)
+            await self.send_message(reply_text, thread_id=thread_id or None)
 
     async def send_message(self, text: str, thread_id: Optional[str] = None) -> dict:
         body = {"text": text}

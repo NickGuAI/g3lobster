@@ -192,6 +192,7 @@ def build_runtime(config: AppConfig):
             cron_store=cron_store,
             debug_mode=config.debug_mode,
             agent_filter=agent_filter,
+            debounce_window_ms=config.chat.debounce_window_ms,
         )
 
     bridge_manager = BridgeManager(
