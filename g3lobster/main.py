@@ -180,6 +180,7 @@ def build_runtime(config: AppConfig):
         seen_content=None,
         agent_filter=None,
     ) -> ChatBridge:
+        concierge_id = config.chat.concierge_agent_id if config.chat.concierge_enabled else None
         return ChatBridge(
             registry=registry,
             space_id=space_id,
@@ -192,6 +193,7 @@ def build_runtime(config: AppConfig):
             cron_store=cron_store,
             debug_mode=config.debug_mode,
             agent_filter=agent_filter,
+            concierge_agent_id=concierge_id,
         )
 
     bridge_manager = BridgeManager(
