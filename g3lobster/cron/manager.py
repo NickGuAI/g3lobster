@@ -36,10 +36,12 @@ class CronManager:
         gemini_args: Optional[list] = None,
         gemini_timeout_s: float = 45.0,
         gemini_cwd: Optional[str] = None,
+        standup_orchestrator: Optional[object] = None,
     ) -> None:
         self._store = cron_store
         self._registry = registry
         self._scheduler = None  # initialised lazily to avoid import-time dependency
+        self._standup_orchestrator = standup_orchestrator
         self._consolidation_enabled = consolidation_enabled
         self._consolidation_schedule = consolidation_schedule
         self._consolidation_days_window = consolidation_days_window
@@ -142,6 +144,26 @@ class CronManager:
         logger.info("Firing cron task %s for agent %s", task_id, agent_id)
         now = datetime.now(tz=timezone.utc).isoformat()
         self._store.update_task(agent_id, task_id, last_run=now)
+
+        # Intercept standup cron instructions before they reach the agent.
+        if instruction.startswith("__standup_"):
+            from g3lobster.standup.cron_hooks import handle_standup_cron
+            start_time = time_mod.monotonic()
+            try:
+                handled = await handle_standup_cron(instruction, agent_id, self._standup_orchestrator)
+                duration = round(time_mod.monotonic() - start_time, 1)
+                status = "completed" if handled else "failed"
+                preview = f"Standup {instruction} {'handled' if handled else 'not handled'}"
+            except Exception:
+                duration = round(time_mod.monotonic() - start_time, 1)
+                status = "failed"
+                preview = "Exception during standup cron execution"
+                logger.exception("Standup cron task %s raised an exception", task_id)
+            self._store.record_run(agent_id, CronRunRecord(
+                task_id=task_id, fired_at=now, status=status,
+                duration_s=duration, result_preview=preview,
+            ))
+            return
 
         runtime = self._registry.get_agent(agent_id)
         if not runtime:
