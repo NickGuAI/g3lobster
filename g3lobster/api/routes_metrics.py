@@ -206,6 +206,7 @@ async def metrics_summary(request: Request) -> dict:
             "sessions_total": agent_data["sessions"]["total"],
             "messages_total": agent_data["messages"]["total"],
             "avg_response_s": agent_data["response_time"]["avg_s"],
+            "procedures_count": agent_data["memory"]["procedures_count"],
         })
 
     result = {"agents": summary}

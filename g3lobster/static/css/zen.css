@@ -428,11 +428,10 @@ pre.transcript {
   color: var(--md-sys-color-on-surface-variant);
 }
 
-.agent-selector {
-  display: flex;
-  gap: var(--space-2);
-  overflow-x: auto;
-  padding-bottom: var(--space-2);
+.tank-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-3);
 }
 
 .agent-chip {
@@ -444,10 +443,44 @@ pre.transcript {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  cursor: pointer;
+  flex-wrap: wrap;
+}
+
+.tank-card {
+  border: 1px solid var(--md-sys-color-outline);
+  background: var(--md-sys-color-surface-container-low);
+  border-radius: var(--md-sys-shape-corner-medium);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  cursor: default;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.tank-card.active {
+  border-color: var(--md-sys-color-primary);
+  box-shadow: 0 0 0 2px var(--md-sys-color-primary-container);
+  background: rgba(26, 115, 232, 0.04);
+}
+
+.tank-card-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.tank-card-name {
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+.tank-card-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
   flex-shrink: 0;
-  height: 32px;
-  font-size: 0.875rem;
   transition: background 0.2s;
 }
 
@@ -460,6 +493,49 @@ pre.transcript {
 
 .chip-name {
   font-weight: 500;
+}
+
+.tank-card-dot.dot-active {
+  background: var(--md-sys-color-tertiary);
+  box-shadow: 0 0 4px rgba(6, 118, 71, 0.5);
+}
+
+.tank-card-dot.dot-idle {
+  background: var(--md-sys-color-on-surface-variant);
+  opacity: 0.4;
+}
+
+.tank-card-state {
+  font-size: 0.76rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.tank-card-metrics {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: 0.82rem;
+  color: var(--md-sys-color-on-surface-variant);
+}
+
+.tank-metric-val {
+  font-weight: 700;
+  color: var(--md-sys-color-on-surface);
+}
+
+.tank-card-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: auto;
+}
+
+.btn-sm {
+  padding: 5px 10px;
+  font-size: 0.82rem;
+  border-radius: 8px;
 }
 
 .active-agent-hero {

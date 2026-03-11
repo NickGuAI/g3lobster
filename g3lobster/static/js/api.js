@@ -210,6 +210,10 @@ export function deleteCronTask(agentId, taskId) {
   });
 }
 
+export function getMetricsSummary() {
+  return request("/agents/metrics/summary", { method: "GET" });
+}
+
 export function listMcpServers() {
   return request("/agents/_mcp/servers", { method: "GET" });
 }

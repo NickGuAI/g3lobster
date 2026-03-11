@@ -10,6 +10,7 @@ import {
   getAgentSession,
   getGlobalProcedures,
   getGlobalUserMemory,
+  getMetricsSummary,
   getSetupStatus,
   importAgent,
   linkAgentBot,
@@ -148,9 +149,11 @@ export async function render(root, { onSetupChange }) {
 
   let availableMcpServers = null;
   let pollIntervalId = null;
+  let metricsIntervalId = null;
   let uptimeIntervalId = null;
   let rerenderInFlight = null;
   let rerenderQueued = false;
+  let metricsCache = new Map();
 
   let globalUserMemory = "";
   let globalProcedures = "";
@@ -287,16 +290,43 @@ export async function render(root, { onSetupChange }) {
     return agents.find((item) => item.id === activeAgentId) || agents[0];
   }
 
-  function selectorMarkup(agents) {
+  function tankGridMarkup(agents, metricsMap) {
     return agents
       .map((agent) => {
         const active = agent.id === activeAgentId ? "active" : "";
         const displayStatus = lifecycleStatus(agent.id, agent.state);
+        const m = metricsMap.get(agent.id) || {};
+        const sessions = m.sessions_total ?? "—";
+        const procedures = m.procedures_count ?? "—";
+        const avgResp = m.avg_response_s != null ? `${m.avg_response_s}s` : "—";
+
+        const isRunning = !["stopped", "dead", "failed", "canceled", "error"].includes(
+          String(displayStatus.state).toLowerCase()
+        );
+        const statusDotClass = isRunning ? "dot-active" : "dot-idle";
+
+        const pending = displayStatus.pending;
+        const actionDisabled = pending ? "disabled" : "";
+        const toggleLabel = isRunning ? "Stop" : "Start";
+        const toggleAction = isRunning ? "stop" : "start";
+
         return `
-          <button class="agent-chip ${active}" data-action="select-agent" data-agent-id="${escapeHtml(agent.id)}">
-            <span class="chip-name">${escapeHtml(agent.emoji)} ${escapeHtml(agent.name)}</span>
-            <span class="status-pill ${escapeHtml(displayStatus.className)}"><span class="status-dot"></span>${escapeHtml(displayStatus.state)}</span>
-          </button>
+          <div class="tank-card ${active}" data-agent-id="${escapeHtml(agent.id)}">
+            <div class="tank-card-header">
+              <span class="tank-card-name">${escapeHtml(agent.emoji)} ${escapeHtml(agent.name)}</span>
+              <span class="tank-card-dot ${statusDotClass}"></span>
+              <span class="tank-card-state">${escapeHtml(displayStatus.state)}</span>
+            </div>
+            <div class="tank-card-metrics">
+              <div class="tank-metric"><span class="tank-metric-val">${escapeHtml(String(sessions))}</span> sessions</div>
+              <div class="tank-metric"><span class="tank-metric-val">${escapeHtml(String(procedures))}</span> procedures</div>
+              <div class="tank-metric"><span class="tank-metric-val">${escapeHtml(String(avgResp))}</span> avg</div>
+            </div>
+            <div class="tank-card-actions">
+              <button class="btn btn-secondary btn-sm" data-action="select-agent" data-agent-id="${escapeHtml(agent.id)}">View</button>
+              <button class="btn btn-secondary btn-sm" data-action="${toggleAction}" data-agent-id="${escapeHtml(agent.id)}" ${actionDisabled}>${escapeHtml(toggleLabel)}</button>
+            </div>
+          </div>
         `;
       })
       .join("");
@@ -555,6 +585,17 @@ export async function render(root, { onSetupChange }) {
       return;
     }
 
+    try {
+      const summary = await getMetricsSummary();
+      const newMap = new Map();
+      for (const entry of summary.agents || []) {
+        newMap.set(entry.agent_id, entry);
+      }
+      metricsCache = newMap;
+    } catch (_err) {
+      // Keep existing cache on failure
+    }
+
     const activeAgent = getActiveAgent(agents);
     if (activeAgent) {
       try {
@@ -648,10 +689,10 @@ export async function render(root, { onSetupChange }) {
         </div>
 
         <div class="step-panel">
-          <h2>Agent Selector</h2>
+          <h2>Lobster Tank</h2>
           ${
             agents.length
-              ? `<div class="agent-selector">${selectorMarkup(agents)}</div>`
+              ? `<div class="tank-grid">${tankGridMarkup(agents, metricsCache)}</div>`
               : "<p class='empty'>No agents yet.</p>"
           }
         </div>
@@ -1013,11 +1054,22 @@ export async function render(root, { onSetupChange }) {
     queueRerender();
   }, STATUS_POLL_INTERVAL_MS);
 
+  const METRICS_POLL_INTERVAL_MS = 30000;
+  metricsIntervalId = window.setInterval(() => {
+    if (!disposed) {
+      queueRerender();
+    }
+  }, METRICS_POLL_INTERVAL_MS);
+
   return {
     destroy() {
       disposed = true;
       clearStatusPoll();
       clearUptimeTicker();
+      if (metricsIntervalId !== null) {
+        window.clearInterval(metricsIntervalId);
+        metricsIntervalId = null;
+      }
     },
   };
 }
