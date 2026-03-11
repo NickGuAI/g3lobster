@@ -159,9 +159,22 @@ Manages shared state under `data/.memory/`:
 | `USER.md` | Global user preferences (fallback for all agents) |
 | `users/{id}/USER.md` | Per-user preferences (overrides global) |
 | `PROCEDURES.md` | Global procedures shared across all agents |
-| `knowledge/*.md` | Custom knowledge files |
+| `knowledge/*.md` | Cross-agent knowledge files (with YAML frontmatter) |
 
 User IDs are sanitized (`re.sub(r"[^a-zA-Z0-9_.-]", "_", user_id)`) to prevent path traversal.
+
+**Knowledge file format:**
+```markdown
+---
+source: research-agent
+topic: api-migration
+created: 2026-03-11T04:00:00+00:00
+---
+
+The API migration is delayed until Q2 due to staffing changes.
+```
+
+Knowledge files are written via `GlobalMemoryManager.write_knowledge()` (thread-safe) and automatically injected into agent prompts by `ContextBuilder` when relevant to the current query.
 
 **Key class:** `GlobalMemoryManager` in `memory/global_memory.py`
 
@@ -170,18 +183,22 @@ User IDs are sanitized (`re.sub(r"[^a-zA-Z0-9_.-]", "_", user_id)`) to prevent p
 When an agent receives a task, `ContextBuilder.build()` assembles the full prompt from all memory layers:
 
 ```
-┌─────────────────────────────────────────┐
-│ 1. Structure preamble (file paths)      │
-│ 2. Agent persona (SOUL.md)              │
-│ 3. Available agents for delegation      │
-│ 4. User preferences (USER.md)          │
-│ 5. Agent memory (MEMORY.md)            │
-│ 6. Matched procedures (top 3)          │
-│ 7. Latest compaction summary           │
-│ 8. Recent conversation (last N msgs)   │
-│ 9. New user prompt                     │
-└─────────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│  1. Structure preamble (file paths)              │
+│  2. Agent persona (SOUL.md)                      │
+│  3. Available agents for delegation              │
+│  4. User preferences (USER.md)                   │
+│  5. Global knowledge (all entries)               │
+│  6. Cross-agent knowledge (relevance-filtered)   │
+│  7. Agent memory (MEMORY.md)                     │
+│  8. Matched procedures (top 3)                   │
+│  9. Latest compaction summary                    │
+│ 10. Recent conversation (last N msgs)            │
+│ 11. New user prompt                              │
+└──────────────────────────────────────────────────┘
 ```
+
+**Cross-agent knowledge injection:** When an agent stores knowledge via `write_knowledge()`, it becomes available to all other agents. `ContextBuilder` matches knowledge entries against the current prompt using Jaccard token overlap (threshold ≥ 0.1), injecting the top N most relevant entries (default 3) as a "# Cross-Agent Knowledge" section.
 
 The `context_messages` config (default 12) controls how many recent messages are included.
 

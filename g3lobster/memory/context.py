@@ -3,14 +3,28 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from g3lobster.memory.global_memory import GlobalMemoryManager
+from g3lobster.memory.global_memory import GlobalMemoryManager, _parse_frontmatter
 from g3lobster.memory.manager import MemoryManager
 from g3lobster.memory.procedures import Procedure
 
 logger = logging.getLogger(__name__)
+
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_KNOWLEDGE_STOP_WORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from",
+    "how", "i", "in", "is", "it", "my", "of", "on", "or", "please",
+    "the", "this", "to", "we", "with", "you",
+}
+
+
+def _tokenize_for_matching(text: str) -> set[str]:
+    """Tokenize text for knowledge matching, stripping stop words."""
+    tokens = set(_TOKEN_RE.findall(text.lower()))
+    return tokens - _KNOWLEDGE_STOP_WORDS
 
 _STRUCTURE_PREAMBLE_TEMPLATE = """\
 # G3Lobster Agent Environment
@@ -63,7 +77,7 @@ _DISPLAY_ORDER = [
     "persona",
     "available_agents",
     "user_prefs",
-    "knowledge",
+    "cross_agent_knowledge",
     "memory",
     "recollection",
     "procedures",
@@ -87,6 +101,7 @@ class ContextBuilder:
         system_preamble: str = "",
         global_memory_manager: Optional[GlobalMemoryManager] = None,
         procedure_limit: int = 3,
+        knowledge_limit: int = 3,
         agent_list_provider: Optional[Callable[[], List[Dict[str, Any]]]] = None,
         token_budget: int = 1_000_000,
         debug: bool = False,
@@ -96,6 +111,7 @@ class ContextBuilder:
         self.system_preamble = system_preamble.strip()
         self.global_memory_manager = global_memory_manager
         self.procedure_limit = max(1, int(procedure_limit))
+        self.knowledge_limit = max(1, int(knowledge_limit))
         self.agent_list_provider = agent_list_provider
         self.token_budget = token_budget
         self.debug = debug
@@ -112,6 +128,54 @@ class ContextBuilder:
             data_dir=data_dir,
             global_data_dir=global_data_dir,
         )
+
+    def _match_knowledge(self, prompt: str) -> List[Dict[str, Any]]:
+        """Return top-N relevant knowledge entries matched against *prompt*.
+
+        Uses Jaccard token overlap (same approach as ``ProcedureStore.match_query``)
+        with a 0.1 threshold to keep only entries with at least some relevance.
+        """
+        if not self.global_memory_manager:
+            return []
+        entries = self.global_memory_manager.read_all_knowledge_with_metadata()
+        if not entries:
+            return []
+
+        query_tokens = _tokenize_for_matching(prompt)
+        if not query_tokens:
+            return entries[: self.knowledge_limit]
+
+        scored: List[Tuple[float, Dict[str, Any]]] = []
+        for entry in entries:
+            # Match against body content + topic + key
+            match_text = f"{entry['key']} {entry.get('topic', '')} {entry['content']}"
+            entry_tokens = _tokenize_for_matching(match_text)
+            if not entry_tokens:
+                continue
+            overlap = len(query_tokens & entry_tokens) / len(query_tokens | entry_tokens)
+            if overlap >= 0.1:
+                scored.append((overlap, entry))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [entry for _, entry in scored[: self.knowledge_limit]]
+
+    def _format_cross_agent_knowledge(self, entries: List[Dict[str, Any]]) -> str:
+        """Format matched knowledge entries for prompt injection."""
+        if not entries:
+            return ""
+        lines: List[str] = []
+        for entry in entries:
+            title = entry.get("key", "unknown")
+            source = entry.get("source", "unknown")
+            topic = entry.get("topic", "")
+            content = entry.get("content", "")
+            header = f"## {title}"
+            meta = f"_Source: {source}"
+            if topic:
+                meta += f", Topic: {topic}"
+            meta += "_"
+            lines.append(f"{header}\n{meta}\n{content}")
+        return "\n\n".join(lines)
 
     def _recollection_layer(self) -> str:
         """Return recollection content from the association graph.
@@ -137,9 +201,8 @@ class ContextBuilder:
             user_memory = user_memory_text or "(empty)"
             global_procedures = self.global_memory_manager.procedures.list_procedures()
 
-        knowledge_entries: Dict[str, str] = {}
-        if self.global_memory_manager:
-            knowledge_entries = self.global_memory_manager.read_all_knowledge()
+        # Knowledge injection is now handled by the cross-agent knowledge layer
+        # which provides relevance-filtered results.
 
         matched = self.memory_manager.match_procedures(
             prompt,
@@ -170,6 +233,15 @@ class ContextBuilder:
         persona_content = ""
         if self.system_preamble:
             persona_content = "# Agent Persona\n" + self.system_preamble
+
+        # --- cross-agent knowledge (relevance-filtered) ---
+        matched_knowledge = self._match_knowledge(prompt)
+        cross_agent_knowledge_content = ""
+        if matched_knowledge:
+            cross_agent_knowledge_content = (
+                "# Cross-Agent Knowledge\n"
+                + self._format_cross_agent_knowledge(matched_knowledge)
+            )
 
         # --- recollection stub ---
         recollection_content = self._recollection_layer()
@@ -213,18 +285,6 @@ class ContextBuilder:
                 content="# User Preferences\n" + user_memory,
             ),
             ContextLayer(
-                name="knowledge",
-                priority=6,
-                content=(
-                    "# Global Knowledge\n"
-                    + (
-                        "\n".join(f"- **{k}**: {v}" for k, v in knowledge_entries.items())
-                        if knowledge_entries
-                        else "(none)"
-                    )
-                ),
-            ),
-            ContextLayer(
                 name="available_agents",
                 priority=7,
                 content=agents_content,
@@ -233,6 +293,11 @@ class ContextBuilder:
                 name="recollection",
                 priority=8,
                 content=recollection_content,
+            ),
+            ContextLayer(
+                name="cross_agent_knowledge",
+                priority=8,
+                content=cross_agent_knowledge_content,
             ),
             ContextLayer(
                 name="procedures",
