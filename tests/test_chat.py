@@ -161,6 +161,7 @@ async def test_chat_bridge_routes_to_named_agent_by_bot_user_id(tmp_path) -> Non
         space_id="spaces/test",
         service=service,
         spaces_config=str(tmp_path / "spaces.json"),
+        debounce_window_ms=0,
     )
 
     message = {
@@ -218,6 +219,7 @@ async def test_chat_bridge_session_key_is_space_and_user(tmp_path) -> None:
         space_id="spaces/test",
         service=service,
         spaces_config=str(tmp_path / "spaces.json"),
+        debounce_window_ms=0,
     )
 
     base_message = {
@@ -269,6 +271,7 @@ async def test_chat_bridge_ignores_unlinked_mentions(tmp_path) -> None:
         space_id="spaces/test",
         service=service,
         spaces_config=str(tmp_path / "spaces.json"),
+        debounce_window_ms=0,
     )
 
     message = {
@@ -314,6 +317,7 @@ async def test_debug_mode_shows_error_detail_in_chat(tmp_path) -> None:
         service=service,
         spaces_config=str(tmp_path / "spaces.json"),
         debug_mode=True,
+        debounce_window_ms=0,
     )
 
     message = {
@@ -363,6 +367,7 @@ async def test_debug_off_hides_error_code_block(tmp_path) -> None:
         service=service,
         spaces_config=str(tmp_path / "spaces.json"),
         debug_mode=False,
+        debounce_window_ms=0,
     )
 
     message = {
@@ -410,6 +415,7 @@ async def test_chat_bridge_updates_original_message_for_tool_use(tmp_path) -> No
         space_id="spaces/test",
         service=service,
         spaces_config=str(tmp_path / "spaces.json"),
+        debounce_window_ms=0,
     )
 
     message = {
@@ -479,6 +485,7 @@ async def test_chat_bridge_uses_task_error_when_stream_ends_silently(tmp_path) -
         space_id="spaces/test",
         service=service,
         spaces_config=str(tmp_path / "spaces.json"),
+        debounce_window_ms=0,
     )
 
     message = {
@@ -565,6 +572,7 @@ async def test_unmentioned_message_routes_to_concierge(tmp_path) -> None:
         service=service,
         spaces_config=str(tmp_path / "spaces.json"),
         concierge_agent_id="concierge",
+        debounce_window_ms=0,
     )
 
     message = {
@@ -618,6 +626,7 @@ async def test_unmentioned_message_dropped_when_concierge_disabled(tmp_path) -> 
         space_id="spaces/test",
         service=service,
         spaces_config=str(tmp_path / "spaces.json"),
+        debounce_window_ms=0,
         # concierge_agent_id not set (None by default)
     )
 
@@ -674,6 +683,7 @@ async def test_explicit_mention_still_routes_directly_with_concierge(tmp_path) -
         service=service,
         spaces_config=str(tmp_path / "spaces.json"),
         concierge_agent_id="concierge",
+        debounce_window_ms=0,
     )
 
     message = {

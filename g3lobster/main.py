@@ -218,6 +218,7 @@ def build_runtime(config: AppConfig):
             debug_mode=config.debug_mode,
             agent_filter=agent_filter,
             concierge_agent_id=concierge_id,
+            debounce_window_ms=config.chat.debounce_window_ms,
         )
 
     bridge_manager = BridgeManager(

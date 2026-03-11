@@ -14,7 +14,8 @@ if TYPE_CHECKING:
     from g3lobster.standup.orchestrator import StandupOrchestrator
 
 from g3lobster.chat.auth import get_authenticated_service
-from g3lobster.chat.commands import handle as handle_command
+from g3lobster.chat.commands import detect_command, handle as handle_command
+from g3lobster.chat.debounce import MessageDebouncer
 from g3lobster.cli.parser import get_content_id
 from g3lobster.cli.streaming import StreamEventType, accumulate_text
 from g3lobster.tasks.types import Task, TaskStatus
@@ -84,6 +85,7 @@ class ChatBridge:
         debug_mode: bool = False,
         agent_filter: Optional[Set[str]] = None,
         concierge_agent_id: Optional[str] = None,
+        debounce_window_ms: int = 2000,
     ):
         self.registry = registry
         self.poll_interval_s = poll_interval_s
@@ -102,6 +104,10 @@ class ChatBridge:
         self._last_message_time: Optional[str] = last_message_time
         self._seen_content: BoundedSet = BoundedSet(seen_content_max_size)
         self._agent_filter: Optional[Set[str]] = set(agent_filter) if agent_filter is not None else None
+        self._debouncer = MessageDebouncer(
+            window_s=debounce_window_ms / 1000.0,
+            flush_callback=self._dispatch_to_agent,
+        )
         if seen_content:
             for item in seen_content:
                 self._seen_content.add(item)
@@ -129,6 +135,7 @@ class ChatBridge:
         return bool(self._poll_task and not self._poll_task.done())
 
     async def stop(self) -> None:
+        self._debouncer.cancel_all()
         self._stop_event.set()
         if self._poll_task:
             self._poll_task.cancel()
@@ -302,8 +309,8 @@ class ChatBridge:
         thread_id_safe = (thread_id or "no-thread").replace("/", "_")
         session_id = f"{self.space_id}__{user_id}__{thread_id_safe}"
 
-        # Slash-command interception — handle locally without hitting the AI.
-        if self.cron_store is not None:
+        # Slash-command interception — bypass debounce and handle locally.
+        if detect_command(text) is not None and self.cron_store is not None:
             cmd_reply = await handle_command(text, target_id, self.cron_store, registry=self.registry)
             if cmd_reply is not None:
                 if isinstance(cmd_reply, dict):
@@ -325,8 +332,40 @@ class ChatBridge:
                     target_id, sender_name, sender_display, text,
                 )
 
+        # Route through debouncer — merges rapid-fire messages into one prompt.
+        space_key = self.space_id or ""
+        debounce_key = (space_key, user_id, thread_id or "no-thread")
+        await self._debouncer.add(
+            key=debounce_key,
+            message=message,
+            text=text,
+            persona=persona,
+            thread_id=thread_id,
+            target_id=target_id,
+            session_id=session_id,
+        )
+
+    async def _dispatch_to_agent(
+        self,
+        merged_text: str,
+        message: dict,
+        persona: object,
+        thread_id: Optional[str],
+        target_id: str,
+        session_id: str,
+    ) -> None:
+        """Send a (possibly merged) prompt to the target agent."""
+        runtime = self.registry.get_agent(target_id)
+        if not runtime:
+            started = await self.registry.start_agent(target_id)
+            if not started:
+                return
+            runtime = self.registry.get_agent(target_id)
+            if not runtime:
+                return
+
         task = Task(
-            prompt=text,
+            prompt=merged_text,
             session_id=session_id,
             timeout_s=_resolve_task_timeout_s(persona, self.registry),
         )

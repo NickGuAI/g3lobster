@@ -58,6 +58,7 @@ class ChatConfig:
     poll_interval_s: float = 2.0
     concierge_enabled: bool = False
     concierge_agent_id: str = "concierge"
+    debounce_window_ms: int = 2000
 
 
 @dataclass

@@ -256,6 +256,7 @@ async def test_chat_bridge_uses_persona_response_timeout(tmp_path: Path) -> None
         space_id="spaces/test",
         service=_FakeService(),
         spaces_config=str(tmp_path / "spaces.json"),
+        debounce_window_ms=0,
     )
 
     message = {
@@ -294,6 +295,7 @@ async def test_chat_bridge_falls_back_to_registry_timeout(tmp_path: Path) -> Non
         space_id="spaces/test",
         service=_FakeService(),
         spaces_config=str(tmp_path / "spaces.json"),
+        debounce_window_ms=0,
     )
 
     message = {
