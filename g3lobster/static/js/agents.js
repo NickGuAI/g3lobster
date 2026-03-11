@@ -726,6 +726,17 @@ export async function render(root, { onSetupChange }) {
       });
     }
 
+    for (const header of root.querySelectorAll(".collapsible-header")) {
+      header.addEventListener("click", () => {
+        const expanded = header.getAttribute("aria-expanded") === "true";
+        header.setAttribute("aria-expanded", String(!expanded));
+        const body = header.nextElementSibling;
+        if (body && body.classList.contains("collapsible-body")) {
+          body.classList.toggle("open", !expanded);
+        }
+      });
+    }
+
     for (const button of root.querySelectorAll("button[data-action]")) {
       button.addEventListener("click", async () => {
         const action = button.dataset.action;
