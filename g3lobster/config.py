@@ -296,6 +296,8 @@ def save_chat_config(chat: ChatConfig, config_path: str) -> None:
         "space_id": chat.space_id,
         "space_name": chat.space_name,
         "poll_interval_s": chat.poll_interval_s,
+        "concierge_enabled": chat.concierge_enabled,
+        "concierge_agent_id": chat.concierge_agent_id,
     }
 
     path.parent.mkdir(parents=True, exist_ok=True)
