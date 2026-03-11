@@ -3,6 +3,7 @@
   gap: 18px;
 }
 
+/* MD3 Stepper pattern */
 .stepper {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -10,54 +11,56 @@
 }
 
 .step-chip {
-  border-radius: 12px;
-  border: 1px solid var(--edge);
+  border-radius: var(--md-sys-shape-corner-medium, 12px);
+  border: 1px solid var(--md-sys-color-outline, #DADCE0);
   padding: 10px;
   font-size: 0.82rem;
-  background: rgba(255, 255, 255, 0.75);
-  color: var(--ink-soft);
+  font-weight: 500;
+  background: var(--md-sys-color-surface-container-low, #F8F9FA);
+  color: var(--md-sys-color-on-surface-variant, #5F6368);
 }
 
 .step-chip.active {
-  background: var(--accent-soft);
-  color: var(--ink);
-  border-color: rgba(15, 118, 110, 0.35);
+  background: var(--md-sys-color-primary-container, #D3E3FD);
+  color: var(--md-sys-color-on-primary-container, #041E49);
+  border-color: var(--md-sys-color-primary, #1A73E8);
 }
 
 .step-chip.done {
-  background: rgba(6, 118, 71, 0.12);
-  color: var(--ok);
-  border-color: rgba(6, 118, 71, 0.3);
+  background: rgba(0, 107, 90, 0.12);
+  color: var(--md-sys-color-tertiary, #006B5A);
+  border-color: rgba(0, 107, 90, 0.3);
 }
 
 .step-panel {
-  border: 1px solid var(--edge);
-  border-radius: 12px;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-medium, 12px);
   padding: 16px;
-  background: rgba(255, 255, 255, 0.75);
+  background: var(--md-sys-color-surface-container-low, #F8F9FA);
+  box-shadow: var(--md-sys-elevation-1, 0 1px 3px 1px rgba(0,0,0,0.15), 0 1px 2px rgba(0,0,0,0.3));
   display: grid;
   gap: 14px;
 }
 
 .notice {
-  border-radius: 10px;
+  border-radius: 8px;
   padding: 10px 12px;
   font-size: 0.9rem;
 }
 
 .notice.info {
-  background: rgba(15, 118, 110, 0.11);
-  color: #0e5d56;
+  background: rgba(26, 115, 232, 0.08);
+  color: var(--md-sys-color-primary, #1A73E8);
 }
 
 .notice.success {
-  background: rgba(6, 118, 71, 0.11);
-  color: var(--ok);
+  background: rgba(0, 107, 90, 0.1);
+  color: var(--md-sys-color-tertiary, #006B5A);
 }
 
 .notice.error {
-  background: rgba(180, 35, 24, 0.12);
-  color: var(--danger);
+  background: var(--md-sys-color-error-container, #F9DEDC);
+  color: var(--md-sys-color-error, #B3261E);
 }
 
 .step-nav {
@@ -72,10 +75,11 @@
 }
 
 .agent-card {
-  border: 1px solid var(--edge);
-  border-radius: 12px;
+  border: none;
+  border-radius: var(--md-sys-shape-corner-medium, 12px);
   padding: 14px;
-  background: rgba(255, 255, 255, 0.82);
+  background: var(--md-sys-color-surface-container-low, #F8F9FA);
+  box-shadow: var(--md-sys-elevation-1, 0 1px 3px 1px rgba(0,0,0,0.15), 0 1px 2px rgba(0,0,0,0.3));
 }
 
 .agent-head {
@@ -86,7 +90,7 @@
 }
 
 .agent-meta {
-  color: var(--ink-soft);
+  color: var(--md-sys-color-on-surface-variant, #5F6368);
   font-size: 0.86rem;
 }
 
@@ -101,7 +105,7 @@
   gap: 14px;
   flex-wrap: wrap;
   font-size: 0.88rem;
-  color: var(--ink-soft);
+  color: var(--md-sys-color-on-surface-variant, #5F6368);
 }
 
 .linkline {
@@ -110,19 +114,19 @@
 }
 
 .step-help {
-  background: rgba(15, 118, 110, 0.06);
-  border: 1px solid rgba(15, 118, 110, 0.18);
-  border-radius: 10px;
+  background: rgba(26, 115, 232, 0.06);
+  border: 1px solid rgba(26, 115, 232, 0.18);
+  border-radius: 8px;
   padding: 12px 14px;
   font-size: 0.84rem;
-  color: var(--ink-soft);
+  color: var(--md-sys-color-on-surface-variant, #5F6368);
   line-height: 1.55;
 }
 
 .step-help summary {
   cursor: pointer;
-  font-weight: 600;
-  color: var(--ink);
+  font-weight: 500;
+  color: var(--md-sys-color-on-surface, #1F1F1F);
   font-size: 0.86rem;
   user-select: none;
 }
@@ -145,7 +149,7 @@
 }
 
 .step-help a {
-  color: #0e7a6e;
+  color: var(--md-sys-color-primary, #1A73E8);
 }
 
 @media (max-width: 860px) {

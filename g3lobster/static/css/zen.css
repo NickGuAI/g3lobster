@@ -1,16 +1,43 @@
 :root {
-  --bg: #f1f0e8;
-  --ink: #182025;
-  --ink-soft: #5f6b74;
-  --accent: #0f766e;
-  --accent-soft: rgba(15, 118, 110, 0.16);
-  --danger: #b42318;
-  --warn: #b54708;
-  --ok: #067647;
-  --card: rgba(255, 255, 255, 0.92);
-  --edge: rgba(24, 32, 37, 0.11);
-  --radius: 14px;
-  --shadow: 0 14px 34px rgba(14, 33, 38, 0.09);
+  --md-sys-color-primary: #1A73E8;
+  --md-sys-color-on-primary: #FFFFFF;
+  --md-sys-color-primary-container: #D3E3FD;
+  --md-sys-color-on-primary-container: #041E49;
+  --md-sys-color-secondary: #5F6368;
+  --md-sys-color-on-secondary: #FFFFFF;
+  --md-sys-color-tertiary: #006B5A;
+  --md-sys-color-error: #B3261E;
+  --md-sys-color-on-error: #FFFFFF;
+  --md-sys-color-error-container: #F9DEDC;
+  --md-sys-color-surface: #FAFAFA;
+  --md-sys-color-on-surface: #1F1F1F;
+  --md-sys-color-on-surface-variant: #5F6368;
+  --md-sys-color-surface-container: #F1F3F4;
+  --md-sys-color-surface-container-low: #F8F9FA;
+  --md-sys-color-surface-container-high: #E8EAED;
+  --md-sys-color-outline: #DADCE0;
+  --md-sys-color-outline-variant: #C4C7C5;
+  --md-sys-color-warn: #E37400;
+  --md-sys-shape-corner-medium: 12px;
+  --md-sys-shape-corner-full: 20px;
+  --md-sys-elevation-1: 0 1px 3px 1px rgba(0,0,0,0.15), 0 1px 2px rgba(0,0,0,0.3);
+  --md-sys-elevation-2: 0 2px 6px 2px rgba(0,0,0,0.15), 0 1px 2px rgba(0,0,0,0.3);
+  --md-sys-elevation-3: 0 4px 8px 3px rgba(0,0,0,0.15), 0 1px 3px rgba(0,0,0,0.3);
+
+  /* Legacy aliases for components that reference old vars */
+  --bg: var(--md-sys-color-surface);
+  --ink: var(--md-sys-color-on-surface);
+  --ink-soft: var(--md-sys-color-on-surface-variant);
+  --accent: var(--md-sys-color-primary);
+  --accent-soft: var(--md-sys-color-primary-container);
+  --danger: var(--md-sys-color-error);
+  --warn: var(--md-sys-color-warn);
+  --ok: var(--md-sys-color-tertiary);
+  --card: var(--md-sys-color-surface-container-low);
+  --edge: var(--md-sys-color-outline);
+  --radius: var(--md-sys-shape-corner-medium);
+  --shadow: var(--md-sys-elevation-1);
+
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -29,9 +56,9 @@ html,
 body {
   margin: 0;
   min-height: 100%;
-  color: var(--ink);
-  background: var(--bg);
-  font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+  color: var(--md-sys-color-on-surface);
+  background: var(--md-sys-color-surface);
+  font-family: "Roboto", "Google Sans", "Segoe UI", sans-serif;
 }
 
 body {
@@ -49,7 +76,8 @@ p {
 h1,
 h2,
 h3 {
-  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  font-family: "Roboto", "Google Sans", sans-serif;
+  font-weight: 500;
 }
 
 .scene-bg {
@@ -57,9 +85,9 @@ h3 {
   inset: 0;
   z-index: -1;
   background:
-    radial-gradient(circle at 10% 5%, rgba(15, 118, 110, 0.15), transparent 42%),
-    radial-gradient(circle at 82% 18%, rgba(180, 71, 8, 0.11), transparent 45%),
-    linear-gradient(180deg, #f7f5ee 0%, #ece8dd 100%);
+    radial-gradient(circle at 10% 5%, rgba(26, 115, 232, 0.08), transparent 42%),
+    radial-gradient(circle at 82% 18%, rgba(227, 116, 0, 0.06), transparent 45%),
+    linear-gradient(180deg, #FAFAFA 0%, #F1F3F4 100%);
 }
 
 .shell {
@@ -70,65 +98,74 @@ h3 {
   gap: var(--space-5);
 }
 
+/* MD3 Top App Bar */
 .mast {
-  background: var(--card);
-  border: 1px solid var(--edge);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: var(--space-6);
+  background: var(--md-sys-color-surface);
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  padding: var(--space-4) var(--space-6);
+  min-height: 64px;
+  border-bottom: 1px solid var(--md-sys-color-outline);
 }
 
 .eyebrow {
   font-size: 0.78rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--accent);
-  font-weight: 700;
+  color: var(--md-sys-color-primary);
+  font-weight: 500;
 }
 
 .subtitle {
   margin-top: var(--space-2);
-  color: var(--ink-soft);
+  color: var(--md-sys-color-on-surface-variant);
 }
 
+/* MD3 Elevated Card */
 .card {
-  background: var(--card);
-  border: 1px solid var(--edge);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
+  background: var(--md-sys-color-surface-container-low);
+  border: none;
+  border-radius: var(--md-sys-shape-corner-medium);
+  box-shadow: var(--md-sys-elevation-1);
   padding: var(--space-6);
 }
 
 .empty {
-  color: var(--ink-soft);
+  color: var(--md-sys-color-on-surface-variant);
   font-style: italic;
 }
 
+/* MD3 Chip (filter/suggestion) pattern for status pills */
 .status-pill {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  border-radius: 999px;
-  padding: 3px 10px;
+  border-radius: 8px;
+  padding: 6px 12px;
   font-size: 0.78rem;
-  font-weight: 700;
+  font-weight: 500;
   letter-spacing: 0.02em;
   text-transform: uppercase;
+  border: 1px solid var(--md-sys-color-outline);
+  height: 32px;
 }
 
 .status-pill.idle,
 .status-pill.completed,
 .status-pill.ok {
-  background: rgba(6, 118, 71, 0.14);
-  color: var(--ok);
+  background: rgba(0, 107, 90, 0.12);
+  color: var(--md-sys-color-tertiary);
+  border-color: rgba(0, 107, 90, 0.3);
 }
 
 .status-pill.busy,
 .status-pill.running,
 .status-pill.warn,
 .status-pill.starting {
-  background: rgba(181, 71, 8, 0.14);
-  color: var(--warn);
+  background: rgba(227, 116, 0, 0.12);
+  color: var(--md-sys-color-warn);
+  border-color: rgba(227, 116, 0, 0.3);
 }
 
 .status-pill.stopped,
@@ -136,8 +173,9 @@ h3 {
 .status-pill.failed,
 .status-pill.canceled,
 .status-pill.error {
-  background: rgba(180, 35, 24, 0.14);
-  color: var(--danger);
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-error);
+  border-color: rgba(179, 38, 30, 0.3);
 }
 
 @keyframes breathe {
@@ -207,52 +245,72 @@ h3 {
   gap: var(--space-2);
 }
 
+/* MD3 Button base */
 .btn {
   border: 1px solid transparent;
-  border-radius: 11px;
-  padding: 9px 14px;
-  font: inherit;
+  border-radius: var(--md-sys-shape-corner-full);
+  padding: 10px 24px;
+  font-family: "Roboto", sans-serif;
+  font-size: 0.875rem;
+  font-weight: 500;
   cursor: pointer;
+  letter-spacing: 0.01em;
+  transition: box-shadow 0.2s, background 0.2s;
 }
 
 .btn:disabled {
-  opacity: 0.55;
+  opacity: 0.38;
   cursor: not-allowed;
 }
 
+/* MD3 Filled button */
 .btn-primary {
-  background: var(--accent);
-  color: #fff;
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
 }
 
+.btn-primary:hover:not(:disabled) {
+  box-shadow: var(--md-sys-elevation-1);
+}
+
+/* MD3 Outlined button */
 .btn-secondary {
-  background: #fff;
-  color: var(--ink);
-  border-color: var(--edge);
+  background: transparent;
+  color: var(--md-sys-color-primary);
+  border-color: var(--md-sys-color-outline);
 }
 
+.btn-secondary:hover:not(:disabled) {
+  background: rgba(26, 115, 232, 0.08);
+}
+
+/* MD3 Filled tonal button (error) */
 .btn-danger {
-  background: rgba(180, 35, 24, 0.12);
-  color: var(--danger);
-  border-color: rgba(180, 35, 24, 0.34);
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-error);
+  border-color: transparent;
+}
+
+.btn-danger:hover:not(:disabled) {
+  box-shadow: var(--md-sys-elevation-1);
 }
 
 label {
   font-size: 0.86rem;
-  font-weight: 600;
-  color: var(--ink-soft);
+  font-weight: 500;
+  color: var(--md-sys-color-on-surface-variant);
 }
 
 input,
 textarea,
 select {
   width: 100%;
-  border-radius: 10px;
-  border: 1px solid var(--edge);
+  border-radius: 4px;
+  border: 1px solid var(--md-sys-color-outline);
   padding: 10px 12px;
   font: inherit;
-  color: var(--ink);
-  background: rgba(255, 255, 255, 0.96);
+  color: var(--md-sys-color-on-surface);
+  background: var(--md-sys-color-surface);
 }
 
 textarea {
@@ -263,7 +321,7 @@ textarea {
 input:focus,
 textarea:focus,
 select:focus {
-  outline: 2px solid rgba(15, 118, 110, 0.24);
+  outline: 2px solid var(--md-sys-color-primary);
   outline-offset: 1px;
 }
 
@@ -280,21 +338,21 @@ select:focus {
 
 pre.transcript {
   margin: 0;
-  border: 1px solid var(--edge);
-  border-radius: 10px;
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: 8px;
   padding: var(--space-3);
-  background: rgba(14, 22, 27, 0.92);
-  color: #eaf1f3;
+  background: #1F1F1F;
+  color: #E8EAED;
   max-height: 280px;
   overflow: auto;
-  font: 0.82rem/1.4 "IBM Plex Mono", Menlo, Consolas, monospace;
+  font: 0.82rem/1.4 "Roboto Mono", Menlo, Consolas, monospace;
 }
 
 .step-panel {
-  background: var(--card);
-  border: 1px solid var(--edge);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
+  background: var(--md-sys-color-surface-container-low);
+  border: none;
+  border-radius: var(--md-sys-shape-corner-medium);
+  box-shadow: var(--md-sys-elevation-1);
   padding: var(--space-5);
   display: grid;
   gap: var(--space-3);
@@ -302,7 +360,7 @@ pre.transcript {
 
 .agent-meta {
   font-size: 0.85rem;
-  color: var(--ink-soft);
+  color: var(--md-sys-color-on-surface-variant);
 }
 
 .agent-selector {
@@ -313,35 +371,39 @@ pre.transcript {
 }
 
 .agent-chip {
-  border: 1px solid var(--edge);
-  background: #fff;
-  color: var(--ink);
-  border-radius: 999px;
+  border: 1px solid var(--md-sys-color-outline);
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  border-radius: 8px;
   padding: 8px 12px;
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
   cursor: pointer;
   flex-shrink: 0;
+  height: 32px;
+  font-size: 0.875rem;
+  transition: background 0.2s;
 }
 
 .agent-chip.active {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
-  background: rgba(15, 118, 110, 0.08);
+  border-color: var(--md-sys-color-primary);
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+  box-shadow: none;
 }
 
 .chip-name {
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .active-agent-hero {
   background:
-    linear-gradient(140deg, rgba(15, 118, 110, 0.15), rgba(255, 255, 255, 0.9)),
-    var(--card);
-  border: 1px solid rgba(15, 118, 110, 0.32);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
+    linear-gradient(140deg, rgba(26, 115, 232, 0.08), var(--md-sys-color-surface-container-low)),
+    var(--md-sys-color-surface-container-low);
+  border: none;
+  border-radius: var(--md-sys-shape-corner-medium);
+  box-shadow: var(--md-sys-elevation-2);
   padding: var(--space-6);
   display: grid;
   gap: var(--space-3);
@@ -358,19 +420,21 @@ pre.transcript {
 }
 
 .tab-btn {
-  border: 1px solid var(--edge);
-  border-radius: 999px;
-  padding: 8px 12px;
-  background: #fff;
-  color: var(--ink-soft);
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: var(--md-sys-shape-corner-full);
+  padding: 8px 16px;
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface-variant);
   font: inherit;
+  font-weight: 500;
   cursor: pointer;
+  transition: background 0.2s;
 }
 
 .tab-btn.active {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+  border-color: var(--md-sys-color-primary);
 }
 
 .tab-panel {
@@ -386,13 +450,13 @@ pre.transcript {
   max-height: 480px;
   overflow-y: auto;
   padding: var(--space-2);
-  border: 1px solid var(--edge);
-  border-radius: var(--radius);
-  background: #fafaf8;
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: var(--md-sys-shape-corner-medium);
+  background: var(--md-sys-color-surface-container-low);
 }
 
 .chat-transcript .empty {
-  color: var(--ink-soft);
+  color: var(--md-sys-color-on-surface-variant);
   font-style: italic;
   text-align: center;
   padding: var(--space-4);
@@ -423,39 +487,40 @@ pre.transcript {
 
 .msg-role {
   font-size: 0.72rem;
-  font-weight: 600;
+  font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--ink-soft);
+  color: var(--md-sys-color-on-surface-variant);
 }
 
 .msg-ts {
   font-size: 0.68rem;
-  color: var(--ink-soft);
+  color: var(--md-sys-color-on-surface-variant);
 }
 
 .msg-body {
   padding: var(--space-2) var(--space-3);
-  border-radius: 10px;
+  border-radius: var(--md-sys-shape-corner-medium);
   font-size: 0.88rem;
   line-height: 1.55;
 }
 
+/* MD3 Chat bubbles: user = primary-container, assistant = surface-container */
 .msg-user .msg-body {
-  background: var(--accent);
-  color: #fff;
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
 }
 
 .msg-assistant .msg-body {
-  background: var(--card);
-  border: 1px solid var(--edge);
-  color: var(--ink);
+  background: var(--md-sys-color-surface-container);
+  border: none;
+  color: var(--md-sys-color-on-surface);
 }
 
 .msg-body p { margin: 0 0 0.4em; }
 .msg-body p:last-child { margin: 0; }
 .msg-body code {
-  font-family: "Courier New", monospace;
+  font-family: "Roboto Mono", monospace;
   font-size: 0.84em;
   background: rgba(0,0,0,0.07);
   padding: 1px 4px;
@@ -489,20 +554,20 @@ pre.transcript {
 .bridge-table td {
   padding: var(--space-2) var(--space-3);
   text-align: left;
-  border-bottom: 1px solid var(--edge);
+  border-bottom: 1px solid var(--md-sys-color-outline);
   vertical-align: middle;
 }
 
 .bridge-table th {
-  font-weight: 600;
-  color: var(--ink-soft);
+  font-weight: 500;
+  color: var(--md-sys-color-on-surface-variant);
   font-size: 0.76rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
 .bridge-table code {
-  font-family: "IBM Plex Mono", Menlo, Consolas, monospace;
+  font-family: "Roboto Mono", Menlo, Consolas, monospace;
   font-size: 0.82em;
 }
 
@@ -516,12 +581,12 @@ pre.transcript {
 .cron-table td {
   padding: var(--space-2) var(--space-3);
   text-align: left;
-  border-bottom: 1px solid var(--edge);
+  border-bottom: 1px solid var(--md-sys-color-outline);
 }
 
 .cron-table th {
-  font-weight: 600;
-  color: var(--ink-soft);
+  font-weight: 500;
+  color: var(--md-sys-color-on-surface-variant);
   font-size: 0.78rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -535,7 +600,7 @@ pre.transcript {
 .cron-add-form {
   margin-top: var(--space-4);
   padding-top: var(--space-4);
-  border-top: 1px solid var(--edge);
+  border-top: 1px solid var(--md-sys-color-outline);
 }
 
 @media (max-width: 860px) {
