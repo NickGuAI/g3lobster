@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from g3lobster.standup.orchestrator import StandupOrchestrator
     from g3lobster.incident.store import IncidentStore
 
-from g3lobster.chat.auth import get_authenticated_service
+from g3lobster.chat.auth import get_authenticated_service, get_authorized_session
 from g3lobster.chat.commands import detect_command, handle as handle_command
 from g3lobster.chat.debounce import DebounceKey, MessageDebouncer
 from g3lobster.chat.formatter import format_for_google_chat
@@ -118,6 +118,7 @@ class ChatBridge:
         self.message_buffer = message_buffer
 
         self.space_id = space_id
+        self._http_session = None  # requests-based session for polling
         self._poll_task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
         self._last_message_time: Optional[str] = last_message_time
@@ -140,6 +141,8 @@ class ChatBridge:
     async def start(self) -> None:
         if self.service is None:
             self.service = await asyncio.to_thread(get_authenticated_service, self.auth_data_dir)
+        if self._http_session is None:
+            self._http_session = await asyncio.to_thread(get_authorized_session, self.auth_data_dir)
         if not self.space_id:
             self.space_id = await self._ensure_space()
 
@@ -198,13 +201,15 @@ class ChatBridge:
             await asyncio.sleep(self.poll_interval_s)
 
     async def _poll_once(self) -> None:
-        response = await asyncio.to_thread(
-            self.service.spaces()
-            .messages()
-            .list(parent=self.space_id, pageSize=20, orderBy="createTime desc")
-            .execute
+        url = f"https://chat.googleapis.com/v1/{self.space_id}/messages"
+        resp = await asyncio.to_thread(
+            self._http_session.get,
+            url,
+            params={"pageSize": "20", "orderBy": "createTime desc"},
+            timeout=30,
         )
-        messages = response.get("messages", [])
+        resp.raise_for_status()
+        messages = resp.json().get("messages", [])
 
         if self._last_message_time is None:
             self._last_message_time = messages[0].get("createTime") if messages else ""

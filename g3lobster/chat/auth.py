@@ -170,6 +170,18 @@ def get_authenticated_service(data_dir: Optional[str] = None):
     return build("chat", "v1", credentials=creds, cache_discovery=False)
 
 
+def get_authorized_session(data_dir: Optional[str] = None):
+    """Return a requests-based AuthorizedSession for direct Google API calls.
+
+    Preferred over httplib2 for long-lived polling loops because requests
+    handles stale SSL connections (record-layer failures) gracefully.
+    """
+    from google.auth.transport.requests import AuthorizedSession
+
+    creds = _load_saved_credentials(data_dir=data_dir)
+    return AuthorizedSession(creds)
+
+
 def get_calendar_service(data_dir: Optional[str] = None):
     """Authenticate and return a Google Calendar API service client."""
     from googleapiclient.discovery import build
