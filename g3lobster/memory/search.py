@@ -9,7 +9,9 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Set
 
 
-SUPPORTED_MEMORY_TYPES = {"memory", "procedures", "daily", "session", "knowledge"}
+from g3lobster.memory.journal import JournalEntry, SalienceLevel
+
+SUPPORTED_MEMORY_TYPES = {"memory", "procedures", "daily", "session", "knowledge", "journal"}
 
 
 @dataclass
@@ -20,6 +22,7 @@ class MemorySearchHit:
     snippet: str
     line_number: int
     timestamp: Optional[str] = None
+    salience_weight: float = 1.0
 
     def as_dict(self) -> dict:
         return {
@@ -98,13 +101,14 @@ class MemorySearchEngine:
 
     @staticmethod
     def _sort_key(hit: MemorySearchHit) -> float:
-        if not hit.timestamp:
-            return 0.0
-        text = hit.timestamp.replace("Z", "+00:00")
-        try:
-            return datetime.fromisoformat(text).timestamp()
-        except ValueError:
-            return 0.0
+        base = 0.0
+        if hit.timestamp:
+            text = hit.timestamp.replace("Z", "+00:00")
+            try:
+                base = datetime.fromisoformat(text).timestamp()
+            except ValueError:
+                pass
+        return base * hit.salience_weight
 
     def _search_text_file(
         self,
@@ -204,6 +208,60 @@ class MemorySearchEngine:
                 )
         return hits
 
+    def _search_journal_files(
+        self,
+        *,
+        daily_dir: Path,
+        agent_id: str,
+        query: str,
+        query_terms: Sequence[str],
+        start: Optional[date],
+        end: Optional[date],
+    ) -> List[MemorySearchHit]:
+        """Search JSONL journal files with per-entry salience weighting."""
+        hits: List[MemorySearchHit] = []
+        for path in sorted(daily_dir.glob("*.jsonl")):
+            file_date = self._parse_date(path.stem)
+            if not self._date_in_range(file_date, start, end):
+                continue
+
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except UnicodeDecodeError:
+                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+
+            for line_number, raw in enumerate(lines, start=1):
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+
+                content = str(data.get("content", ""))
+                tags_str = " ".join(data.get("tags") or [])
+                searchable = f"{content} {tags_str}"
+
+                if not self._matches(searchable, query, query_terms):
+                    continue
+
+                salience = SalienceLevel.from_value(data.get("salience"))
+                timestamp = data.get("timestamp")
+
+                hits.append(
+                    MemorySearchHit(
+                        agent_id=agent_id,
+                        memory_type="journal",
+                        source=self._relative_source(path),
+                        snippet=content[:300],
+                        line_number=line_number,
+                        timestamp=timestamp if isinstance(timestamp, str) else None,
+                        salience_weight=salience.weight,
+                    )
+                )
+        return hits
+
     def search(
         self,
         query: str,
@@ -282,6 +340,18 @@ class MemorySearchEngine:
                             file_date=file_date,
                         )
                     )
+
+            if ("journal" in selected_types or "daily" in selected_types) and daily_dir.exists():
+                hits.extend(
+                    self._search_journal_files(
+                        daily_dir=daily_dir,
+                        agent_id=agent_id,
+                        query=normalized_query,
+                        query_terms=query_terms,
+                        start=start,
+                        end=end,
+                    )
+                )
 
             if "session" in selected_types:
                 hits.extend(

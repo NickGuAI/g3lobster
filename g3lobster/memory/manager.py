@@ -9,6 +9,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from g3lobster.memory.compactor import CompactionEngine
+from g3lobster.memory.journal import (
+    AssociationGraph,
+    JournalEntry,
+    JournalStore,
+    SalienceLevel,
+)
 from g3lobster.memory.procedures import (
     CandidateStore,
     Procedure,
@@ -67,6 +73,9 @@ class MemoryManager:
             min_frequency=self.procedure_min_frequency,
         )
         self.candidate_store = CandidateStore(str(self.candidates_file))
+        self.journal_store = JournalStore(str(self.daily_dir))
+        self.association_graph = AssociationGraph(str(self.memory_dir))
+
         self.compactor = CompactionEngine(
             session_store=self.sessions,
             procedure_store=self.procedure_store,
@@ -212,6 +221,35 @@ class MemoryManager:
         with path.open("a", encoding="utf-8") as handle:
             handle.write(text.strip() + "\n")
 
+    def append_journal_entry(self, entry: JournalEntry, day: Optional[date] = None) -> JournalEntry:
+        """Write a structured journal entry and also append to the .md daily note."""
+        saved = self.journal_store.append(entry, day=day)
+        # Backward-compatible: also write a human-readable line to the .md file.
+        md_line = f"[{entry.salience}] {entry.content[:200]}"
+        if entry.tags:
+            md_line += f" (tags: {', '.join(entry.tags)})"
+        self.append_daily_note(md_line, day=day)
+        # Auto-link via shared tags.
+        self.association_graph.add_edges_from_entry(entry, self.journal_store)
+        return saved
+
+    def query_journal(
+        self,
+        *,
+        salience_min: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        limit: int = 50,
+    ) -> List[JournalEntry]:
+        return self.journal_store.query(
+            salience_min=salience_min,
+            tags=tags,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+        )
+
     def append_message(
         self,
         session_id: str,
@@ -270,6 +308,20 @@ class MemoryManager:
             or cls._IMPORTANT_PATTERN.search(text)
         )
 
+    _CHITCHAT_PATTERN = re.compile(
+        r"(?:^|\s)(?:hello|hi|hey|thanks|thank you|ok|okay|sure|got it|sounds good|bye|goodbye)\s*[\.\!\?]?\s*$",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _classify_salience(cls, role: str, content: str) -> SalienceLevel:
+        """Classify a compacted message by salience level."""
+        if role == "user" and cls._is_user_preference(content):
+            return SalienceLevel.HIGH
+        if cls._CHITCHAT_PATTERN.search(content):
+            return SalienceLevel.LOW
+        return SalienceLevel.NORMAL
+
     def _maybe_compact(self, session_id: str, message_count: Optional[int] = None) -> bool:
         def _flush_compacted_messages(messages: List[Dict[str, object]]) -> None:
             highlights: List[str] = []
@@ -281,6 +333,16 @@ class MemoryManager:
                 content = str(message.get("content", "")).strip()
                 if not role or not content:
                     continue
+
+                salience = self._classify_salience(role, content)
+                journal_entry = JournalEntry(
+                    content=f"{role}: {content[:200]}",
+                    salience=salience.value,
+                    tags=["compaction"],
+                    source_session=session_id,
+                )
+                self.journal_store.append(journal_entry)
+
                 if role == "user" and self._is_user_preference(content):
                     highlights.append(f"- user preference: {content[:180]}")
                 elif len(highlights) < 6:

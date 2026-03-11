@@ -20,8 +20,10 @@ data/
     │   ├── MEMORY.md                 # Agent short-term memory
     │   ├── PROCEDURES.md             # Agent-specific permanent procedures
     │   ├── CANDIDATES.json           # Candidate procedures (learning)
+    │   ├── associations.jsonl            # Association graph edges
     │   └── daily/
-    │       └── YYYY-MM-DD.md         # Long-term daily notes
+    │       ├── YYYY-MM-DD.md         # Long-term daily notes
+    │       └── YYYY-MM-DD.jsonl      # Structured journal entries
     └── sessions/
         └── {session_id}.jsonl        # Append-only session transcripts
 ```
@@ -103,7 +105,38 @@ Steps:
 
 **Key classes:** `Procedure`, `ProcedureStore`, `CandidateStore` in `memory/procedures.py`
 
-### 4. GlobalMemoryManager — Cross-Agent Memory
+### 4. Journal System — Salience-Classified Entries
+
+The journal layer adds structured, salience-classified entries on top of the existing daily notes. Each entry has metadata (salience, tags, session origin) and participates in an association graph.
+
+**Salience levels** (search ranking multipliers):
+
+| Level | Weight | Description |
+|-------|--------|-------------|
+| critical | 5× | Must-not-forget facts |
+| high | 3× | User preferences, important decisions |
+| normal | 1× | Standard observations |
+| low | 0.5× | Chitchat, acknowledgments |
+| noise | 0.1× | Effectively hidden from search |
+
+**Storage:** JSONL files at `daily/YYYY-MM-DD.jsonl` alongside the existing `.md` files. Each line is a JSON object:
+
+```json
+{"id": "uuid", "timestamp": "ISO-8601", "content": "...", "salience": "normal", "tags": ["compaction"], "source_session": "abc", "associations": []}
+```
+
+**Association graph:** Stored in `.memory/associations.jsonl` with edges `{source_id, target_id, relation_type, weight}`. Auto-linked when entries share tags. Supports BFS traversal up to configurable depth.
+
+**Backward compatibility:** `append_journal_entry()` also writes a human-readable line to the `.md` daily note. Existing `.md` files continue to work — they are treated as `normal`-salience unlinked entries by the search engine.
+
+**API endpoints:**
+- `GET /agents/{id}/journal` — Query with salience/date/tag filters
+- `POST /agents/{id}/journal` — Create a manual entry
+- `GET /agents/{id}/journal/{entry_id}/associations` — Graph traversal
+
+**Key classes:** `SalienceLevel`, `JournalEntry`, `JournalStore`, `AssociationGraph` in `memory/journal.py`
+
+### 5. GlobalMemoryManager — Cross-Agent Memory
 
 Manages shared state under `data/.memory/`:
 
@@ -118,7 +151,7 @@ User IDs are sanitized (`re.sub(r"[^a-zA-Z0-9_.-]", "_", user_id)`) to prevent p
 
 **Key class:** `GlobalMemoryManager` in `memory/global_memory.py`
 
-### 5. ContextBuilder — Prompt Assembly
+### 6. ContextBuilder — Prompt Assembly
 
 When an agent receives a task, `ContextBuilder.build()` assembles the full prompt from all memory layers:
 
@@ -152,6 +185,8 @@ agents:
   procedure_min_frequency: 3   # Min observations before extraction
   memory_max_sections: 50      # Max ## sections in MEMORY.md
   context_messages: 12         # Recent messages in prompt context
+  journal_salience_default: normal  # Default salience for new entries
+  journal_association_decay_days: 90  # Days before old associations fade
 ```
 
 Environment overrides: `G3LOBSTER_AGENTS_COMPACT_THRESHOLD=60`, etc.
