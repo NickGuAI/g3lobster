@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from g3lobster.memory.context import ContextBuilder
+from g3lobster.memory.context import ContextBuilder, ContextLayer, _estimate_tokens
 from g3lobster.memory.manager import MemoryManager
 
 
@@ -46,3 +46,88 @@ def test_tagged_memory_append_and_read(tmp_path) -> None:
 
     ops_entries = memory.get_memories_by_tag("ops")
     assert ops_entries == ["Pager rotation starts Monday."]
+
+
+def test_context_builder_drops_low_priority_layers(tmp_path) -> None:
+    """With a tiny budget, required layers survive but droppable layers are dropped."""
+    memory = MemoryManager(data_dir=str(tmp_path / "data"), compact_threshold=40)
+    memory.write_memory("A" * 400)  # ~100 tokens
+
+    builder = ContextBuilder(
+        memory_manager=memory,
+        message_limit=4,
+        system_preamble="You are a test agent.",
+        token_budget=200,  # very tight budget
+        debug=True,
+    )
+    prompt = builder.build("sess-1", "hello")
+
+    # Required layers (preamble, persona, prompt) must survive
+    assert "# G3Lobster Agent Environment" in prompt
+    assert "# Agent Persona" in prompt
+    assert "hello" in prompt
+
+    # Some droppable layers should have been dropped
+    info = builder.last_build_info
+    assert info is not None
+    assert len(info.dropped) > 0
+    dropped_names = {d["name"] for d in info.dropped}
+    # The lowest priority layers (compaction=9, procedures=8) should be first to drop
+    assert "compaction" in dropped_names or "procedures" in dropped_names
+
+
+def test_context_builder_debug_info(tmp_path) -> None:
+    """Debug mode populates last_build_info with layer details."""
+    memory = MemoryManager(data_dir=str(tmp_path / "data"), compact_threshold=40)
+
+    builder = ContextBuilder(
+        memory_manager=memory,
+        message_limit=4,
+        debug=True,
+    )
+    builder.build("sess-1", "test prompt")
+
+    info = builder.last_build_info
+    assert info is not None
+    assert info.budget == 1_000_000
+    assert info.total_tokens > 0
+    included_names = {entry["name"] for entry in info.included}
+    assert "preamble" in included_names
+    assert "prompt" in included_names
+    for entry in info.included:
+        assert "tokens" in entry
+        assert "priority" in entry
+
+
+def test_context_builder_default_budget_includes_all(tmp_path) -> None:
+    """Default budget (1M tokens) should include all layers — backward compat."""
+    memory = MemoryManager(data_dir=str(tmp_path / "data"), compact_threshold=40)
+    memory.write_memory("Some memory content here.")
+
+    builder = ContextBuilder(
+        memory_manager=memory,
+        message_limit=4,
+        system_preamble="Be helpful.",
+        debug=True,
+    )
+    prompt = builder.build("sess-1", "what's up?")
+
+    info = builder.last_build_info
+    assert info is not None
+    assert len(info.dropped) == 0
+
+    # All sections present
+    assert "# Agent Persona" in prompt
+    assert "# Agent Memory" in prompt
+    assert "# User Preferences" in prompt
+    assert "# Known Procedures" in prompt
+    assert "# Compaction Summary" in prompt
+    assert "# Recent Conversation" in prompt
+    assert "# New User Prompt" in prompt
+
+
+def test_context_layer_token_estimation() -> None:
+    """ContextLayer.tokens uses len//4 estimation."""
+    layer = ContextLayer(name="test", priority=0, content="A" * 100)
+    assert layer.tokens == 25
+    assert _estimate_tokens("B" * 200) == 50
