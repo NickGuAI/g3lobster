@@ -47,6 +47,36 @@ def build_memory_inspector_card(
     ]
 
 
+def build_forget_button(item_type: str, item_id: str) -> Dict[str, Any]:
+    """Build a Cards v2 button widget for the "Forget" action.
+
+    Returns a ``buttonList`` widget with an onClick action carrying
+    ``item_type`` and ``item_id`` as action parameters.  If the Chat app
+    does not support ``CARD_CLICKED`` callbacks (e.g. polling-based bridge),
+    the button label doubles as a fallback hint showing the ``/forget``
+    command the user can type manually.
+    """
+    command_hint = f"/forget {item_type} {item_id}"
+    return {
+        "buttonList": {
+            "buttons": [
+                {
+                    "text": "Forget",
+                    "onClick": {
+                        "action": {
+                            "function": "forget_memory_item",
+                            "parameters": [
+                                {"key": "item_type", "value": item_type},
+                                {"key": "item_id", "value": str(item_id)},
+                            ],
+                        }
+                    },
+                }
+            ]
+        }
+    }
+
+
 def _build_stats_section(stats: Dict[str, Any]) -> Dict[str, Any]:
     """Build the agent stats summary section."""
     sessions_total = stats.get("sessions_total", 0)
@@ -109,6 +139,7 @@ def _build_preferences_section(preferences: List[str]) -> Dict[str, Any]:
             }
         }
         widgets.append(widget)
+        widgets.append(build_forget_button("preference", str(i)))
 
     return {
         "header": f"User Preferences ({len(preferences)})",
@@ -142,6 +173,7 @@ def _build_procedures_section(procedures: List[Dict[str, Any]]) -> Dict[str, Any
             }
         }
         widgets.append(widget)
+        widgets.append(build_forget_button("procedure", title))
 
     return {
         "header": f"Learned Procedures ({len(procedures)})",

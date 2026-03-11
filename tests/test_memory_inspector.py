@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from g3lobster.chat.cards import build_memory_inspector_card
+from g3lobster.chat.cards import build_forget_button, build_memory_inspector_card
 from g3lobster.chat.memory_inspector import (
     MEMORY_QUERY_PATTERNS,
     build_memory_card,
@@ -121,6 +121,17 @@ class TestBuildMemoryInspectorCard:
         # Procedures section should show "no procedures" message
         procs_section = sections[2]
         assert "No procedures" in procs_section["widgets"][0]["decoratedText"]["text"]
+
+    def test_forget_button_structure(self) -> None:
+        button = build_forget_button("preference", "0")
+        assert "buttonList" in button
+        buttons = button["buttonList"]["buttons"]
+        assert len(buttons) == 1
+        assert buttons[0]["text"] == "Forget"
+        params = buttons[0]["onClick"]["action"]["parameters"]
+        param_dict = {p["key"]: p["value"] for p in params}
+        assert param_dict["item_type"] == "preference"
+        assert param_dict["item_id"] == "0"
 
     def test_preferences_truncation(self) -> None:
         long_pref = "x" * 300
