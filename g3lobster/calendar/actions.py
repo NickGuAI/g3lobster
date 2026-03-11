@@ -1,5 +1,4 @@
-"""Calendar write actions — reschedule and create events."""
-
+"""Calendar write actions: reschedule and create events."""
 from __future__ import annotations
 
 import logging
@@ -16,19 +15,20 @@ def reschedule_event(
     new_start: datetime,
     new_end: datetime,
 ) -> Dict:
-    """Move an existing calendar event to a new time.
+    """Reschedule an event by updating its start and end times.
 
-    Returns the updated event resource dict from the API.
+    Thin wrapper around events().patch() to preserve other event fields.
     """
-    event = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
-    event["start"] = {"dateTime": new_start.isoformat()}
-    event["end"] = {"dateTime": new_end.isoformat()}
-    updated = service.events().update(
+    body = {
+        "start": {"dateTime": new_start.isoformat()},
+        "end": {"dateTime": new_end.isoformat()},
+    }
+    updated = service.events().patch(
         calendarId=calendar_id,
         eventId=event_id,
-        body=event,
+        body=body,
     ).execute()
-    logger.info("Rescheduled event %s to %s - %s", event_id, new_start, new_end)
+    logger.info("Rescheduled event %s to %s", event_id, new_start.isoformat())
     return updated
 
 
@@ -36,24 +36,28 @@ def create_event(
     service,
     calendar_id: str,
     summary: str,
-    start: datetime,
-    end: datetime,
     attendees: Optional[List[str]] = None,
-    description: str = "",
+    start: datetime = None,
+    end: datetime = None,
+    description: Optional[str] = None,
 ) -> Dict:
     """Create a new calendar event with optional attendees.
 
-    Returns the created event resource dict from the API.
+    Thin wrapper around events().insert().
     """
     body: Dict = {
         "summary": summary,
         "start": {"dateTime": start.isoformat()},
         "end": {"dateTime": end.isoformat()},
     }
-    if description:
-        body["description"] = description
     if attendees:
         body["attendees"] = [{"email": email} for email in attendees]
-    created = service.events().insert(calendarId=calendar_id, body=body).execute()
-    logger.info("Created event '%s' with id %s", summary, created.get("id"))
+    if description:
+        body["description"] = description
+    created = service.events().insert(
+        calendarId=calendar_id,
+        body=body,
+        sendUpdates="all",
+    ).execute()
+    logger.info("Created event %s: %s", created.get("id"), summary)
     return created

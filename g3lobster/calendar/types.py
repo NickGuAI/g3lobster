@@ -1,5 +1,4 @@
-"""Pydantic models for calendar data."""
-
+"""Pydantic models for calendar operations."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -20,27 +19,28 @@ class CalendarEvent(BaseModel):
 
 
 class ConflictPair(BaseModel):
-    """Two overlapping calendar events."""
+    """A pair of overlapping events."""
     event_a: CalendarEvent
     event_b: CalendarEvent
     overlap_minutes: float = 0.0
 
 
 class FreeBusySlot(BaseModel):
-    """A busy time range from freebusy query."""
+    """A busy time slot from the FreeBusy API."""
     start: datetime
     end: datetime
 
 
 class TimeSlot(BaseModel):
-    """A proposed available time slot."""
+    """An available time slot for scheduling."""
     start: datetime
     end: datetime
     duration_minutes: float
 
 
 class SchedulingProposal(BaseModel):
-    """A proposed meeting time with attendees."""
+    """A proposed meeting time with availability info."""
     slot: TimeSlot
-    attendees: List[str]
+    attendees: List[str] = []
     summary: str = ""
+    conflicts: int = 0
