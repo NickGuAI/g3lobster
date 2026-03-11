@@ -12,6 +12,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/chat.memberships.readonly",
     "https://www.googleapis.com/auth/chat.users.spacesettings",
     "https://www.googleapis.com/auth/calendar.events.readonly",
+    "https://www.googleapis.com/auth/calendar.readonly",
 ]
 
 WORKSPACE_SCOPES = [
@@ -157,3 +158,11 @@ def get_authenticated_service(data_dir: Optional[str] = None):
 
     creds = _load_saved_credentials(data_dir=data_dir)
     return build("chat", "v1", credentials=creds, cache_discovery=False)
+
+
+def get_calendar_service(data_dir: Optional[str] = None):
+    """Authenticate and return a Google Calendar API service client."""
+    from googleapiclient.discovery import build
+
+    creds = _load_saved_credentials(data_dir=data_dir)
+    return build("calendar", "v3", credentials=creds, cache_discovery=False)

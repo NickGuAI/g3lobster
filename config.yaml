@@ -27,6 +27,9 @@ chat:
   concierge_enabled: true
   concierge_agent_id: concierge
   debounce_window_ms: 2000
+calendar:
+  enabled: false
+  check_interval_cron: "*/5 * * * *"
 server:
   host: 0.0.0.0
   port: 40000

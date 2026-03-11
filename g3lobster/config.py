@@ -79,6 +79,8 @@ class CalendarConfig:
     lookahead_minutes: int = 15
     max_attendees: int = 15
     auth_data_dir: str = ""  # defaults to chat auth dir when empty
+    check_interval_cron: str = "*/5 * * * *"
+    auto_respond_template: str = "{emoji} {name} is in {event_type} until {end_time}. Message saved — I'll deliver a summary when they're back."
 
 
 @dataclass
