@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Dict, Optional, Set
 
 if TYPE_CHECKING:
     from g3lobster.cron.store import CronStore
+    from g3lobster.incident.store import IncidentStore
 
 from g3lobster.chat.auth import get_authenticated_service
 from g3lobster.chat.commands import handle as handle_command
@@ -78,6 +79,7 @@ class ChatBridge:
         seen_content: Optional[Set[str]] = None,
         auth_data_dir: Optional[str] = None,
         cron_store: Optional["CronStore"] = None,
+        incident_store: Optional["IncidentStore"] = None,
         seen_content_max_size: int = 10_000,
         debug_mode: bool = False,
         agent_filter: Optional[Set[str]] = None,
@@ -89,6 +91,7 @@ class ChatBridge:
         self.spaces_config = Path(spaces_config or (Path.home() / ".gemini" / "chat_bridge_spaces.json"))
         self.auth_data_dir = auth_data_dir
         self.cron_store = cron_store
+        self.incident_store = incident_store
         self.debug_mode = debug_mode
 
         self.space_id = space_id
@@ -274,7 +277,7 @@ class ChatBridge:
 
         # Slash-command interception — handle locally without hitting the AI.
         if self.cron_store is not None:
-            cmd_reply = handle_command(text, target_id, self.cron_store)
+            cmd_reply = handle_command(text, target_id, self.cron_store, self.incident_store)
             if cmd_reply is not None:
                 await self.send_message(
                     f"{persona.emoji} {persona.name}: {cmd_reply}",
