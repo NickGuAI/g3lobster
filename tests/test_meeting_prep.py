@@ -1,8 +1,8 @@
 """Tests for the meeting prep orchestrator."""
 
 import asyncio
-from datetime import datetime, timezone
-from unittest.mock import MagicMock
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -129,3 +129,84 @@ async def test_prepare_empty_meeting():
     result = await orchestrator.prepare(meeting)
 
     assert "## Meeting Briefing: Quick chat" in result
+
+
+# --- Integration test: calendar polling -> orchestrator -> DM delivery ---
+
+
+@pytest.mark.asyncio
+async def test_integration_calendar_poll_to_briefing_delivery(tmp_path):
+    """End-to-end: CalendarBridge detects meeting -> orchestrator prepares briefing -> ChatBridge delivers DM."""
+    from g3lobster.chat.calendar_bridge import CalendarBridge
+
+    now = datetime.now(tz=timezone.utc)
+    start = now + timedelta(minutes=10)
+
+    # Mock Calendar API service
+    mock_cal_service = MagicMock()
+    mock_cal_service.events.return_value.list.return_value.execute.return_value = {
+        "items": [
+            {
+                "id": "integration-evt-1",
+                "summary": "Sprint Review",
+                "description": "Review sprint deliverables",
+                "start": {"dateTime": start.isoformat()},
+                "end": {"dateTime": (start + timedelta(hours=1)).isoformat()},
+                "attendees": [
+                    {"email": "alice@example.com"},
+                    {"email": "bob@example.com"},
+                ],
+            }
+        ]
+    }
+
+    # Mock memory search
+    mock_search = MagicMock()
+    mock_hit = MagicMock()
+    mock_hit.memory_type = "memory"
+    mock_hit.snippet = "Sprint 23 velocity was 42 points"
+    mock_search.search.return_value = [mock_hit]
+
+    # Set up orchestrator
+    orchestrator = MeetingPrepOrchestrator(memory_search=mock_search)
+
+    # Track delivered messages
+    delivered_messages = []
+
+    async def mock_send_dm(text, dm_space_id=None):
+        delivered_messages.append(text)
+        return {"name": "spaces/test/messages/1"}
+
+    # Set up CalendarBridge with callback that uses orchestrator + mock DM delivery
+    bridge = CalendarBridge(
+        service=mock_cal_service,
+        lookahead_minutes=15,
+        dedup_path=tmp_path / "briefed.json",
+    )
+
+    async def on_meeting(meeting):
+        briefing = await orchestrator.prepare(meeting)
+        await mock_send_dm(briefing)
+
+    bridge.set_on_meeting(on_meeting)
+
+    # Execute: poll should detect the meeting and trigger the full pipeline
+    meetings = await bridge._poll_once()
+
+    # Verify the full pipeline executed
+    assert len(meetings) == 1
+    assert meetings[0].title == "Sprint Review"
+
+    # Verify briefing was delivered
+    assert len(delivered_messages) == 1
+    briefing = delivered_messages[0]
+    assert "## Meeting Briefing: Sprint Review" in briefing
+    assert "alice@example.com" in briefing
+    assert "bob@example.com" in briefing
+    assert "Sprint 23 velocity was 42 points" in briefing
+
+    # Verify dedup prevents re-delivery
+    delivered_messages.clear()
+    meetings2 = await bridge._poll_once()
+    assert len(meetings2) == 0
+    assert len(delivered_messages) == 0

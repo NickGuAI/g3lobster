@@ -18,6 +18,7 @@ from g3lobster.chat.bridge import ChatBridge
 from g3lobster.chat.bridge_manager import BridgeManager
 from g3lobster.chat.calendar_bridge import CalendarBridge
 from g3lobster.chat.email_bridge import EmailBridge
+from g3lobster.meeting_prep.orchestrator import MeetingPrepOrchestrator
 from g3lobster.cli.process import GeminiProcess
 from g3lobster.config import AppConfig, load_config
 from g3lobster.control_plane import ControlPlane, Dispatcher, Orchestrator, TaskRegistry
@@ -218,6 +219,34 @@ def build_runtime(config: AppConfig):
             max_attendees=config.calendar.max_attendees,
             auth_data_dir=config.calendar.auth_data_dir,
         )
+
+        # Wire calendar -> orchestrator -> Chat DM delivery.
+        from g3lobster.memory.search import MemorySearchEngine
+
+        memory_search = MemorySearchEngine(data_dir=config.agents.data_dir)
+        # Reuse the Gmail service from the email bridge if available.
+        gmail_service = None  # set below after email_bridge is checked
+
+        meeting_prep = MeetingPrepOrchestrator(
+            memory_search=memory_search,
+        )
+
+        async def _on_meeting(meeting) -> None:
+            """Prepare a briefing and deliver it via Chat DM."""
+            # Lazily attach Gmail service from email bridge if available.
+            if email_bridge and email_bridge.service and not meeting_prep.email_service:
+                meeting_prep.email_service = email_bridge.service
+
+            briefing = await meeting_prep.prepare(meeting)
+            # Deliver via the first running chat bridge.
+            for bridge_obj in bridge_manager._bridges_by_space.values():
+                if getattr(bridge_obj, "is_running", False):
+                    await bridge_obj.send_dm(briefing)
+                    break
+            else:
+                logger.info("CalendarBridge: no running chat bridge to deliver briefing for %r", meeting.title)
+
+        calendar_bridge.set_on_meeting(_on_meeting)
 
     # Wire alert manager sinks that depend on runtime objects created above.
     if email_bridge:
