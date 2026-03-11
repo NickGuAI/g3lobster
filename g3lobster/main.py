@@ -22,6 +22,8 @@ from g3lobster.config import AppConfig, load_config
 from g3lobster.control_plane import ControlPlane, Dispatcher, Orchestrator, TaskRegistry
 from g3lobster.cron.manager import CronManager
 from g3lobster.cron.store import CronStore
+from g3lobster.standup.orchestrator import StandupOrchestrator
+from g3lobster.standup.store import StandupStore
 from g3lobster.memory.context import ContextBuilder
 from g3lobster.memory.global_memory import GlobalMemoryManager
 from g3lobster.memory.manager import MemoryManager
@@ -184,6 +186,13 @@ def build_runtime(config: AppConfig):
         gemini_cwd=config.gemini.workspace_dir,
     ) if config.cron.enabled else None
 
+    # Standup conductor — must be created before chat_bridge_factory so it can be captured.
+    standup_store = StandupStore(config.agents.data_dir)
+    standup_orchestrator = StandupOrchestrator(
+        store=standup_store,
+        registry=registry,
+    )
+
     def chat_bridge_factory(
         space_id: str,
         service=None,
@@ -202,6 +211,7 @@ def build_runtime(config: AppConfig):
             seen_content=seen_content,
             auth_data_dir=chat_auth_dir,
             cron_store=cron_store,
+            standup_orchestrator=standup_orchestrator,
             debug_mode=config.debug_mode,
             agent_filter=agent_filter,
             concierge_agent_id=concierge_id,
@@ -237,6 +247,8 @@ def build_runtime(config: AppConfig):
         cron_manager,
         email_bridge,
         control_plane,
+        standup_store,
+        standup_orchestrator,
     )
 
 
@@ -253,6 +265,8 @@ def build_app(config_path: Optional[str] = None):
         cron_manager,
         email_bridge,
         control_plane,
+        standup_store,
+        standup_orchestrator,
     ) = build_runtime(config)
     app = create_app(
         registry=registry,
@@ -266,6 +280,8 @@ def build_app(config_path: Optional[str] = None):
         cron_manager=cron_manager,
         email_bridge=email_bridge,
         control_plane=control_plane,
+        standup_store=standup_store,
+        standup_orchestrator=standup_orchestrator,
     )
     return app, config
 

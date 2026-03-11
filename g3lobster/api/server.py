@@ -19,6 +19,7 @@ from g3lobster.api.routes_agents import router as agents_router
 from g3lobster.api.routes_chat_events import router as chat_events_router
 from g3lobster.api.routes_control import router as control_router
 from g3lobster.api.routes_cron import router as cron_router
+from g3lobster.api.routes_standup import router as standup_router
 from g3lobster.api.routes_delegation import router as delegation_router
 from g3lobster.api.routes_export import router as export_router
 from g3lobster.api.routes_health import router as health_router
@@ -40,6 +41,8 @@ def create_app(
     cron_manager: Optional[object] = None,
     email_bridge: Optional[object] = None,
     control_plane: Optional[object] = None,
+    standup_store: Optional[object] = None,
+    standup_orchestrator: Optional[object] = None,
 ) -> FastAPI:
     runtime_config = config or AppConfig()
     runtime_config_path = str(Path(config_path or "config.yaml").expanduser().resolve())
@@ -84,6 +87,8 @@ def create_app(
     app.state.cron_manager = cron_manager
     app.state.email_bridge = email_bridge
     app.state.control_plane = control_plane
+    app.state.standup_store = standup_store
+    app.state.standup_orchestrator = standup_orchestrator
     app.state._stopped_memory_managers = {}
 
     _AUTH_EXEMPT_PREFIXES = ("/health", "/setup", "/chat/events", "/docs", "/openapi.json", "/ui")
@@ -112,6 +117,7 @@ def create_app(
     app.include_router(metrics_router)
     app.include_router(export_router)
     app.include_router(cron_router)
+    app.include_router(standup_router)
 
     static_dir = Path(__file__).resolve().parent.parent / "static"
     if static_dir.is_dir():
