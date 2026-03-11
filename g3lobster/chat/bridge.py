@@ -276,16 +276,20 @@ class ChatBridge:
         # Memory query interception — natural language, before slash commands.
         if detect_memory_query(text):
             global_memory = getattr(self.registry, "global_memory", None)
-            card_payload = build_memory_response(
+            memory_kwargs = dict(
                 agent_name=persona.name,
                 agent_emoji=persona.emoji,
                 agent_id=target_id,
                 memory_manager=runtime.memory_manager,
                 global_memory=global_memory,
                 user_id=user_id,
-                use_cards=True,
             )
-            await self.send_card_message(card_payload, thread_id=thread_id)
+            card_payload = build_memory_response(**memory_kwargs, use_cards=True)
+            text_fallback = build_memory_response(**memory_kwargs, use_cards=False)
+            await self.send_card_message(
+                card_payload, thread_id=thread_id,
+                text_fallback=text_fallback.get("text", ""),
+            )
             return
 
         # Slash-command interception — handle locally without hitting the AI.
@@ -364,13 +368,16 @@ class ChatBridge:
             await self.send_message(reply_text, thread_id=thread_id)
 
     async def send_card_message(
-        self, card_payload: dict, thread_id: Optional[str] = None,
+        self,
+        card_payload: dict,
+        thread_id: Optional[str] = None,
+        text_fallback: str = "",
     ) -> dict:
         """Send a Cards v2 message to the space.
 
         *card_payload* should be a dict with a ``cardsV2`` key.  If the API
-        call fails (e.g. Cards v2 not supported), falls back to a plain-text
-        representation.
+        call fails (e.g. Cards v2 not supported), falls back to *text_fallback*
+        (a pre-built plain-text representation of the same data).
         """
         body: dict = dict(card_payload)
         if thread_id:
@@ -383,16 +390,8 @@ class ChatBridge:
             return result or {}
         except Exception:
             logger.debug("Cards v2 send failed, falling back to text", exc_info=True)
-            # Fallback: rebuild as text
-            from g3lobster.chat.cards import build_memory_inspector_text
-            cards = card_payload.get("cardsV2", [])
-            if cards:
-                card = cards[0].get("card", {})
-                header = card.get("header", {})
-                fallback_text = f"*{header.get('title', 'Memory Inspector')}*\n(Card rendering unavailable)"
-            else:
-                fallback_text = "Memory inspector data unavailable."
-            return await self.send_message(fallback_text, thread_id=thread_id)
+            fallback = text_fallback or "Memory inspector data unavailable."
+            return await self.send_message(fallback, thread_id=thread_id)
 
     async def send_message(self, text: str, thread_id: Optional[str] = None) -> dict:
         body = {"text": text}
