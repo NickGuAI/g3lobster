@@ -288,12 +288,22 @@ class AgentRegistry:
                 if p.id != current_agent_id
             ]
 
+        # Resolve space context for agents bound to a specific space.
+        agent_space_id = persona.space_id
+        agent_space_name: Optional[str] = None
+        if agent_space_id and self.chat_bridge is not None:
+            agent_space_name = getattr(self.chat_bridge, "space_name", None)
+        # Apply per-space soul override when the agent is bound to a space.
+        effective_soul = persona.get_soul_for_space(agent_space_id)
+
         context = ContextBuilder(
             memory_manager=memory,
             message_limit=self.context_messages,
-            system_preamble=persona.soul,
+            system_preamble=effective_soul,
             global_memory_manager=self.global_memory_manager,
             agent_list_provider=_agent_list_provider,
+            space_id=agent_space_id,
+            space_name=agent_space_name,
         )
         agent = self.agent_factory(persona, memory, context)
         setattr(agent, "task_store", self.task_store)
