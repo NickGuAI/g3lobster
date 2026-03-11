@@ -7,10 +7,11 @@ matching procedures, user preferences) before passing to child agents.
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import List, Optional
 
 from g3lobster.memory.global_memory import GlobalMemoryManager
 from g3lobster.memory.manager import MemoryManager
+from g3lobster.memory.procedures import Procedure
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +154,7 @@ class HandoffBuilder:
         budget: int,
     ) -> str:
         """Extract matching procedures from parent's procedure store."""
-        global_procedures = []
+        global_procedures: List[Procedure] = []
         if global_memory:
             global_procedures = global_memory.procedures.list_procedures()
 
@@ -199,3 +200,19 @@ class HandoffBuilder:
             return user_memory[:budget] + "..."
 
         return user_memory
+
+    @staticmethod
+    def _format_procedures(procedures: List[Procedure]) -> str:
+        """Format matched procedures as markdown."""
+        if not procedures:
+            return "(none)"
+
+        lines: List[str] = []
+        for proc in procedures:
+            lines.append(f"### {proc.title}")
+            lines.append(f"Trigger: {proc.trigger}")
+            lines.append("Steps:")
+            for i, step in enumerate(proc.steps, 1):
+                lines.append(f"{i}. {step}")
+            lines.append("")
+        return "\n".join(lines).rstrip()
