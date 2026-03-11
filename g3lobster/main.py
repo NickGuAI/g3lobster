@@ -16,6 +16,7 @@ from g3lobster.alerts import AlertManager
 from g3lobster.api.server import create_app
 from g3lobster.chat.bridge import ChatBridge
 from g3lobster.chat.bridge_manager import BridgeManager
+from g3lobster.chat.calendar_bridge import CalendarBridge
 from g3lobster.chat.email_bridge import EmailBridge
 from g3lobster.cli.process import GeminiProcess
 from g3lobster.config import AppConfig, load_config
@@ -209,6 +210,15 @@ def build_runtime(config: AppConfig):
             auth_data_dir=config.email.auth_data_dir,
         )
 
+    calendar_bridge: CalendarBridge | None = None
+    if config.calendar.enabled:
+        calendar_bridge = CalendarBridge(
+            lookahead_minutes=config.calendar.lookahead_minutes,
+            poll_interval_s=config.calendar.poll_interval_s,
+            max_attendees=config.calendar.max_attendees,
+            auth_data_dir=config.calendar.auth_data_dir,
+        )
+
     # Wire alert manager sinks that depend on runtime objects created above.
     if email_bridge:
         alert_manager.email_bridge = email_bridge
@@ -223,6 +233,7 @@ def build_runtime(config: AppConfig):
         cron_store,
         cron_manager,
         email_bridge,
+        calendar_bridge,
         control_plane,
     )
 
@@ -239,6 +250,7 @@ def build_app(config_path: Optional[str] = None):
         cron_store,
         cron_manager,
         email_bridge,
+        calendar_bridge,
         control_plane,
     ) = build_runtime(config)
     app = create_app(
@@ -252,6 +264,7 @@ def build_app(config_path: Optional[str] = None):
         cron_store=cron_store,
         cron_manager=cron_manager,
         email_bridge=email_bridge,
+        calendar_bridge=calendar_bridge,
         control_plane=control_plane,
     )
     return app, config

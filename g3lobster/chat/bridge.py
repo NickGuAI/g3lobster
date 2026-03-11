@@ -352,6 +352,21 @@ class ChatBridge:
         )
         return result or {}
 
+    async def send_dm(self, text: str, dm_space_id: Optional[str] = None) -> dict:
+        """Send a direct message to a DM space.
+
+        If *dm_space_id* is None, falls back to the bridge's own space_id.
+        """
+        target = dm_space_id or self.space_id
+        if not target:
+            logger.warning("send_dm: no target space")
+            return {}
+        body = {"text": text}
+        result = await asyncio.to_thread(
+            self.service.spaces().messages().create(parent=target, body=body).execute
+        )
+        return result or {}
+
     async def update_message(self, message_name: str, text: str) -> None:
         body = {"text": text}
         try:

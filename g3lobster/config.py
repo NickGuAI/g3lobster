@@ -63,6 +63,15 @@ class EmailConfig:
 
 
 @dataclass
+class CalendarConfig:
+    enabled: bool = False
+    poll_interval_s: float = 300.0
+    lookahead_minutes: int = 15
+    max_attendees: int = 15
+    auth_data_dir: str = "./data/calendar_auth"
+
+
+@dataclass
 class CronConfig:
     enabled: bool = True
 
@@ -112,6 +121,7 @@ class AppConfig:
     cron: CronConfig = field(default_factory=CronConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
+    calendar: CalendarConfig = field(default_factory=CalendarConfig)
     subagent: SubagentConfig = field(default_factory=SubagentConfig)
     control_plane: ControlPlaneConfig = field(default_factory=ControlPlaneConfig)
     debug_mode: bool = False
@@ -208,6 +218,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
         mcp=MCPConfig(**_filter_fields(MCPConfig, data.get("mcp") or {}, "mcp")),
         chat=ChatConfig(**_filter_fields(ChatConfig, data.get("chat") or {}, "chat")),
         email=EmailConfig(**_filter_fields(EmailConfig, data.get("email") or {}, "email")),
+        calendar=CalendarConfig(**_filter_fields(CalendarConfig, data.get("calendar") or {}, "calendar")),
         cron=CronConfig(**_filter_fields(CronConfig, data.get("cron") or {}, "cron")),
         server=ServerConfig(**_filter_fields(ServerConfig, data.get("server") or {}, "server")),
         alerts=AlertsConfig(**_filter_fields(AlertsConfig, data.get("alerts") or {}, "alerts")),
@@ -223,6 +234,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     _apply_env_overrides("mcp", config.mcp)
     _apply_env_overrides("chat", config.chat)
     _apply_env_overrides("email", config.email)
+    _apply_env_overrides("calendar", config.calendar)
     _apply_env_overrides("cron", config.cron)
     _apply_env_overrides("server", config.server)
     _apply_env_overrides("alerts", config.alerts)
@@ -237,6 +249,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     config.agents.data_dir = _resolve_path(config.agents.data_dir, path)
     config.gemini.workspace_dir = _resolve_path(config.gemini.workspace_dir, path)
     config.email.auth_data_dir = _resolve_path(config.email.auth_data_dir, path)
+    config.calendar.auth_data_dir = _resolve_path(config.calendar.auth_data_dir, path)
 
     return config
 
