@@ -19,10 +19,28 @@ class FakeCall:
         return self._result
 
 
+class FakeReactionsAPI:
+    def __init__(self):
+        self.created = []
+        self.deleted = []
+        self._counter = 0
+
+    def create(self, parent, body):
+        self._counter += 1
+        reaction_name = f"{parent}/reactions/{self._counter}"
+        self.created.append({"parent": parent, "body": body, "name": reaction_name})
+        return FakeCall({"name": reaction_name})
+
+    def delete(self, name):
+        self.deleted.append(name)
+        return FakeCall({})
+
+
 class FakeMessagesAPI:
     def __init__(self):
         self.created = []
         self.updated = []
+        self._reactions_api = FakeReactionsAPI()
 
     def list(self, parent, pageSize, orderBy):
         return FakeCall({"messages": []})
@@ -34,6 +52,9 @@ class FakeMessagesAPI:
     def update(self, name, updateMask, body):
         self.updated.append({"name": name, "updateMask": updateMask, "body": body})
         return FakeCall({"name": name})
+
+    def reactions(self):
+        return self._reactions_api
 
 
 class FakeSpacesAPI:
@@ -928,3 +949,168 @@ async def test_streaming_throttle_limits_updates(tmp_path) -> None:
     # Only the final update — no intermediate streaming updates
     assert len(service.messages_api.updated) == 1
     assert service.messages_api.updated[0]["body"]["text"] == "🦀 Luna: Hello world, this is streaming!"
+
+
+# --- Reaction tests ---
+
+
+def _make_bridge_and_service(tmp_path, runtime_cls=None):
+    """Helper to create a bridge with a persona and optional custom runtime."""
+    from g3lobster.agents.persona import AgentPersona, save_persona
+
+    data_dir = str(tmp_path / "data")
+    persona = save_persona(
+        data_dir,
+        AgentPersona(
+            id="luna",
+            name="Luna",
+            emoji="🦀",
+            soul="",
+            model="gemini",
+            mcp_servers=["*"],
+            bot_user_id="users/999",
+        ),
+    )
+
+    service = FakeService()
+    registry = FakeRegistry(data_dir, persona)
+    if runtime_cls:
+        registry.runtime = runtime_cls(persona)
+
+    bridge = ChatBridge(
+        registry=registry,
+        space_id="spaces/test",
+        service=service,
+        spaces_config=str(tmp_path / "spaces.json"),
+    )
+    return bridge, service
+
+
+def _make_message(text="Hello there", name="spaces/test/messages/user1"):
+    return {
+        "name": name,
+        "text": text,
+        "sender": {"type": "HUMAN", "name": "users/123", "displayName": "Ada"},
+        "thread": {"name": "spaces/test/threads/abc"},
+        "annotations": [
+            {
+                "type": "USER_MENTION",
+                "userMention": {"user": {"type": "BOT", "name": "users/999"}},
+            }
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_reaction_progression_success(tmp_path) -> None:
+    """On a successful task, reactions progress: 👀 → 🤔 → 🔥 → ✅."""
+    bridge, service = _make_bridge_and_service(tmp_path)
+    reactions_api = service.messages_api._reactions_api
+
+    await bridge.handle_message(_make_message())
+
+    user_msg = "spaces/test/messages/user1"
+    # Created: 👀, 🤔, 🔥 (on first MESSAGE event), ✅
+    assert len(reactions_api.created) == 4
+    assert reactions_api.created[0]["body"] == {"emoji": {"unicode": "👀"}}
+    assert reactions_api.created[0]["parent"] == user_msg
+    assert reactions_api.created[1]["body"] == {"emoji": {"unicode": "🤔"}}
+    assert reactions_api.created[2]["body"] == {"emoji": {"unicode": "🔥"}}
+    assert reactions_api.created[3]["body"] == {"emoji": {"unicode": "✅"}}
+    # Deleted: 👀, 🤔, 🔥
+    assert len(reactions_api.deleted) == 3
+
+
+@pytest.mark.asyncio
+async def test_reaction_progression_with_tool_use(tmp_path) -> None:
+    """When tools are used, reactions progress: 👀 → 🤔 → 🔥 → ✅."""
+    bridge, service = _make_bridge_and_service(tmp_path, FakeToolRuntime)
+    reactions_api = service.messages_api._reactions_api
+
+    await bridge.handle_message(_make_message("Search for something"))
+
+    assert len(reactions_api.created) == 4
+    emojis = [r["body"]["emoji"]["unicode"] for r in reactions_api.created]
+    assert emojis == ["👀", "🤔", "🔥", "✅"]
+    # Deleted: 👀, 🤔, 🔥
+    assert len(reactions_api.deleted) == 3
+
+
+@pytest.mark.asyncio
+async def test_reaction_progression_error(tmp_path) -> None:
+    """On error, final reaction is ❌."""
+    bridge, service = _make_bridge_and_service(tmp_path, FakeErrorRuntime)
+    reactions_api = service.messages_api._reactions_api
+
+    await bridge.handle_message(_make_message("Do something"))
+
+    emojis = [r["body"]["emoji"]["unicode"] for r in reactions_api.created]
+    assert emojis == ["👀", "🤔", "❌"]
+
+
+@pytest.mark.asyncio
+async def test_reaction_skipped_without_message_name(tmp_path) -> None:
+    """No reactions are attempted if message has no 'name' field."""
+    bridge, service = _make_bridge_and_service(tmp_path)
+    reactions_api = service.messages_api._reactions_api
+
+    msg = _make_message()
+    del msg["name"]
+    await bridge.handle_message(msg)
+
+    assert len(reactions_api.created) == 0
+    assert len(reactions_api.deleted) == 0
+
+
+@pytest.mark.asyncio
+async def test_reaction_failure_does_not_block_processing(tmp_path) -> None:
+    """If the reaction API raises, processing continues normally."""
+    bridge, service = _make_bridge_and_service(tmp_path)
+
+    # Make reactions API raise on create
+    def failing_create(parent, body):
+        raise RuntimeError("API error")
+
+    service.messages_api._reactions_api.create = failing_create
+
+    await bridge.handle_message(_make_message())
+
+    # Message should still be processed — thinking + final update
+    assert len(service.messages_api.created) == 1
+    assert len(service.messages_api.updated) == 1
+    assert "reply" in service.messages_api.updated[0]["body"]["text"]
+
+
+@pytest.mark.asyncio
+async def test_add_reaction_returns_name(tmp_path) -> None:
+    """add_reaction returns the reaction resource name."""
+    bridge, service = _make_bridge_and_service(tmp_path)
+
+    name = await bridge.add_reaction("spaces/test/messages/user1", "👀")
+
+    assert name == "spaces/test/messages/user1/reactions/1"
+
+
+@pytest.mark.asyncio
+async def test_remove_reaction_calls_delete(tmp_path) -> None:
+    """remove_reaction calls the delete API."""
+    bridge, service = _make_bridge_and_service(tmp_path)
+    reactions_api = service.messages_api._reactions_api
+
+    await bridge.remove_reaction("spaces/test/messages/user1/reactions/1")
+
+    assert reactions_api.deleted == ["spaces/test/messages/user1/reactions/1"]
+
+
+@pytest.mark.asyncio
+async def test_transition_reaction_removes_old_adds_new(tmp_path) -> None:
+    """transition_reaction removes old and adds new."""
+    bridge, service = _make_bridge_and_service(tmp_path)
+    reactions_api = service.messages_api._reactions_api
+
+    old_name = await bridge.add_reaction("spaces/test/messages/user1", "👀")
+    new_name = await bridge.transition_reaction("spaces/test/messages/user1", old_name, "🤔")
+
+    assert old_name in reactions_api.deleted
+    assert new_name is not None
+    assert new_name != old_name
