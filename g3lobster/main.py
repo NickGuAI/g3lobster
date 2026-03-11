@@ -171,7 +171,18 @@ def build_runtime(config: AppConfig):
 
     chat_auth_dir = str(Path(config.agents.data_dir) / "chat_auth")
     cron_store = CronStore(config.agents.data_dir)
-    cron_manager = CronManager(cron_store=cron_store, registry=registry) if config.cron.enabled else None
+    cron_manager = CronManager(
+        cron_store=cron_store,
+        registry=registry,
+        consolidation_enabled=config.agents.consolidation_enabled,
+        consolidation_schedule=config.agents.consolidation_schedule,
+        consolidation_days_window=config.agents.consolidation_days_window,
+        consolidation_stale_days=config.agents.consolidation_stale_days,
+        gemini_command=config.gemini.command,
+        gemini_args=config.gemini.args,
+        gemini_timeout_s=config.gemini.response_timeout_s or 45.0,
+        gemini_cwd=config.gemini.workspace_dir,
+    ) if config.cron.enabled else None
 
     def chat_bridge_factory(
         space_id: str,
