@@ -13,6 +13,12 @@ SCOPES = [
     "https://www.googleapis.com/auth/chat.users.spacesettings",
 ]
 
+WORKSPACE_SCOPES = [
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/documents.readonly",
+    "https://www.googleapis.com/auth/spreadsheets.readonly",
+]
+
 
 def _base_dir(data_dir: Optional[str] = None) -> Path:
     return Path(data_dir or Path.home() / ".gemini_chat_bridge")
@@ -60,6 +66,33 @@ def _load_saved_credentials(data_dir: Optional[str] = None):
 
     if not creds or not creds.valid:
         raise RuntimeError("OAuth token is invalid. Re-run setup auth.")
+
+    return creds
+
+
+def get_workspace_credentials(data_dir: Optional[str] = None):
+    """Load and validate credentials with workspace (Drive/Docs/Sheets) scopes.
+
+    Uses the same token file as Chat auth. If the token lacks workspace
+    scopes, the user must re-authenticate with the expanded scope set.
+    """
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+
+    token = token_path(data_dir)
+    if not token.exists():
+        raise RuntimeError("OAuth token missing. Complete setup auth first.")
+
+    creds = Credentials.from_authorized_user_file(str(token), WORKSPACE_SCOPES)
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+        token.write_text(creds.to_json(), encoding="utf-8")
+
+    if not creds or not creds.valid:
+        raise RuntimeError(
+            "OAuth token is invalid or missing workspace scopes. "
+            "Re-run setup auth with Drive/Docs/Sheets scopes."
+        )
 
     return creds
 
