@@ -81,6 +81,7 @@ class ChatBridge:
         seen_content_max_size: int = 10_000,
         debug_mode: bool = False,
         agent_filter: Optional[Set[str]] = None,
+        concierge_agent_id: Optional[str] = None,
     ):
         self.registry = registry
         self.poll_interval_s = poll_interval_s
@@ -90,6 +91,7 @@ class ChatBridge:
         self.auth_data_dir = auth_data_dir
         self.cron_store = cron_store
         self.debug_mode = debug_mode
+        self.concierge_agent_id = concierge_agent_id
 
         self.space_id = space_id
         self._poll_task: Optional[asyncio.Task] = None
@@ -225,6 +227,11 @@ class ChatBridge:
                 return persona.id
             if f"@{persona.id}".lower() in lowered:
                 return persona.id
+
+        # Fallback to concierge agent for unmentioned messages
+        if self.concierge_agent_id:
+            logger.info("No @-mention found, routing to concierge agent '%s'", self.concierge_agent_id)
+            return self.concierge_agent_id
 
         return None
 
