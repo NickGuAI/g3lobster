@@ -22,7 +22,7 @@
 # --- Gemini CLI binary ---
 # The GeminiAgent spawns `gemini` as a subprocess. In the Cloud Run image
 # you must either:
-#   1. Install the gemini CLI in the Dockerfile (RUN npm i -g @anthropic-ai/gemini-cli)
+#   1. Install the gemini CLI in the Dockerfile (RUN npm i -g gemini-cli)
 #   2. Or disable agent features that require subprocess spawning and use
 #      API-based alternatives instead (future work).
 
