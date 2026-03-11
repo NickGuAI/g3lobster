@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 
 from g3lobster.agents.persona import AgentPersona, save_persona
+from g3lobster.agents.subagent_registry import SubagentRegistry
 from g3lobster.chat.bridge import ChatBridge
 from g3lobster.tasks.types import TaskStatus
 
@@ -504,12 +507,17 @@ class FakeMultiRegistry:
         self.data_dir = data_dir
         self._runtimes = {p.id: rt for p, rt in personas_and_runtimes}
         self._personas = [p for p, _ in personas_and_runtimes]
+        self.subagent_registry = SubagentRegistry(pathlib.Path(data_dir))
 
     def get_agent(self, agent_id):
         return self._runtimes.get(agent_id)
 
     def list_enabled_personas(self):
         return list(self._personas)
+
+    def load_persona(self, agent_id):
+        rt = self._runtimes.get(agent_id)
+        return rt.persona if rt else None
 
     async def start_agent(self, agent_id):
         return agent_id in self._runtimes
@@ -565,12 +573,24 @@ async def test_unmentioned_message_routes_to_concierge(tmp_path) -> None:
         "thread": {"name": "spaces/test/threads/abc"},
     }
 
+    # Simulate a delegation run that the concierge would have triggered
+    run = registry.subagent_registry.register_run(
+        parent_agent_id="concierge",
+        child_agent_id="luna",
+        task="What's on my calendar tomorrow?",
+        parent_session_id="test-session",
+    )
+    registry.subagent_registry.mark_running(run.run_id)
+    registry.subagent_registry.complete_run(run.run_id, "Calendar reply")
+
     await bridge.handle_message(message)
 
     assert len(service.messages_api.created) == 1
+    # Thinking message still uses concierge persona (it starts before delegation)
     assert "Concierge" in service.messages_api.created[0]["body"]["text"]
     assert len(service.messages_api.updated) == 1
-    assert "🧭 Concierge: reply" in service.messages_api.updated[0]["body"]["text"]
+    # Final reply is attributed to the specialist (Luna), not the concierge
+    assert "🦀 Luna: reply" in service.messages_api.updated[0]["body"]["text"]
 
 
 @pytest.mark.asyncio

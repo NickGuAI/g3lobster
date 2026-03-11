@@ -235,6 +235,26 @@ class ChatBridge:
 
         return None
 
+    def _resolve_delegation_persona(self, parent_agent_id: str):
+        """Check if the parent agent delegated to a child and return the child's persona."""
+        sub_registry = getattr(self.registry, "subagent_registry", None)
+        if sub_registry is None:
+            return None
+        runs = sub_registry.list_runs(parent_agent_id=parent_agent_id)
+        if not runs:
+            return None
+        # Most recent run first (already sorted by created_at desc)
+        latest = runs[0]
+        if latest.status.value == "completed" and latest.child_agent_id:
+            child_runtime = self.registry.get_agent(latest.child_agent_id)
+            if child_runtime:
+                return child_runtime.persona
+            # Agent may have been loaded but not running; try loading persona
+            load_fn = getattr(self.registry, "load_persona", None)
+            if load_fn:
+                return load_fn(latest.child_agent_id)
+        return None
+
     async def handle_message(self, message: dict) -> None:
         sender = message.get("sender", {})
         if sender.get("type") != "HUMAN":
@@ -330,18 +350,26 @@ class ChatBridge:
         if not final_result:
             final_result = (task.result or accumulate_text(stream_events)).strip()
 
+        # Attribution: if concierge delegated, use the specialist's persona
+        reply_persona = persona
+        if target_id == self.concierge_agent_id:
+            delegated_persona = self._resolve_delegation_persona(target_id)
+            if delegated_persona:
+                reply_persona = delegated_persona
+                logger.info("Concierge routed to agent: %s", delegated_persona.id)
+
         if task.status == TaskStatus.FAILED and final_error:
-            reply_text = f"{persona.emoji} {persona.name}: error: {final_error}"
+            reply_text = f"{reply_persona.emoji} {reply_persona.name}: error: {final_error}"
             if self.debug_mode:
                 reply_text += f"\n```\n{final_error}\n```"
         elif final_result:
-            reply_text = f"{persona.emoji} {persona.name}: {final_result}"
+            reply_text = f"{reply_persona.emoji} {reply_persona.name}: {final_result}"
         elif final_error:
-            reply_text = f"{persona.emoji} {persona.name}: error: {final_error}"
+            reply_text = f"{reply_persona.emoji} {reply_persona.name}: error: {final_error}"
             if self.debug_mode:
                 reply_text += f"\n```\n{final_error}\n```"
         else:
-            reply_text = f"{persona.emoji} {persona.name}: task finished with no output"
+            reply_text = f"{reply_persona.emoji} {reply_persona.name}: task finished with no output"
 
         # Update the thinking message in-place (no extra new message).
         if thinking_name:
