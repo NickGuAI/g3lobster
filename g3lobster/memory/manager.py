@@ -166,6 +166,49 @@ class MemoryManager:
         _flush()
         return entries
 
+    def delete_tagged_memory(self, tag: str, index: int) -> bool:
+        """Delete the *index*-th entry with *tag* from MEMORY.md.
+
+        Returns ``True`` if an entry was found and removed.
+        """
+        normalized_tag = self._normalize_tag(tag).lower()
+        if not normalized_tag:
+            return False
+
+        content = self.read_memory()
+        lines = content.splitlines(keepends=True)
+
+        # Identify section boundaries for tagged sections matching this tag.
+        sections: list[tuple[int, int, str]] = []  # (start_line, end_line, tag)
+        current_start: Optional[int] = None
+        current_tag_lower: Optional[str] = None
+
+        for i, line in enumerate(lines):
+            if line.rstrip().startswith("## "):
+                if current_start is not None and current_tag_lower == normalized_tag:
+                    sections.append((current_start, i, current_tag_lower))
+                match = re.fullmatch(r"##\s+\[(.+)\]\s*", line.strip())
+                if match:
+                    current_tag_lower = self._normalize_tag(match.group(1)).lower()
+                    current_start = i
+                else:
+                    current_tag_lower = None
+                    current_start = None
+                continue
+
+        # Handle last section
+        if current_start is not None and current_tag_lower == normalized_tag:
+            sections.append((current_start, len(lines), current_tag_lower))
+
+        if index < 0 or index >= len(sections):
+            return False
+
+        start, end = sections[index][0], sections[index][1]
+        with self._memory_lock:
+            new_lines = lines[:start] + lines[end:]
+            self.write_memory("".join(new_lines))
+        return True
+
     def _trim_memory(self, content: str) -> str:
         """Keep at most ``memory_max_sections`` ## sections.
 

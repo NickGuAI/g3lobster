@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
 from g3lobster.chat.auth import get_authenticated_service
 from g3lobster.chat.commands import handle as handle_command
+from g3lobster.chat.memory_inspector import build_memory_card, detect_memory_query
 from g3lobster.cli.parser import get_content_id
 from g3lobster.cli.streaming import StreamEventType, accumulate_text
 from g3lobster.tasks.types import Task, TaskStatus
@@ -301,6 +302,21 @@ class ChatBridge:
         user_id = sender.get("name") or "unknown"
         thread_id_safe = (thread_id or "no-thread").replace("/", "_")
         session_id = f"{self.space_id}__{user_id}__{thread_id_safe}"
+
+        # Memory query interception — before slash commands because these are
+        # natural language, not ``/``-prefixed.
+        memory_query_type = detect_memory_query(text)
+        if memory_query_type:
+            global_memory = getattr(self.registry, "global_memory", None)
+            card_response = await build_memory_card(
+                agent_name=persona.name,
+                agent_emoji=persona.emoji,
+                memory_manager=runtime.memory_manager,
+                global_memory=global_memory,
+                user_id=user_id,
+            )
+            await self.send_message("", thread_id=thread_id, cards_v2=card_response.get("cardsV2"))
+            return
 
         # Slash-command interception — handle locally without hitting the AI.
         if self.cron_store is not None:

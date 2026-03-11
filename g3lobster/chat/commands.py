@@ -9,6 +9,8 @@ Supported commands
 ------------------
 ``/help``                              — list available commands
 ``/status``                            — fleet dashboard (Cards v2)
+``/memory``                            — memory inspector card (Cards v2)
+``/forget <type> <id>``                — forget a specific memory item
 ``/cron list``                         — list scheduled tasks for this agent
 ``/cron add "<schedule>" "<task>"``    — create a cron task
 ``/cron delete <id>``                  — delete a cron task
@@ -35,6 +37,8 @@ HELP_TEXT = """\
 *Available commands*
 • `/help` — show this message
 • `/status` — fleet dashboard showing all agents at a glance
+• `/memory` — show what the agent remembers about you
+• `/forget <type> <id>` — forget a memory item (type: preference, procedure)
 • `/cron list` — list scheduled tasks for this agent
 • `/cron add "<schedule>" "<instruction>"` — create a new cron task
   _schedule_: standard 5-field cron expression, e.g. `0 9 * * *`
@@ -48,7 +52,7 @@ HELP_TEXT = """\
 def detect_command(text: str) -> Optional[tuple[str, str]]:
     """Return ``(command, rest)`` if text contains a ``/`` command, else ``None``.
 
-    Recognised commands: ``help``, ``status``, ``cron``, ``sleep``.
+    Recognised commands: ``help``, ``status``, ``memory``, ``forget``, ``cron``, ``sleep``.
     """
     m = _SLASH_RE.search(text)
     if not m:
@@ -81,6 +85,12 @@ async def handle(
     if cmd == "status":
         return await _handle_status(registry)
 
+    if cmd == "memory":
+        return await _handle_memory(agent_id, registry)
+
+    if cmd == "forget":
+        return _handle_forget(rest, agent_id, registry)
+
     if cmd == "cron":
         return _handle_cron(rest, agent_id, cron_store)
 
@@ -89,6 +99,77 @@ async def handle(
 
     # Unknown command — fall through to AI
     return None
+
+
+async def _handle_memory(
+    agent_id: str,
+    registry: Optional["AgentRegistry"],
+) -> Union[str, Dict[str, Any]]:
+    """Handle /memory — returns a Cards v2 memory inspector card."""
+    if registry is None:
+        return "⚠️ Memory inspector unavailable — registry not connected."
+
+    runtime = registry.get_agent(agent_id)
+    if not runtime:
+        return f"⚠️ Agent `{agent_id}` is not running."
+
+    from g3lobster.chat.memory_inspector import build_memory_card
+
+    global_memory = getattr(registry, "global_memory", None)
+    card = await build_memory_card(
+        agent_name=runtime.persona.name,
+        agent_emoji=runtime.persona.emoji,
+        memory_manager=runtime.memory_manager,
+        global_memory=global_memory,
+        user_id="slash-command",
+    )
+    return card
+
+
+def _handle_forget(
+    args: str,
+    agent_id: str,
+    registry: Optional["AgentRegistry"],
+) -> str:
+    """Handle /forget <type> <id> — remove a specific memory item."""
+    if registry is None:
+        return "⚠️ Forget unavailable — registry not connected."
+
+    parts = args.strip().split(None, 1)
+    if len(parts) < 2:
+        return "Usage: `/forget <type> <id>`\nTypes: `preference <index>`, `procedure <title>`"
+
+    item_type, item_id = parts[0].lower(), parts[1].strip()
+
+    runtime = registry.get_agent(agent_id)
+    if not runtime:
+        return f"⚠️ Agent `{agent_id}` is not running."
+
+    manager = runtime.memory_manager
+
+    if item_type == "preference":
+        try:
+            index = int(item_id)
+        except ValueError:
+            return f"Invalid preference index: `{item_id}`. Must be a number."
+        deleted = manager.delete_tagged_memory("preference", index)
+        if not deleted:
+            deleted = manager.delete_tagged_memory("user preference", index)
+        if deleted:
+            return f"🗑 Forgot preference #{index}."
+        return f"No preference found at index {index}."
+
+    if item_type == "procedure":
+        # Remove from permanent procedure store
+        procs = manager.list_procedures()
+        matched = [p for p in procs if p.title.lower() == item_id.lower()]
+        if not matched:
+            return f"No procedure found with title `{item_id}`."
+        remaining = [p for p in procs if p.title.lower() != item_id.lower()]
+        manager.procedure_store.save_procedures(remaining)
+        return f"🗑 Forgot procedure `{matched[0].title}`."
+
+    return f"Unknown memory type: `{item_type}`. Use `preference` or `procedure`."
 
 
 def _handle_sleep(args: str, agent_id: str) -> str:
