@@ -1,0 +1,122 @@
+# Cloud Run service manifest for g3lobster
+# Deploy with:
+#   gcloud run services replace service.cloudrun.yaml --region=us-central1
+# Or via Cloud Build substitution variables (_REGION, PROJECT_ID, _REPO, _IMAGE).
+
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: g3lobster
+  annotations:
+    # Region where the service is deployed
+    run.googleapis.com/launch-stage: GA
+
+spec:
+  template:
+    metadata:
+      annotations:
+        # Scaling: keep at 0 idle instances to save cost; cap at 3 to avoid runaway spend
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "3"
+
+        # Each container instance handles up to 80 concurrent async FastAPI requests
+        autoscaling.knative.dev/target: "80"
+
+        # CPU is only allocated while a request is being handled (cost optimisation)
+        run.googleapis.com/cpu-throttling: "true"
+
+    spec:
+      # Maximum time Cloud Run waits for a response before returning 504
+      timeoutSeconds: 300
+
+      # Maximum concurrent requests per container instance (matches FastAPI async capacity)
+      containerConcurrency: 80
+
+      containers:
+        - # Image is built and pushed by Cloud Build using substitution variables:
+          #   ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:latest
+          # Replace the placeholder below with the fully-resolved image URI when deploying
+          # manually, e.g.:
+          #   us-central1-docker.pkg.dev/MY_PROJECT/g3lobster/g3lobster:latest
+          image: us-central1-docker.pkg.dev/PROJECT_ID/g3lobster/g3lobster:latest
+
+          resources:
+            limits:
+              # 1 vCPU and up to 1 GiB memory per instance
+              cpu: "1"
+              memory: 1Gi
+            requests:
+              # Guaranteed baseline allocation — keeps startup latency predictable
+              cpu: "1"
+              memory: 512Mi
+
+          ports:
+            - name: http1
+              containerPort: 8080  # Must match $PORT default in Dockerfile
+
+          env:
+            # ----------------------------------------------------------------
+            # Runtime configuration via G3LOBSTER_<SECTION>_<KEY> env vars.
+            # Add plain (non-secret) overrides here as needed, for example:
+            #   - name: G3LOBSTER_AGENTS_DATA_DIR
+            #     value: /tmp/agents
+            # ----------------------------------------------------------------
+
+            # PORT is set explicitly so the Dockerfile CMD receives the correct value
+            - name: PORT
+              value: "8080"
+
+            # ----------------------------------------------------------------
+            # Secret Manager bindings
+            # Each secret must exist in the same project under Secret Manager.
+            # Format:
+            #   valueFrom.secretKeyRef.name  — Secret Manager secret ID
+            #   valueFrom.secretKeyRef.key   — secret version ("latest" is safe for CD)
+            # ----------------------------------------------------------------
+
+            # Gemini / Google AI API key
+            - name: GOOGLE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: GOOGLE_API_KEY   # Secret Manager secret ID
+                  key: latest
+
+            # g3lobster bearer-token authentication key
+            - name: G3LOBSTER_AUTH_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: G3LOBSTER_AUTH_API_KEY   # Secret Manager secret ID
+                  key: latest
+
+          # ------------------------------------------------------------------
+          # Startup probe — allows a generous window for cold-start
+          # Cloud Run retries up to failureThreshold times before killing the
+          # container.  With 10 failures × 10 s period = 100 s maximum.
+          # ------------------------------------------------------------------
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 10
+            failureThreshold: 10
+            successThreshold: 1
+
+          # ------------------------------------------------------------------
+          # Liveness probe — restarts the container if it becomes unhealthy
+          # after a successful startup.
+          # ------------------------------------------------------------------
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            failureThreshold: 3
+            successThreshold: 1
+
+  # Traffic is always sent 100 % to the latest revision.
+  # Adjust the split here if you want canary or blue/green deployments.
+  traffic:
+    - latestRevision: true
+      percent: 100

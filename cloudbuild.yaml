@@ -14,6 +14,18 @@ steps:
       - '--all-tags'
       - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}'
 
+  # Deploy to Cloud Run using the service manifest.
+  # The image field in service.cloudrun.yaml is overridden with the just-built tag.
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        sed "s|us-central1-docker.pkg.dev/PROJECT_ID/g3lobster/g3lobster:latest|${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}:${SHORT_SHA}|g" \
+          service.cloudrun.yaml > /tmp/service-resolved.yaml
+        gcloud run services replace /tmp/service-resolved.yaml \
+          --region=${_REGION}
+
 images:
   - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_IMAGE}'
 
