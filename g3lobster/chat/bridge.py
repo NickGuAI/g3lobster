@@ -349,7 +349,7 @@ class ChatBridge:
 
         # Slash-command interception -- handle immediately, bypass debounce.
         if detect_command(text) is not None and self.cron_store is not None:
-            cmd_reply = await handle_command(text, target_id, self.cron_store, registry=self.registry, global_memory=getattr(self.registry, 'global_memory_manager', None))
+            cmd_reply = await handle_command(text, target_id, self.cron_store, registry=self.registry, global_memory=getattr(self.registry, 'global_memory_manager', None), incident_store=self.incident_store, thread_id=thread_id or "", space_id=self.space_id or "", user_id=sender.get("name") or "unknown")
             if cmd_reply is not None:
                 # Intercept __CATCHUP__ marker from /catchup command
                 if cmd_reply == "__CATCHUP__":

@@ -188,6 +188,10 @@ class CronManager:
         except Exception:
             logger.exception("Calendar focus-time check failed")
 
+    def set_incident_store(self, incident_store: object) -> None:
+        """Register an IncidentStore for incident prompt cron tasks."""
+        self._incident_store = incident_store
+
     async def _fire(self, agent_id: str, task_id: str, instruction: str, dm_target: str | None = None) -> None:
         import time as time_mod
         logger.info("Firing cron task %s for agent %s", task_id, agent_id)
@@ -212,6 +216,10 @@ class CronManager:
                 task_id=task_id, fired_at=now, status=status,
                 duration_s=duration, result_preview=preview,
             ))
+
+        # Handle incident status prompts specially
+        if instruction.startswith("__INCIDENT_PROMPT__:"):
+            await self._fire_incident_prompt(agent_id, task_id, instruction, now)
             return
 
         # Handle __INCIDENT_PROMPT__ tasks — rewrite instruction to a status prompt.
@@ -302,3 +310,46 @@ class CronManager:
             logger.info("Cron result delivered via DM to %s", dm_target)
         except Exception:
             logger.exception("Failed to deliver cron result DM to %s", dm_target)
+
+    async def _fire_incident_prompt(self, agent_id: str, task_id: str, instruction: str, now: str) -> None:
+        """Fire an incident status prompt — sends the prompt text to the agent as a task."""
+        incident_id = instruction.split(":", 1)[1] if ":" in instruction else ""
+        incident_store = getattr(self, "_incident_store", None)
+        if not incident_store or not incident_id:
+            logger.warning("Incident prompt fired but no incident store or ID: %s", instruction)
+            return
+
+        incident = incident_store.get(agent_id, incident_id)
+        if not incident:
+            logger.info("Incident %s not found — removing cron task %s", incident_id, task_id)
+            self._store.delete_task(agent_id, task_id)
+            return
+
+        from g3lobster.incident.model import IncidentStatus
+        if incident.status != IncidentStatus.ACTIVE:
+            logger.info("Incident %s is not active — removing cron task %s", incident_id, task_id)
+            self._store.delete_task(agent_id, task_id)
+            return
+
+        from g3lobster.incident.formatter import format_status_prompt
+        prompt_text = format_status_prompt(incident)
+
+        runtime = self._registry.get_agent(agent_id)
+        if not runtime:
+            started = await self._registry.start_agent(agent_id)
+            if not started:
+                return
+            runtime = self._registry.get_agent(agent_id)
+            if not runtime:
+                return
+
+        session_id = f"cron__{agent_id}"
+        task = Task(prompt=prompt_text, session_id=session_id)
+        try:
+            await runtime.assign(task)
+            self._store.record_run(agent_id, CronRunRecord(
+                task_id=task_id, fired_at=now, status="completed",
+                duration_s=0.0, result_preview=f"Incident prompt for {incident_id[:8]}",
+            ))
+        except Exception:
+            logger.exception("Incident prompt task %s raised an exception", task_id)
