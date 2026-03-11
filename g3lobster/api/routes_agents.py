@@ -22,6 +22,10 @@ from g3lobster.api.models import (
     AgentDetailResponse,
     AgentResponse,
     AgentUpdateRequest,
+    AssociationResponse,
+    JournalCreateRequest,
+    JournalEntryResponse,
+    JournalQueryRequest,
     KnowledgeListResponse,
     LinkBotRequest,
     MemorySearchRequest,
@@ -39,6 +43,7 @@ from g3lobster.api.models import (
     TaskSummaryResponse,
     TestAgentRequest,
 )
+from g3lobster.memory.journal import JournalEntry, SalienceLevel
 from g3lobster.config import normalize_space_id
 from g3lobster.memory.global_memory import GlobalMemoryManager
 from g3lobster.memory.manager import MemoryManager
@@ -619,6 +624,68 @@ async def kill_subagent(agent_id: str, session_name: str, request: Request) -> S
     if run is None:
         raise HTTPException(status_code=404, detail="Sub-agent session not found")
     return _to_subagent_response(run)
+
+
+@router.get("/{agent_id}/journal", response_model=List[JournalEntryResponse])
+async def query_journal(
+    agent_id: str,
+    request: Request,
+    salience_min: Optional[str] = Query(default=None),
+    tag: List[str] = Query(default=[]),
+    start_date: str = Query(default=""),
+    end_date: str = Query(default=""),
+    limit: int = Query(default=50, ge=1, le=500),
+) -> List[JournalEntryResponse]:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+    manager = _memory_manager(request, agent_id)
+
+    from datetime import date as date_type
+    sal_min = SalienceLevel.from_value(salience_min) if salience_min else None
+    d_start = date_type.fromisoformat(start_date) if start_date else None
+    d_end = date_type.fromisoformat(end_date) if end_date else None
+
+    entries = manager.query_journal(
+        salience_min=sal_min,
+        tags=tag or None,
+        date_start=d_start,
+        date_end=d_end,
+        limit=limit,
+    )
+    return [JournalEntryResponse(**e.as_dict()) for e in entries]
+
+
+@router.post("/{agent_id}/journal", response_model=JournalEntryResponse, status_code=201)
+async def create_journal_entry(
+    agent_id: str,
+    payload: JournalCreateRequest,
+    request: Request,
+) -> JournalEntryResponse:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+    manager = _memory_manager(request, agent_id)
+
+    entry = JournalEntry(
+        content=payload.content,
+        salience=SalienceLevel.from_value(payload.salience),
+        tags=list(payload.tags),
+        source_session=payload.source_session,
+    )
+    saved = manager.append_journal_entry(entry)
+    return JournalEntryResponse(**saved.as_dict())
+
+
+@router.get("/{agent_id}/journal/{entry_id}/associations", response_model=List[AssociationResponse])
+async def get_journal_associations(
+    agent_id: str,
+    entry_id: str,
+    request: Request,
+) -> List[AssociationResponse]:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+    manager = _memory_manager(request, agent_id)
+    edges = manager.association_graph.get_associations(entry_id)
+    return [AssociationResponse(**edge) for edge in edges]
 
 
 @router.get("/{agent_id}/memory", response_model=MemoryResponse)

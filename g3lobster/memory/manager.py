@@ -8,6 +8,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from g3lobster.memory.journal import AssociationGraph, JournalEntry, JournalStore, SalienceLevel
 from g3lobster.memory.compactor import CompactionEngine
 from g3lobster.memory.procedures import (
     CandidateStore,
@@ -54,6 +55,8 @@ class MemoryManager:
 
         self.memory_dir.mkdir(parents=True, exist_ok=True)
         self.daily_dir.mkdir(parents=True, exist_ok=True)
+        self.journal_store = JournalStore(self.daily_dir)
+        self.association_graph = AssociationGraph(self.memory_dir / "associations.jsonl")
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
 
         if not self.memory_file.exists():
@@ -212,6 +215,33 @@ class MemoryManager:
         with path.open("a", encoding="utf-8") as handle:
             handle.write(text.strip() + "\n")
 
+    def append_journal_entry(self, entry: JournalEntry, day: Optional[date] = None) -> JournalEntry:
+        """Write a structured journal entry and also append to the daily .md note for backward compat."""
+        saved = self.journal_store.append(entry, day=day)
+        # Backward-compatible human-readable line in the markdown daily note.
+        md_line = f"[{entry.salience.value}] {entry.content[:200]}"
+        if entry.tags:
+            md_line += f" (tags: {', '.join(entry.tags)})"
+        self.append_daily_note(md_line, day=day)
+        return saved
+
+    def query_journal(
+        self,
+        *,
+        salience_min: Optional[SalienceLevel] = None,
+        tags: Optional[List[str]] = None,
+        date_start: Optional[date] = None,
+        date_end: Optional[date] = None,
+        limit: int = 50,
+    ) -> List[JournalEntry]:
+        return self.journal_store.query(
+            salience_min=salience_min,
+            tags=tags,
+            date_start=date_start,
+            date_end=date_end,
+            limit=limit,
+        )
+
     def append_message(
         self,
         session_id: str,
@@ -288,6 +318,21 @@ class MemoryManager:
 
             if highlights:
                 self.append_memory_section(f"Compaction {session_id}", "\n".join(highlights[:8]))
+                # Write structured journal entries for compacted highlights.
+                for highlight in highlights[:8]:
+                    # Classify salience: user preferences are high, rest are normal.
+                    if "user preference:" in highlight:
+                        salience = SalienceLevel.HIGH
+                    else:
+                        salience = SalienceLevel.NORMAL
+                    self.append_journal_entry(
+                        JournalEntry(
+                            content=highlight.lstrip("- "),
+                            salience=salience,
+                            tags=["compaction"],
+                            source_session=session_id,
+                        )
+                    )
 
         return self.compactor.maybe_compact(
             session_id,

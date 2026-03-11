@@ -20,8 +20,10 @@ data/
     │   ├── MEMORY.md                 # Agent short-term memory
     │   ├── PROCEDURES.md             # Agent-specific permanent procedures
     │   ├── CANDIDATES.json           # Candidate procedures (learning)
-    │   └── daily/
-    │       └── YYYY-MM-DD.md         # Long-term daily notes
+    │   ├── daily/
+    │   │   ├── YYYY-MM-DD.md         # Long-term daily notes
+    │   │   └── YYYY-MM-DD.jsonl      # Structured journal entries
+    │   └── associations.jsonl         # Association graph edges
     └── sessions/
         └── {session_id}.jsonl        # Append-only session transcripts
 ```
@@ -69,6 +71,34 @@ Session reaches 40 messages
 ```
 
 **Key class:** `MemoryManager` in `memory/manager.py`
+
+### 2.5 JournalStore — Salience-Classified Entries
+
+Each agent has a structured journal that sits alongside the plain-text daily notes. Journal entries are stored as JSONL files (`daily/YYYY-MM-DD.jsonl`), one JSON object per line.
+
+**Entry schema:**
+```json
+{"id": "uuid", "timestamp": "ISO-8601", "content": "...", "salience": "normal", "tags": ["compaction"], "source_session": "sess-1", "associations": []}
+```
+
+**Salience levels** (with search weight multiplier):
+
+| Level | Weight | Typical Source |
+|-------|--------|----------------|
+| critical | 5.0x | Manual escalation |
+| high | 3.0x | User preferences, important decisions |
+| normal | 1.0x | Standard observations |
+| low | 0.5x | Routine tool outputs |
+| noise | 0.1x | Chitchat, greetings |
+
+**AssociationGraph** (`associations.jsonl`) links entries by shared tags, entities, or explicit references:
+```json
+{"source_id": "uuid-a", "target_id": "uuid-b", "relation_type": "related", "weight": 1.0}
+```
+
+Backward compatibility: `MemoryManager.append_journal_entry()` also appends a human-readable line to the `.md` daily note, so existing daily note consumers continue to work.
+
+**Key classes:** `SalienceLevel`, `JournalEntry`, `JournalStore`, `AssociationGraph` in `memory/journal.py`
 
 ### 3. Procedure System — Learning from Patterns
 
@@ -152,6 +182,8 @@ agents:
   procedure_min_frequency: 3   # Min observations before extraction
   memory_max_sections: 50      # Max ## sections in MEMORY.md
   context_messages: 12         # Recent messages in prompt context
+  journal_salience_default: normal  # Default salience for new entries
+  journal_association_decay_days: 90  # Days before stale associations
 ```
 
 Environment overrides: `G3LOBSTER_AGENTS_COMPACT_THRESHOLD=60`, etc.

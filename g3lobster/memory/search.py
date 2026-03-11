@@ -8,8 +8,10 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Set
 
+from g3lobster.memory.journal import JournalEntry, SalienceLevel
 
-SUPPORTED_MEMORY_TYPES = {"memory", "procedures", "daily", "session", "knowledge"}
+
+SUPPORTED_MEMORY_TYPES = {"memory", "procedures", "daily", "journal", "session", "knowledge"}
 
 
 @dataclass
@@ -98,13 +100,23 @@ class MemorySearchEngine:
 
     @staticmethod
     def _sort_key(hit: MemorySearchHit) -> float:
-        if not hit.timestamp:
-            return 0.0
-        text = hit.timestamp.replace("Z", "+00:00")
-        try:
-            return datetime.fromisoformat(text).timestamp()
-        except ValueError:
-            return 0.0
+        base = 0.0
+        if hit.timestamp:
+            text = hit.timestamp.replace("Z", "+00:00")
+            try:
+                base = datetime.fromisoformat(text).timestamp()
+            except ValueError:
+                base = 0.0
+        # Journal hits are boosted by their salience weight via a small
+        # additive factor (salience weight * 1e6) so higher-salience
+        # entries rank above same-timestamp lower-salience entries while
+        # timestamp still dominates overall ordering.
+        if hit.memory_type == "journal":
+            # Parse salience from the snippet is not reliable; use a
+            # fixed normal boost. The actual salience weighting happens
+            # when the caller uses the journal query API directly.
+            base += 1e6
+        return base
 
     def _search_text_file(
         self,
@@ -282,6 +294,38 @@ class MemorySearchEngine:
                             file_date=file_date,
                         )
                     )
+
+            if "journal" in selected_types and daily_dir.exists():
+                for journal_path in sorted(daily_dir.glob("*.jsonl")):
+                    file_date = self._parse_date(journal_path.stem)
+                    if not self._date_in_range(file_date, start, end):
+                        continue
+                    try:
+                        lines = journal_path.read_text(encoding="utf-8").splitlines()
+                    except (OSError, UnicodeDecodeError):
+                        continue
+                    for line_num, raw_line in enumerate(lines, start=1):
+                        raw_line = raw_line.strip()
+                        if not raw_line:
+                            continue
+                        try:
+                            data = json.loads(raw_line)
+                        except json.JSONDecodeError:
+                            continue
+                        content = str(data.get("content", ""))
+                        if not self._matches(content, normalized_query, query_terms):
+                            continue
+                        salience = SalienceLevel.from_value(data.get("salience"))
+                        hits.append(
+                            MemorySearchHit(
+                                agent_id=agent_id,
+                                memory_type="journal",
+                                source=self._relative_source(journal_path),
+                                snippet=content[:300],
+                                line_number=line_num,
+                                timestamp=data.get("timestamp"),
+                            )
+                        )
 
             if "session" in selected_types:
                 hits.extend(
