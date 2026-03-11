@@ -217,3 +217,32 @@ export function listMcpServers() {
 export function toggleDebugMode() {
   return request("/setup/debug-mode", { method: "POST" });
 }
+
+export function exportAgentUrl(agentId) {
+  return `/agents/${encodeURIComponent(agentId)}/export`;
+}
+
+export async function importAgent(file, overwrite = false) {
+  const form = new FormData();
+  form.append("archive", file);
+  const qs = overwrite ? "?overwrite=true" : "";
+  const response = await fetch(`/agents/import${qs}`, {
+    method: "POST",
+    body: form,
+  });
+  if (!response.ok) {
+    let detail = `${response.status} ${response.statusText}`;
+    try {
+      const payload = await response.json();
+      if (payload?.detail) {
+        detail = typeof payload.detail === "string" ? payload.detail : JSON.stringify(payload.detail);
+      }
+    } catch (_err) {
+      // fallback detail
+    }
+    const err = new Error(detail);
+    err.status = response.status;
+    throw err;
+  }
+  return response.json();
+}

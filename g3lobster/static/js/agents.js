@@ -3,6 +3,7 @@ import {
   createCronTask,
   deleteAgent,
   deleteCronTask,
+  exportAgentUrl,
   getAgent,
   getAgentMemory,
   getAgentProcedures,
@@ -10,6 +11,7 @@ import {
   getGlobalProcedures,
   getGlobalUserMemory,
   getSetupStatus,
+  importAgent,
   linkAgentBot,
   listAgentSessions,
   listAgents,
@@ -320,6 +322,7 @@ export async function render(root, { onSetupChange }) {
           <button class="btn btn-secondary" data-action="stop" data-agent-id="${escapeHtml(agent.id)}" ${actionDisabled}>${pending === "stop" ? "Stopping..." : "Stop"}</button>
           <button class="btn btn-secondary" data-action="restart" data-agent-id="${escapeHtml(agent.id)}" ${actionDisabled}>${pending === "restart" ? "Restarting..." : "Restart"}</button>
           <button class="btn btn-secondary" data-action="test" data-agent-id="${escapeHtml(agent.id)}" ${actionDisabled}>Send Test</button>
+          <a class="btn btn-secondary" href="${exportAgentUrl(agent.id)}" download="${escapeHtml(agent.id)}.g3agent">Export</a>
           <button class="btn btn-danger" data-action="delete" data-agent-id="${escapeHtml(agent.id)}" ${actionDisabled}>Delete</button>
         </div>
       </section>
@@ -621,6 +624,8 @@ export async function render(root, { onSetupChange }) {
             </div>
             <div class="actions" style="grid-column: 1 / -1;">
               <button class="btn btn-primary" type="submit">Create Agent</button>
+              <input type="file" id="import-agent-file" accept=".g3agent,.zip" style="display:none" />
+              <button class="btn btn-secondary" type="button" data-action="import-agent">Import Agent</button>
             </div>
           </form>
         </div>
@@ -867,6 +872,29 @@ export async function render(root, { onSetupChange }) {
               await linkAgentBot(agentId, botUserId);
               setNotice("success", `Linked bot id for ${agentId}.`);
             }
+          } else if (action === "import-agent") {
+            const fileInput = root.querySelector("#import-agent-file");
+            if (!fileInput) return;
+            fileInput.value = "";
+            fileInput.onchange = async () => {
+              const file = fileInput.files?.[0];
+              if (!file) return;
+              try {
+                const result = await importAgent(file, false);
+                activeAgentId = result.agent_id;
+                setNotice("success", `Imported agent "${result.agent_id}" successfully.`);
+              } catch (err) {
+                if (err.status === 409) {
+                  setNotice("error", `Agent already exists. Re-upload with overwrite or rename the agent. (${err.message})`);
+                } else {
+                  const message = err instanceof Error ? err.message : String(err);
+                  setNotice("error", `Import failed: ${message}`);
+                }
+              }
+              queueRerender();
+            };
+            fileInput.click();
+            return;
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
