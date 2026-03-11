@@ -168,9 +168,9 @@ async def test_timer_reset_on_new_message():
     debouncer = MessageDebouncer(window_s=0.1, flush_callback=on_flush)
     key = ("space", "user", "thread")
     debouncer.add(key, "msg1", {}, None, "thread", "agent")
-    await asyncio.sleep(0.06)  # 60ms — not yet fired
+    await asyncio.sleep(0.06)  # 60ms -- not yet fired
     debouncer.add(key, "msg2", {}, None, "thread", "agent")  # resets timer
-    await asyncio.sleep(0.06)  # 60ms from msg2 — still not fired
+    await asyncio.sleep(0.06)  # 60ms from msg2 -- still not fired
     assert len(flushed) == 0
     await asyncio.sleep(0.1)  # now it should have fired
     assert len(flushed) == 1
@@ -245,7 +245,7 @@ async def test_different_keys_flush_independently():
 
 
 # ---------------------------------------------------------------------------
-# Integration tests — debouncer wired through ChatBridge
+# Integration tests -- debouncer wired through ChatBridge
 # ---------------------------------------------------------------------------
 
 
@@ -281,7 +281,7 @@ async def test_bridge_debounce_merges_rapid_messages(tmp_path) -> None:
     await bridge.handle_message(_make_message("how are you"))
     await bridge.handle_message(_make_message("what's new"))
 
-    # Nothing dispatched yet — still debouncing
+    # Nothing dispatched yet -- still debouncing
     assert len(service.messages_api.created) == 0
 
     # Wait for debounce to flush
@@ -329,7 +329,7 @@ async def test_bridge_slash_command_bypasses_debounce(tmp_path) -> None:
 
     await bridge.handle_message(_make_message("/help"))
 
-    # Command should be handled immediately — no debounce wait
+    # Command should be handled immediately -- no debounce wait
     assert len(service.messages_api.created) == 1
     assert "Available commands" in service.messages_api.created[0]["body"]["text"]
 

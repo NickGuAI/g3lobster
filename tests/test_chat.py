@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import pathlib
 
 import pytest
@@ -177,6 +178,7 @@ async def test_chat_bridge_routes_to_named_agent_by_bot_user_id(tmp_path) -> Non
     }
 
     await bridge.handle_message(message)
+    await asyncio.sleep(0.05)
 
     assert len(service.messages_api.created) == 1
     assert service.messages_api.created[0]["body"]["text"] == "🦀 _Luna is thinking..._"
@@ -237,7 +239,9 @@ async def test_chat_bridge_session_key_is_space_and_user(tmp_path) -> None:
     msg2 = {**base_message, "text": "Hello from thread B", "thread": {"name": "spaces/test/threads/bbb"}}
 
     await bridge.handle_message(msg1)
+    await asyncio.sleep(0.05)
     await bridge.handle_message(msg2)
+    await asyncio.sleep(0.05)
 
     assert len(captured_session_ids) == 2
     assert captured_session_ids[0] != captured_session_ids[1]
@@ -287,6 +291,7 @@ async def test_chat_bridge_ignores_unlinked_mentions(tmp_path) -> None:
     }
 
     await bridge.handle_message(message)
+    await asyncio.sleep(0.05)
 
     assert service.messages_api.created == []
 
@@ -333,6 +338,7 @@ async def test_debug_mode_shows_error_detail_in_chat(tmp_path) -> None:
     }
 
     await bridge.handle_message(message)
+    await asyncio.sleep(0.05)
 
     assert len(service.messages_api.updated) == 1
     updated_text = service.messages_api.updated[0]["body"]["text"]
@@ -383,6 +389,7 @@ async def test_debug_off_hides_error_code_block(tmp_path) -> None:
     }
 
     await bridge.handle_message(message)
+    await asyncio.sleep(0.05)
 
     assert len(service.messages_api.updated) == 1
     updated_text = service.messages_api.updated[0]["body"]["text"]
@@ -431,6 +438,7 @@ async def test_chat_bridge_updates_original_message_for_tool_use(tmp_path) -> No
     }
 
     await bridge.handle_message(message)
+    await asyncio.sleep(0.05)
 
     assert len(service.messages_api.created) == 1
     assert service.messages_api.created[0]["body"]["text"] == "🦀 _Luna is thinking..._"
@@ -501,6 +509,7 @@ async def test_chat_bridge_uses_task_error_when_stream_ends_silently(tmp_path) -
     }
 
     await bridge.handle_message(message)
+    await asyncio.sleep(0.05)
 
     assert len(service.messages_api.created) == 1
     assert len(service.messages_api.updated) == 1
