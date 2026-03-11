@@ -13,7 +13,6 @@ import {
   getMetricsSummary,
   getSetupStatus,
   importAgent,
-  linkAgentBot,
   listAgentSessions,
   listAgents,
   listMcpServers,
@@ -396,10 +395,6 @@ export async function render(root, { onSetupChange }) {
         </div>
         <div class="form-grid">
           <div class="field">
-            <label>Bot User ID</label>
-            <input name="bot_user_id" value="${escapeHtml(detail.bot_user_id || "")}" />
-          </div>
-          <div class="field">
             <label>Space ID</label>
             <input name="space_id" value="${escapeHtml(detail.space_id || "")}" placeholder="spaces/AAAA..." />
           </div>
@@ -424,7 +419,6 @@ export async function render(root, { onSetupChange }) {
         </div>
         <div class="actions">
           <button class="btn btn-primary" type="submit">Save Persona</button>
-          <button class="btn btn-secondary" type="button" data-action="link-bot" data-agent-id="${escapeHtml(agent.id)}">Link Bot ID</button>
         </div>
       </form>
     `;
@@ -1069,15 +1063,6 @@ export async function render(root, { onSetupChange }) {
           } else if (action === "clear-thinking") {
             thinkingEvents[agentId] = [];
             setNotice("info", "Cleared thinking events.");
-          } else if (action === "link-bot") {
-            const input = formFieldForAgent(root, agentId, "bot_user_id");
-            const botUserId = input?.value?.trim();
-            if (!botUserId) {
-              setNotice("error", "Bot user id is empty.");
-            } else {
-              await linkAgentBot(agentId, botUserId);
-              setNotice("success", `Linked bot id for ${agentId}.`);
-            }
           } else if (action === "import-agent") {
             const fileInput = root.querySelector("#import-agent-file");
             if (!fileInput) return;
@@ -1147,7 +1132,6 @@ export async function render(root, { onSetupChange }) {
             soul: String(data.get("soul") || ""),
             mcp_servers: mcpServersValue,
             enabled: String(data.get("enabled") || "true") === "true",
-            bot_user_id: String(data.get("bot_user_id") || "").trim() || null,
             dm_allowlist: parseDmAllowlist(data.get("dm_allowlist")),
             space_id: String(data.get("space_id") || "").trim() || null,
             bridge_enabled: String(data.get("bridge_enabled") || "false") === "true",
