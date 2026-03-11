@@ -554,7 +554,147 @@ export async function render(root, { onSetupChange }) {
     `;
   }
 
+  // --- Live Thinking ---
+  let thinkingEventSource = null;
+  let thinkingAgentId = null;
+  const thinkingEvents = {};
+
+  function destroyThinkingStream() {
+    if (thinkingEventSource) {
+      thinkingEventSource.close();
+      thinkingEventSource = null;
+      thinkingAgentId = null;
+    }
+  }
+
+  function connectThinkingStream(agentId) {
+    if (thinkingAgentId === agentId && thinkingEventSource) {
+      return;
+    }
+    destroyThinkingStream();
+    thinkingAgentId = agentId;
+    if (!thinkingEvents[agentId]) {
+      thinkingEvents[agentId] = [];
+    }
+
+    const es = new EventSource(`/agents/${encodeURIComponent(agentId)}/stream`);
+    thinkingEventSource = es;
+
+    es.onmessage = (msg) => {
+      try {
+        const event = JSON.parse(msg.data);
+        thinkingEvents[agentId].push(event);
+        // Keep max 200 events
+        if (thinkingEvents[agentId].length > 200) {
+          thinkingEvents[agentId] = thinkingEvents[agentId].slice(-150);
+        }
+        appendThinkingEvent(event);
+      } catch (_err) {
+        // ignore parse errors
+      }
+    };
+
+    es.onerror = () => {
+      updateConnectionPill(false);
+    };
+
+    es.onopen = () => {
+      updateConnectionPill(true);
+    };
+  }
+
+  function updateConnectionPill(connected) {
+    const pill = root.querySelector(".thinking-connection-pill");
+    if (pill) {
+      pill.textContent = connected ? "connected" : "disconnected";
+      pill.className = `thinking-connection-pill status-pill ${connected ? "ok" : "error"}`;
+    }
+  }
+
+  function renderThinkingEventHtml(event) {
+    const type = event.type || "unknown";
+    if (type === "user_input") {
+      const sender = escapeHtml(event.sender || "user");
+      const text = escapeHtml(event.text || "");
+      return `<div class="thinking-divider"><hr /><span>new message from ${sender}</span></div>
+              <div class="thinking-block thinking-user"><span class="thinking-label">user</span> ${text}</div>`;
+    }
+    if (type === "message") {
+      const content = escapeHtml(event.text || event.data?.content || "");
+      if (!content) return "";
+      return `<div class="thinking-block thinking-thought"><span class="thinking-label">thinking</span> ${content}</div>`;
+    }
+    if (type === "tool_use") {
+      const toolName = escapeHtml(event.data?.tool_name || event.data?.toolName || event.data?.name || "tool");
+      return `<div class="thinking-block thinking-tool"><span class="thinking-label">tool</span> <span class="tool-name">${toolName}</span> <span class="thinking-status breathing-dot">running</span></div>`;
+    }
+    if (type === "tool_result") {
+      const toolName = escapeHtml(event.data?.tool_name || event.data?.toolName || event.data?.name || "tool");
+      return `<div class="thinking-block thinking-tool done"><span class="thinking-label">tool</span> <span class="tool-name">${toolName}</span> <span class="thinking-status done-check">done</span></div>`;
+    }
+    if (type === "response") {
+      const text = event.text || "";
+      const rendered = typeof window.marked !== "undefined" && typeof window.DOMPurify !== "undefined"
+        ? window.DOMPurify.sanitize(window.marked.parse(String(text)))
+        : `<p>${escapeHtml(text)}</p>`;
+      return `<div class="thinking-block thinking-response"><span class="thinking-label">response</span> <div class="thinking-response-body">${rendered}</div></div>`;
+    }
+    if (type === "error") {
+      const msg = escapeHtml(event.data?.message || event.text || "error");
+      return `<div class="thinking-block thinking-error"><span class="thinking-label">error</span> ${msg}</div>`;
+    }
+    return "";
+  }
+
+  function appendThinkingEvent(event) {
+    const container = root.querySelector(".thinking-stream");
+    if (!container) return;
+    const html = renderThinkingEventHtml(event);
+    if (!html) return;
+
+    // If this is a tool_result, try to update the last matching tool_use block
+    if (event.type === "tool_result") {
+      const toolBlocks = container.querySelectorAll(".thinking-tool:not(.done)");
+      if (toolBlocks.length > 0) {
+        const last = toolBlocks[toolBlocks.length - 1];
+        last.classList.add("done");
+        const statusEl = last.querySelector(".thinking-status");
+        if (statusEl) {
+          statusEl.className = "thinking-status done-check";
+          statusEl.textContent = "done";
+        }
+        return;
+      }
+    }
+
+    const div = document.createElement("div");
+    div.innerHTML = html;
+    while (div.firstChild) {
+      container.appendChild(div.firstChild);
+    }
+    container.scrollTop = container.scrollHeight;
+  }
+
+  function thinkingTabMarkup(agent) {
+    const events = thinkingEvents[agent.id] || [];
+    const eventsHtml = events.map(renderThinkingEventHtml).filter(Boolean).join("");
+
+    return `
+      <div class="thinking-panel-header">
+        <span class="thinking-title">LIVE THINKING: ${escapeHtml(agent.name)}</span>
+        <span class="thinking-connection-pill status-pill ok">connected</span>
+      </div>
+      <div class="thinking-stream">${eventsHtml || '<p class="empty">Waiting for events...</p>'}</div>
+      <div class="actions">
+        <button class="btn btn-secondary" data-action="clear-thinking" data-agent-id="${escapeHtml(agent.id)}">Clear</button>
+      </div>
+    `;
+  }
+
   function tabPanelMarkup(agent, detail) {
+    if (activeTab === "thinking") {
+      return thinkingTabMarkup(agent);
+    }
     if (activeTab === "memory") {
       return memoryTabMarkup(agent);
     }
@@ -704,6 +844,7 @@ export async function render(root, { onSetupChange }) {
               <div class="step-panel">
                 <div class="agent-tabs">
                   ${tabButtonMarkup("persona", activeTab, "Persona")}
+                  ${tabButtonMarkup("thinking", activeTab, "Live Thinking")}
                   ${tabButtonMarkup("memory", activeTab, "Memory")}
                   ${tabButtonMarkup("procedures", activeTab, "Procedures")}
                   ${tabButtonMarkup("sessions", activeTab, "Sessions")}
@@ -759,6 +900,16 @@ export async function render(root, { onSetupChange }) {
       }
       queueRerender();
     });
+
+    // Connect SSE stream when Live Thinking tab is active
+    if (activeTab === "thinking" && activeAgent) {
+      connectThinkingStream(activeAgent.id);
+      // Scroll to bottom after render
+      const stream = root.querySelector(".thinking-stream");
+      if (stream) stream.scrollTop = stream.scrollHeight;
+    } else {
+      destroyThinkingStream();
+    }
 
     for (const tabButton of root.querySelectorAll("button[data-tab]")) {
       tabButton.addEventListener("click", () => {
@@ -915,6 +1066,9 @@ export async function render(root, { onSetupChange }) {
             await deleteCronTask(agentId, taskId);
             cronsCache[agentId] = await listCronTasks(agentId);
             setNotice("info", "Cron task deleted.");
+          } else if (action === "clear-thinking") {
+            thinkingEvents[agentId] = [];
+            setNotice("info", "Cleared thinking events.");
           } else if (action === "link-bot") {
             const input = formFieldForAgent(root, agentId, "bot_user_id");
             const botUserId = input?.value?.trim();
@@ -1070,6 +1224,7 @@ export async function render(root, { onSetupChange }) {
         window.clearInterval(metricsIntervalId);
         metricsIntervalId = null;
       }
+      destroyThinkingStream();
     },
   };
 }

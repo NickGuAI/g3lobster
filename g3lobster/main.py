@@ -14,6 +14,7 @@ import uvicorn
 
 from g3lobster.agents.registry import AgentRegistry
 from g3lobster.alerts import AlertManager
+from g3lobster.api.event_bus import EventBus
 from g3lobster.api.server import create_app
 from g3lobster.chat.bridge import ChatBridge
 from g3lobster.chat.bridge_manager import BridgeManager
@@ -188,6 +189,7 @@ def build_runtime(config: AppConfig):
         gemini_timeout_s=config.gemini.response_timeout_s or 45.0,
         gemini_cwd=config.gemini.workspace_dir,
     ) if config.cron.enabled else None
+    event_bus = EventBus()
 
     # Standup conductor — must be created before chat_bridge_factory so it can be captured.
     standup_store = StandupStore(config.agents.data_dir)
@@ -224,6 +226,7 @@ def build_runtime(config: AppConfig):
             agent_filter=agent_filter,
             concierge_agent_id=concierge_id,
             debounce_window_ms=config.chat.debounce_window_ms,
+            event_bus=event_bus,
         )
 
     bridge_manager = BridgeManager(
@@ -296,6 +299,7 @@ def build_runtime(config: AppConfig):
         control_plane,
         standup_store,
         standup_orchestrator,
+        event_bus,
     )
 
 
@@ -315,6 +319,7 @@ def build_app(config_path: Optional[str] = None):
         control_plane,
         standup_store,
         standup_orchestrator,
+        event_bus,
     ) = build_runtime(config)
     app = create_app(
         registry=registry,
@@ -331,6 +336,7 @@ def build_app(config_path: Optional[str] = None):
         control_plane=control_plane,
         standup_store=standup_store,
         standup_orchestrator=standup_orchestrator,
+        event_bus=event_bus,
     )
     return app, config
 
