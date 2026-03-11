@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+
+logger = logging.getLogger(__name__)
 
 from g3lobster.api.routes_agents import router as agents_router
 from g3lobster.api.routes_chat_events import router as chat_events_router
@@ -41,6 +46,8 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        if not runtime_config.auth.enabled or not runtime_config.auth.api_key:
+            logger.warning("API authentication is disabled. Set G3LOBSTER_AUTH_API_KEY to enable.")
         await registry.start_all()
         if app.state.cron_manager:
             app.state.cron_manager.start()
@@ -78,6 +85,23 @@ def create_app(
     app.state.email_bridge = email_bridge
     app.state.control_plane = control_plane
     app.state._stopped_memory_managers = {}
+
+    _AUTH_EXEMPT_PREFIXES = ("/health", "/setup", "/chat/events", "/docs", "/openapi.json", "/ui")
+
+    @app.middleware("http")
+    async def auth_middleware(request: Request, call_next):
+        path = request.url.path
+        if any(path == prefix or path.startswith(prefix + "/") or path == prefix for prefix in _AUTH_EXEMPT_PREFIXES):
+            return await call_next(request)
+        # Also exempt exact matches (e.g. /docs without trailing slash)
+        if not runtime_config.auth.enabled or not runtime_config.auth.api_key:
+            return await call_next(request)
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+            if hmac.compare_digest(token, runtime_config.auth.api_key):
+                return await call_next(request)
+        return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
 
     app.include_router(health_router)
     app.include_router(agents_router)

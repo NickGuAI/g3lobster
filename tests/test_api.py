@@ -542,6 +542,38 @@ def test_subagent_routes(tmp_path, monkeypatch):
         assert killed.json()["status"] == "canceled"
 
 
+def test_auth_middleware_rejects_unauthenticated(tmp_path):
+    app, _bridge_instances, _config_path = _build_test_app(tmp_path)
+    app.state.config.auth.enabled = True
+    app.state.config.auth.api_key = "test-secret-key"
+
+    with TestClient(app) as client:
+        # Protected route without auth header → 401
+        resp = client.get("/agents")
+        assert resp.status_code == 401
+        assert resp.json() == {"detail": "Unauthorized"}
+
+        # Wrong key → 401
+        resp = client.get("/agents", headers={"Authorization": "Bearer wrong-key"})
+        assert resp.status_code == 401
+
+        # Correct key → 200
+        resp = client.get("/agents", headers={"Authorization": "Bearer test-secret-key"})
+        assert resp.status_code == 200
+
+        # Exempt routes work without auth
+        assert client.get("/health").status_code == 200
+        assert client.get("/setup/status").status_code == 200
+
+
+def test_auth_middleware_passthrough_when_disabled(tmp_path):
+    app, _bridge_instances, _config_path = _build_test_app(tmp_path)
+    # auth.enabled defaults to False — all routes accessible without key
+    with TestClient(app) as client:
+        assert client.get("/agents").status_code == 200
+        assert client.get("/health").status_code == 200
+
+
 def test_memory_search_and_tag_routes(tmp_path):
     app, _bridge_instances, _config_path = _build_test_app(tmp_path)
 
