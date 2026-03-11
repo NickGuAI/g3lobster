@@ -61,6 +61,7 @@ class ChatConfig:
     concierge_enabled: bool = False
     concierge_agent_id: str = "concierge"
     debounce_window_ms: int = 2000
+    stream_update_interval_s: float = 1.0
 
 
 @dataclass
@@ -300,6 +301,7 @@ def save_chat_config(chat: ChatConfig, config_path: str) -> None:
         "poll_interval_s": chat.poll_interval_s,
         "concierge_enabled": chat.concierge_enabled,
         "concierge_agent_id": chat.concierge_agent_id,
+        "stream_update_interval_s": chat.stream_update_interval_s,
     }
 
     path.parent.mkdir(parents=True, exist_ok=True)

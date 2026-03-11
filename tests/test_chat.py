@@ -530,6 +530,28 @@ class FakeMultiRegistry:
         return agent_id in self._runtimes
 
 
+class FakeStreamingRuntime:
+    """Yields multiple MESSAGE events to test streaming throttle logic."""
+
+    def __init__(self, persona):
+        self.persona = persona
+
+    async def assign_stream(self, task):
+        from g3lobster.cli.streaming import StreamEvent, StreamEventType
+
+        task.status = TaskStatus.COMPLETED
+        # Emit several MESSAGE events — all arrive instantly (no real delay)
+        for chunk in ["Hello ", "world, ", "this ", "is ", "streaming!"]:
+            yield StreamEvent(
+                event_type=StreamEventType.MESSAGE,
+                data={"role": "assistant", "content": chunk, "delta": True},
+            )
+        yield StreamEvent(
+            event_type=StreamEventType.RESULT,
+            data={"status": "success"},
+        )
+
+
 @pytest.mark.asyncio
 async def test_unmentioned_message_routes_to_concierge(tmp_path) -> None:
     """When concierge is configured and no @-mention, route to concierge agent."""
@@ -732,3 +754,114 @@ def test_save_chat_config_persists_concierge_fields(tmp_path) -> None:
     assert chat["concierge_agent_id"] == "my-concierge"
     assert chat["enabled"] is True
     assert chat["space_id"] == "spaces/abc"
+
+
+@pytest.mark.asyncio
+async def test_streaming_text_updates_with_throttle(tmp_path) -> None:
+    """MESSAGE events cause intermediate updates, throttled by interval."""
+    data_dir = str(tmp_path / "data")
+    persona = save_persona(
+        data_dir,
+        AgentPersona(
+            id="luna",
+            name="Luna",
+            emoji="🦀",
+            soul="",
+            model="gemini",
+            mcp_servers=["*"],
+            bot_user_id="users/999",
+        ),
+    )
+
+    service = FakeService()
+    registry = FakeRegistry(data_dir, persona)
+    registry.runtime = FakeStreamingRuntime(persona)
+
+    # Use a very small interval so the first MESSAGE triggers an update
+    bridge = ChatBridge(
+        registry=registry,
+        space_id="spaces/test",
+        service=service,
+        spaces_config=str(tmp_path / "spaces.json"),
+        stream_update_interval_s=0.0,
+        debounce_window_ms=0,
+    )
+
+    message = {
+        "text": "Stream me",
+        "sender": {"type": "HUMAN", "name": "users/123", "displayName": "Ada"},
+        "thread": {"name": "spaces/test/threads/abc"},
+        "annotations": [
+            {
+                "type": "USER_MENTION",
+                "userMention": {"user": {"type": "BOT", "name": "users/999"}},
+            }
+        ],
+    }
+
+    await bridge.handle_message(message)
+
+    # Expect: 1 create (thinking) + N intermediate updates + 1 final update
+    assert len(service.messages_api.created) == 1
+    assert service.messages_api.created[0]["body"]["text"] == "🦀 _Luna is thinking..._"
+
+    # At least one intermediate streaming update before the final one
+    assert len(service.messages_api.updated) >= 2
+
+    # The final update should contain the full accumulated text
+    final_text = service.messages_api.updated[-1]["body"]["text"]
+    assert final_text == "🦀 Luna: Hello world, this is streaming!"
+
+    # Intermediate updates should show partial accumulated text
+    first_update_text = service.messages_api.updated[0]["body"]["text"]
+    assert first_update_text.startswith("🦀 Luna: Hello")
+
+
+@pytest.mark.asyncio
+async def test_streaming_throttle_limits_updates(tmp_path) -> None:
+    """With a large interval, rapid MESSAGE events produce fewer intermediate updates."""
+    data_dir = str(tmp_path / "data")
+    persona = save_persona(
+        data_dir,
+        AgentPersona(
+            id="luna",
+            name="Luna",
+            emoji="🦀",
+            soul="",
+            model="gemini",
+            mcp_servers=["*"],
+            bot_user_id="users/999",
+        ),
+    )
+
+    service = FakeService()
+    registry = FakeRegistry(data_dir, persona)
+    registry.runtime = FakeStreamingRuntime(persona)
+
+    # Use a very large interval so no intermediate updates fire
+    bridge = ChatBridge(
+        registry=registry,
+        space_id="spaces/test",
+        service=service,
+        spaces_config=str(tmp_path / "spaces.json"),
+        stream_update_interval_s=9999.0,
+        debounce_window_ms=0,
+    )
+
+    message = {
+        "text": "Stream throttled",
+        "sender": {"type": "HUMAN", "name": "users/123", "displayName": "Ada"},
+        "thread": {"name": "spaces/test/threads/abc"},
+        "annotations": [
+            {
+                "type": "USER_MENTION",
+                "userMention": {"user": {"type": "BOT", "name": "users/999"}},
+            }
+        ],
+    }
+
+    await bridge.handle_message(message)
+
+    # Only the final update — no intermediate streaming updates
+    assert len(service.messages_api.updated) == 1
+    assert service.messages_api.updated[0]["body"]["text"] == "🦀 Luna: Hello world, this is streaming!"

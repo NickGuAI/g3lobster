@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, Optional, Set
@@ -89,9 +90,11 @@ class ChatBridge:
         agent_filter: Optional[Set[str]] = None,
         concierge_agent_id: Optional[str] = None,
         debounce_window_ms: int = 2000,
+        stream_update_interval_s: float = 1.0,
     ):
         self.registry = registry
         self.poll_interval_s = poll_interval_s
+        self.stream_update_interval_s = stream_update_interval_s
         self.service = service
         self.space_name = space_name
         self.spaces_config = Path(spaces_config or (Path.home() / ".gemini" / "chat_bridge_spaces.json"))
@@ -406,6 +409,8 @@ class ChatBridge:
         thinking_name: Optional[str] = thinking_msg.get("name") if thinking_msg else None
         last_progress_text = f"{persona.emoji} _{persona.name} is thinking..._"
         stream_events = []
+        accumulated_text = ""
+        last_update_time = time.monotonic()
 
         final_result: Optional[str] = None
         final_error: Optional[str] = None
@@ -418,6 +423,16 @@ class ChatBridge:
                 if thinking_name and progress_text != last_progress_text:
                     await self.update_message(thinking_name, progress_text)
                     last_progress_text = progress_text
+                    last_update_time = time.monotonic()
+            elif event.event_type == StreamEventType.MESSAGE:
+                if event.text:
+                    accumulated_text += event.text
+                    now = time.monotonic()
+                    if thinking_name and now - last_update_time >= self.stream_update_interval_s:
+                        progress_text = f"{persona.emoji} {persona.name}: {accumulated_text}"
+                        await self.update_message(thinking_name, progress_text)
+                        last_progress_text = progress_text
+                        last_update_time = now
             elif event.event_type == StreamEventType.RESULT:
                 if event.data.get("status") == "error":
                     error_data = event.data.get("error") or {}
@@ -432,7 +447,7 @@ class ChatBridge:
         if not final_error and task.status == TaskStatus.FAILED:
             final_error = task.error or "unknown error"
         if not final_result:
-            final_result = (task.result or accumulate_text(stream_events)).strip()
+            final_result = (task.result or accumulated_text or accumulate_text(stream_events)).strip()
 
         # Attribution: if concierge delegated, use the specialist's persona
         reply_persona = persona
