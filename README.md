@@ -11,6 +11,40 @@ Google Chat-first multi-agent service with named personas, layered memory, and F
 - Guided setup wizard at `/ui` for OAuth credentials, space setup, first agent, and launch
 - Agent lifecycle APIs (`start`, `stop`, `restart`, memory/session inspection)
 
+## Architecture
+
+![g3lobster architecture](docs/architecture.png)
+
+All 8 subsystems and their data flows:
+
+| Colour | Subsystem | Key files |
+|--------|-----------|-----------|
+| 🔵 Blue | Google Chat Bridge — polling + mention routing | `g3lobster/chat/bridge.py` |
+| 🟢 Green | Agent Registry — named personas, lifecycle, FIFO queue | `g3lobster/agents/registry.py` |
+| 🟣 Purple | Memory v2 — sessions, compaction, procedures, global memory | `g3lobster/memory/` |
+| 🟠 Orange | Inter-Agent Delegation — MCP stdio server | `g3lobster/mcp/delegation_server.py` |
+| 🔷 Cyan | Gemini CLI Backend — subprocess per task, stream parser | `g3lobster/cli/process.py` |
+| 🟡 Yellow | Cron Scheduler — APScheduler + CronStore | `g3lobster/cron/manager.py` |
+| 🔴 Red | Health Monitor + Alerts — dead/stuck detection, multi-sink alerts | `g3lobster/alerts.py`, `g3lobster/pool/health.py` |
+| ⚫ Grey | Setup Wizard — web UI + REST API | `g3lobster/api/routes_setup.py`, `g3lobster/static/` |
+
+<details>
+<summary>SVG version (scalable)</summary>
+
+![g3lobster architecture SVG](docs/architecture.svg)
+</details>
+
+<details>
+<summary>Mermaid source</summary>
+
+The diagram source lives at [`docs/architecture.mmd`](docs/architecture.mmd). Regenerate with:
+
+```bash
+npx @mermaid-js/mermaid-cli -i docs/architecture.mmd -o docs/architecture.png -s 3 -b white
+npx @mermaid-js/mermaid-cli -i docs/architecture.mmd -o docs/architecture.svg -b transparent
+```
+</details>
+
 ## Layout
 
 - `g3lobster/agents/persona.py`: persona data model + filesystem CRUD
