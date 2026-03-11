@@ -169,7 +169,7 @@ class ChatBridge:
             return known_spaces[cwd]
 
         display_name = self.space_name or f"Gemini: {Path(cwd).name}"
-        body = {"space": {"display_name": f"🤖 {display_name}", "space_type": "SPACE"}}
+        body = {"space": {"display_name": f"\U0001f916 {display_name}", "space_type": "SPACE"}}
         result = await asyncio.to_thread(self.service.spaces().setup(body=body).execute)
         space_id = result["name"]
 
@@ -227,7 +227,7 @@ class ChatBridge:
 
             bot_name = str(user.get("name", "")).strip()
             bot_display = str(user.get("displayName", "")).strip()
-            logger.info("Bot mentioned — user_id: %s  display: %s", bot_name, bot_display)
+            logger.info("Bot mentioned \u2014 user_id: %s  display: %s", bot_name, bot_display)
 
             candidates = {bot_name, bot_display}
             candidates = {item for item in candidates if item}
@@ -318,7 +318,7 @@ class ChatBridge:
         thread_id = message.get("thread", {}).get("name")
         user_id = sender.get("name") or "unknown"
 
-        # Memory query interception — before slash commands since these are
+        # Memory query interception -- before slash commands since these are
         # natural language, not /-prefixed.
         if detect_memory_query(text) is not None:
             card_payload = await build_memory_card(
@@ -334,7 +334,7 @@ class ChatBridge:
             )
             return
 
-        # Slash-command interception — handle immediately, bypass debounce.
+        # Slash-command interception -- handle immediately, bypass debounce.
         if detect_command(text) is not None and self.cron_store is not None:
             cmd_reply = await handle_command(text, target_id, self.cron_store, registry=self.registry, global_memory=getattr(self.registry, 'global_memory_manager', None))
             if cmd_reply is not None:
@@ -354,7 +354,7 @@ class ChatBridge:
                     )
                 return
 
-        # Standup response collection — collect response from tracked team members.
+        # Standup response collection -- collect response from tracked team members.
         if self.standup_orchestrator is not None:
             sender_name = sender.get("name") or ""
             if self.standup_orchestrator.is_standup_participant(target_id, sender_name):
@@ -379,7 +379,7 @@ class ChatBridge:
         thread_id: Optional[str],
         target_id: str,
     ) -> None:
-        """Flush callback — sends the (possibly merged) prompt to the agent."""
+        """Flush callback -- sends the (possibly merged) prompt to the agent."""
         runtime = self.registry.get_agent(target_id)
         if not runtime:
             started = await self.registry.start_agent(target_id)

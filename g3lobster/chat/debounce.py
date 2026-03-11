@@ -3,7 +3,7 @@
 Collects messages from the same (space, user, thread) tuple within a
 configurable time window, then flushes them as a single merged prompt.
 
-Slash commands bypass the debouncer entirely — they are detected and
+Slash commands bypass the debouncer entirely -- they are detected and
 handled before messages reach ``add()``.
 """
 
@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 
 # Key: (space_id, user_id, thread_id)
 DebounceKey = Tuple[str, str, str]
+
+# Maximum buffered messages per key to prevent unbounded memory growth.
+_MAX_BUFFER_SIZE = 50
 
 
 @dataclass
@@ -55,7 +58,7 @@ class MessageDebouncer:
         flush_callback: Optional[
             Callable[..., Coroutine[Any, Any, None]]
         ] = None,
-        max_buffer_per_key: int = 50,
+        max_buffer_per_key: int = _MAX_BUFFER_SIZE,
     ) -> None:
         if window_s < 0:
             raise ValueError("window_s must be >= 0")
@@ -96,7 +99,9 @@ class MessageDebouncer:
             burst.thread_id = thread_id
             burst.target_id = target_id
 
-        burst.texts.append(text)
+        # Cap buffer size to prevent unbounded growth.
+        if len(burst.texts) < self._max_buffer:
+            burst.texts.append(text)
 
         # Cancel existing timer and reset
         if burst.timer is not None:
@@ -118,7 +123,7 @@ class MessageDebouncer:
         burst.timer = loop.call_later(delay, self._fire, key)
 
     def _fire(self, key: DebounceKey) -> None:
-        """Timer callback — schedules the async flush as a task."""
+        """Timer callback -- schedules the async flush as a task."""
         burst = self._pending.pop(key, None)
         if burst is None:
             return
