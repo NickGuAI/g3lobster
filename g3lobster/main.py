@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Optional, Sequence
@@ -300,7 +301,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     app, config = build_app(args.config)
 
     host = args.host or config.server.host
-    port = args.port or config.server.port
+    port = args.port or int(os.environ.get("PORT", 0)) or config.server.port
 
     logger.info("Starting g3lobster on %s:%s", host, port)
     uvicorn.run(app, host=host, port=port, log_level=args.log_level)

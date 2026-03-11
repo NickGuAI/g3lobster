@@ -1,0 +1,51 @@
+# Cloud Run configuration overlay for g3lobster.
+#
+# Copy this to config.yaml when building the Cloud Run image, or mount it
+# as a volume / ConfigMap. Values here override the defaults for a
+# Cloud Run deployment.
+#
+# --- Data persistence strategy ---
+# Cloud Run containers are ephemeral. Agent data in ./data/ is lost on
+# restart. Options (pick one, configure via env vars or this file):
+#   1. Mount a GCS bucket via Cloud Storage FUSE (--add-volume / --add-volume-mount)
+#   2. Use a Cloud SQL or Firestore backend (requires app changes — follow-up)
+#   3. Accept ephemeral state for stateless/demo deployments
+#
+# --- Secrets / credentials strategy ---
+# Never bake secrets into the container image. Options:
+#   1. Google Secret Manager: mount secrets as env vars or files via
+#      --set-secrets flag on `gcloud run deploy`
+#   2. Workload Identity for Google API access (no credential files needed)
+#   3. For chat auth (credentials.json / tokens): mount from Secret Manager
+#      into the path specified by agents.data_dir + "/chat_auth/"
+#
+# --- Gemini CLI binary ---
+# The GeminiAgent spawns `gemini` as a subprocess. In the Cloud Run image
+# you must either:
+#   1. Install the gemini CLI in the Dockerfile (RUN npm i -g gemini-cli)
+#   2. Or disable agent features that require subprocess spawning and use
+#      API-based alternatives instead (future work).
+
+agents:
+  data_dir: /data  # mount a persistent volume here if needed
+  stuck_timeout_s: 120  # restart stuck agents in cloud
+
+gemini:
+  command: gemini
+  args:
+    - -y
+  workspace_dir: /app
+
+chat:
+  enabled: false  # disable unless credentials are mounted
+
+server:
+  host: 0.0.0.0
+  # port is controlled by $PORT env var injected by Cloud Run
+
+alerts:
+  enabled: false
+
+control_plane:
+  enabled: true
+  tmux_enabled: false  # tmux is unavailable in Cloud Run containers
