@@ -8,6 +8,7 @@ returned so the caller can fall through to normal AI routing.
 Supported commands
 ------------------
 ``/help``                              — list available commands
+``/status``                            — fleet dashboard (Cards v2)
 ``/cron list``                         — list scheduled tasks for this agent
 ``/cron add "<schedule>" "<task>"``    — create a cron task
 ``/cron delete <id>``                  — delete a cron task
@@ -19,9 +20,11 @@ from __future__ import annotations
 
 import re
 import shlex
-from typing import TYPE_CHECKING, Optional
+import time
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 if TYPE_CHECKING:
+    from g3lobster.agents.registry import AgentRegistry
     from g3lobster.cron.store import CronStore
 
 # Matches a leading slash command token anywhere after optional whitespace /
@@ -31,6 +34,7 @@ _SLASH_RE = re.compile(r"(?:^|\s)/([a-zA-Z][a-zA-Z0-9_-]*)(?:\s+(.*))?", re.DOTA
 HELP_TEXT = """\
 *Available commands*
 • `/help` — show this message
+• `/status` — fleet dashboard showing all agents at a glance
 • `/cron list` — list scheduled tasks for this agent
 • `/cron add "<schedule>" "<instruction>"` — create a new cron task
   _schedule_: standard 5-field cron expression, e.g. `0 9 * * *`
@@ -44,7 +48,7 @@ HELP_TEXT = """\
 def detect_command(text: str) -> Optional[tuple[str, str]]:
     """Return ``(command, rest)`` if text contains a ``/`` command, else ``None``.
 
-    Recognised commands: ``help``, ``cron``, ``sleep``.
+    Recognised commands: ``help``, ``status``, ``cron``, ``sleep``.
     """
     m = _SLASH_RE.search(text)
     if not m:
@@ -54,11 +58,16 @@ def detect_command(text: str) -> Optional[tuple[str, str]]:
     return cmd, rest
 
 
-def handle(text: str, agent_id: str, cron_store: "CronStore") -> Optional[str]:
+async def handle(
+    text: str,
+    agent_id: str,
+    cron_store: "CronStore",
+    registry: Optional["AgentRegistry"] = None,
+) -> Optional[Union[str, Dict[str, Any]]]:
     """Intercept and handle a slash command.
 
-    Returns a reply string when the command is handled, or ``None`` when
-    the message should be forwarded to the AI agent instead.
+    Returns a reply string (or Cards v2 dict for ``/status``) when the command
+    is handled, or ``None`` when the message should be forwarded to the AI agent.
     """
     result = detect_command(text)
     if result is None:
@@ -68,6 +77,9 @@ def handle(text: str, agent_id: str, cron_store: "CronStore") -> Optional[str]:
 
     if cmd == "help":
         return HELP_TEXT
+
+    if cmd == "status":
+        return await _handle_status(registry)
 
     if cmd == "cron":
         return _handle_cron(rest, agent_id, cron_store)
@@ -94,6 +106,116 @@ def _handle_sleep(args: str, agent_id: str) -> str:
         return "Maximum sleep duration is 86400 seconds (24 hours)."
     # Return a special marker that the bridge will detect and act on
     return f"__SLEEP__:{duration}:{agent_id}"
+
+
+# ---------------------------------------------------------------------------
+# /status — Fleet Dashboard Card
+# ---------------------------------------------------------------------------
+
+_STATE_PILLS: Dict[str, str] = {
+    "idle": "🟢 idle",
+    "busy": "🟡 busy",
+    "starting": "🟡 starting",
+    "stuck": "🔴 stuck",
+    "dead": "🔴 dead",
+    "stopped": "⚪ stopped",
+    "sleeping": "⚪ sleeping",
+}
+
+
+def _format_uptime(seconds: int) -> str:
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    hours = seconds // 3600
+    mins = (seconds % 3600) // 60
+    return f"{hours}h {mins}m" if mins else f"{hours}h"
+
+
+def _build_agent_section(agent: Dict[str, Any]) -> Dict[str, Any]:
+    """Build a Cards v2 section for a single agent."""
+    state = str(agent.get("state", "stopped"))
+    pill = _STATE_PILLS.get(state, f"⚫ {state}")
+    emoji = agent.get("emoji", "🤖")
+    name = agent.get("name", agent.get("id", "unknown"))
+    uptime = _format_uptime(int(agent.get("uptime_s", 0)))
+    task = agent.get("current_task") or "—"
+    pending = int(agent.get("pending_assignments", 0))
+
+    widgets: List[Dict[str, Any]] = [
+        {
+            "decoratedText": {
+                "topLabel": f"{emoji} {name}",
+                "text": pill,
+                "bottomLabel": f"Uptime: {uptime}  |  Task: {task}  |  Queued: {pending}",
+            }
+        },
+    ]
+    return {"widgets": widgets}
+
+
+def _build_status_card(
+    status_data: Dict[str, Any],
+    bridge_running: bool = False,
+) -> List[Dict[str, Any]]:
+    """Build a Cards v2 payload from registry.status() data."""
+    agents: List[Dict[str, Any]] = status_data.get("agents", [])
+
+    # Fleet summary counts
+    active = sum(1 for a in agents if a.get("state") not in ("stopped", "dead"))
+    stopped = sum(1 for a in agents if a.get("state") in ("stopped", "dead"))
+    bridge_label = "🟢 running" if bridge_running else "🔴 stopped"
+
+    sections: List[Dict[str, Any]] = [
+        {
+            "header": f"Fleet: {active} active · {stopped} stopped · {len(agents)} total",
+            "widgets": [
+                {
+                    "decoratedText": {
+                        "text": (
+                            f"Bridge: {bridge_label} &nbsp;|&nbsp; "
+                            f"<b>{active}</b> active &nbsp;|&nbsp; "
+                            f"<b>{stopped}</b> stopped &nbsp;|&nbsp; "
+                            f"<b>{len(agents)}</b> total"
+                        ),
+                    }
+                },
+            ],
+        },
+    ]
+
+    for agent in agents:
+        sections.append(_build_agent_section(agent))
+
+    return [
+        {
+            "cardId": "fleet-status",
+            "card": {
+                "header": {
+                    "title": "Fleet Status",
+                    "subtitle": f"{len(agents)} agents registered",
+                    "imageUrl": "",
+                    "imageType": "CIRCLE",
+                },
+                "sections": sections,
+            },
+        }
+    ]
+
+
+async def _handle_status(
+    registry: Optional["AgentRegistry"],
+) -> Union[str, Dict[str, Any]]:
+    """Handle /status — returns a Cards v2 dict or fallback text."""
+    if registry is None:
+        return "⚠️ Fleet status unavailable — registry not connected."
+
+    status_data = await registry.status()
+    bridge = getattr(registry, "chat_bridge", None)
+    bridge_running = bool(getattr(bridge, "is_running", False)) if bridge else False
+    cards_v2 = _build_status_card(status_data, bridge_running=bridge_running)
+    return {"cardsV2": cards_v2}
 
 
 def _handle_cron(args: str, agent_id: str, cron_store: "CronStore") -> str:
