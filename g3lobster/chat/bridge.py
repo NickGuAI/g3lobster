@@ -18,6 +18,7 @@ from g3lobster.chat.commands import detect_command, handle as handle_command
 from g3lobster.chat.debounce import DebounceKey, MessageDebouncer
 from g3lobster.chat.formatter import format_for_google_chat
 from g3lobster.chat.memory_inspector import build_memory_card, detect_memory_query
+from g3lobster.chat.thread_summarizer import ThreadSummarizer, detect_catchup_intent
 from g3lobster.cli.parser import get_content_id
 from g3lobster.cli.streaming import StreamEventType, accumulate_text
 from g3lobster.tasks.types import Task, TaskStatus
@@ -329,6 +330,13 @@ class ChatBridge:
         if detect_command(text) is not None and self.cron_store is not None:
             cmd_reply = await handle_command(text, target_id, self.cron_store, registry=self.registry, global_memory=getattr(self.registry, 'global_memory_manager', None))
             if cmd_reply is not None:
+                # Intercept __CATCHUP__ marker from /catchup command
+                if cmd_reply == "__CATCHUP__":
+                    user_id_safe = (sender.get("name") or "unknown")
+                    thread_id_safe = (thread_id or "no-thread").replace("/", "_")
+                    session_id = f"{self.space_id}__{user_id_safe}__{thread_id_safe}"
+                    await self._handle_catchup(persona, thread_id, session_id)
+                    return
                 if isinstance(cmd_reply, dict):
                     await self.send_message("", thread_id=thread_id, cards_v2=cmd_reply.get("cardsV2"))
                 else:
@@ -377,6 +385,12 @@ class ChatBridge:
         user_id = sender.get("name") or "unknown"
         thread_id_safe = (thread_id or "no-thread").replace("/", "_")
         session_id = f"{self.space_id}__{user_id}__{thread_id_safe}"
+
+        # Natural language catchup intent detection
+        if thread_id and detect_catchup_intent(merged_text):
+            await self._handle_catchup(persona, thread_id, session_id)
+            return
+
 
         task = Task(
             prompt=merged_text,
@@ -440,6 +454,68 @@ class ChatBridge:
                 reply_text += f"\n```\n{final_error}\n```"
         else:
             reply_text = f"{reply_persona.emoji} {reply_persona.name}: task finished with no output"
+
+        if thinking_name:
+            await self.update_message(thinking_name, reply_text)
+        else:
+            await self.send_message(reply_text, thread_id=thread_id)
+
+    async def _handle_catchup(
+        self,
+        persona,
+        thread_id: Optional[str],
+        session_id: str,
+    ) -> None:
+        """Handle a thread catch-up request via ThreadSummarizer."""
+        if not thread_id:
+            await self.send_message(
+                f"{persona.emoji} {persona.name}: Cannot summarize — no thread context.",
+                thread_id=thread_id,
+            )
+            return
+
+        thinking_msg = await self.send_message(
+            f"{persona.emoji} _{persona.name} is summarizing this thread..._",
+            thread_id=thread_id,
+        )
+        thinking_name: Optional[str] = thinking_msg.get("name") if thinking_msg else None
+
+        try:
+            # Build optional cross-reference engines
+            search_engine = None
+            data_dir = getattr(self.registry, "data_dir", None)
+            if data_dir:
+                from g3lobster.memory.search import MemorySearchEngine
+                search_engine = MemorySearchEngine(data_dir)
+
+            gmail_service = None
+            email_bridge = getattr(self.registry, "email_bridge", None)
+            if email_bridge and getattr(email_bridge, "service", None):
+                gmail_service = email_bridge.service
+
+            gemini_command = getattr(self.registry, "gemini_command", "gemini")
+            gemini_args = getattr(self.registry, "gemini_args", None)
+            gemini_timeout_s = getattr(self.registry, "gemini_timeout_s", 60.0)
+            gemini_cwd = getattr(self.registry, "gemini_cwd", None)
+
+            summarizer = ThreadSummarizer(
+                service=self.service,
+                search_engine=search_engine,
+                gmail_service=gmail_service,
+                gemini_command=gemini_command,
+                gemini_args=gemini_args,
+                gemini_timeout_s=gemini_timeout_s,
+                gemini_cwd=gemini_cwd,
+                agent_id=persona.id,
+            )
+
+            summary = await asyncio.to_thread(
+                summarizer.summarize, self.space_id, thread_id,
+            )
+            reply_text = f"{persona.emoji} {persona.name}:\n\n{summary}"
+        except Exception:
+            logger.exception("Thread summarization failed")
+            reply_text = f"{persona.emoji} {persona.name}: Sorry, thread summarization failed."
 
         if thinking_name:
             await self.update_message(thinking_name, reply_text)
