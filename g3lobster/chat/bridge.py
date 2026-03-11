@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 from g3lobster.chat.auth import get_authenticated_service
 from g3lobster.chat.commands import handle as handle_command
+from g3lobster.chat.formatter import format_for_google_chat
 from g3lobster.cli.parser import get_content_id
 from g3lobster.cli.streaming import StreamEventType, accumulate_text
 from g3lobster.tasks.types import Task, TaskStatus
@@ -343,7 +344,7 @@ class ChatBridge:
             await self.send_message(reply_text, thread_id=thread_id)
 
     async def send_message(self, text: str, thread_id: Optional[str] = None) -> dict:
-        body = {"text": text}
+        body = {"text": format_for_google_chat(text)}
         if thread_id:
             body["thread"] = {"name": thread_id}
 
@@ -353,7 +354,7 @@ class ChatBridge:
         return result or {}
 
     async def update_message(self, message_name: str, text: str) -> None:
-        body = {"text": text}
+        body = {"text": format_for_google_chat(text)}
         try:
             await asyncio.to_thread(
                 self.service.spaces()
