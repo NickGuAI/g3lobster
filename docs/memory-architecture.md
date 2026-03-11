@@ -140,7 +140,7 @@ Associations are created automatically when entries share tags (via `auto_associ
 
 **Key classes:** `SalienceLevel`, `JournalEntry`, `JournalStore`, `AssociationGraph` in `memory/journal.py`
 
-### 6. GlobalMemoryManager — Cross-Agent Memory
+### 5. GlobalMemoryManager — Cross-Agent Memory
 
 Manages shared state under `data/.memory/`:
 
@@ -155,7 +155,7 @@ User IDs are sanitized (`re.sub(r"[^a-zA-Z0-9_.-]", "_", user_id)`) to prevent p
 
 **Key class:** `GlobalMemoryManager` in `memory/global_memory.py`
 
-### 7. ContextBuilder — Prompt Assembly
+### 6. ContextBuilder — Prompt Assembly
 
 When an agent receives a task, `ContextBuilder.build()` assembles the full prompt from all memory layers:
 
