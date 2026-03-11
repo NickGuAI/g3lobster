@@ -289,6 +289,12 @@ class ChatBridge:
         if not target_id:
             return
 
+        # 👀 — message received
+        user_message_name = message.get("name")
+        reaction_name: Optional[str] = None
+        if user_message_name:
+            reaction_name = await self.add_reaction(user_message_name, "👀")
+
         runtime = self.registry.get_agent(target_id)
         if not runtime:
             started = await self.registry.start_agent(target_id)
@@ -412,12 +418,23 @@ class ChatBridge:
         accumulated_text = ""
         last_update_time = time.monotonic()
 
+        # 🤔 — agent is thinking
+        if user_message_name:
+            reaction_name = await self.transition_reaction(user_message_name, reaction_name, "🤔")
+
         final_result: Optional[str] = None
         final_error: Optional[str] = None
+        _first_tool_use = False
 
         async for event in runtime.assign_stream(task):
             stream_events.append(event)
             if event.event_type == StreamEventType.TOOL_USE:
+                # 🔥 — generating (first tool use only)
+                if not _first_tool_use and user_message_name:
+                    _first_tool_use = True
+                    reaction_name = await self.transition_reaction(
+                        user_message_name, reaction_name, "🔥"
+                    )
                 tool_name = _tool_name_for_display(event.data)
                 progress_text = _format_progress_text(persona, tool_name)
                 if thinking_name and progress_text != last_progress_text:
@@ -474,6 +491,11 @@ class ChatBridge:
             await self.update_message(thinking_name, reply_text)
         else:
             await self.send_message(reply_text, thread_id=thread_id)
+
+        # ✅ or ❌ — final status reaction
+        if user_message_name:
+            final_emoji = "❌" if (task.status == TaskStatus.FAILED or final_error) else "✅"
+            await self.transition_reaction(user_message_name, reaction_name, final_emoji)
 
     async def _handle_catchup(
         self,
@@ -536,6 +558,42 @@ class ChatBridge:
             await self.update_message(thinking_name, reply_text)
         else:
             await self.send_message(reply_text, thread_id=thread_id)
+
+    async def add_reaction(self, message_name: str, emoji: str) -> Optional[str]:
+        """Add an emoji reaction to a message. Returns the reaction name for later deletion."""
+        try:
+            result = await asyncio.to_thread(
+                self.service.spaces()
+                .messages()
+                .reactions()
+                .create(parent=message_name, body={"emoji": {"unicode": emoji}})
+                .execute
+            )
+            return result.get("name") if result else None
+        except Exception:
+            logger.debug("Failed to add reaction %s to %s", emoji, message_name, exc_info=True)
+            return None
+
+    async def remove_reaction(self, reaction_name: str) -> None:
+        """Remove a reaction by its resource name."""
+        try:
+            await asyncio.to_thread(
+                self.service.spaces()
+                .messages()
+                .reactions()
+                .delete(name=reaction_name)
+                .execute
+            )
+        except Exception:
+            logger.debug("Failed to remove reaction %s", reaction_name, exc_info=True)
+
+    async def transition_reaction(
+        self, message_name: str, old_reaction_name: Optional[str], new_emoji: str
+    ) -> Optional[str]:
+        """Remove old reaction (if any) and add a new one. Returns the new reaction name."""
+        if old_reaction_name:
+            await self.remove_reaction(old_reaction_name)
+        return await self.add_reaction(message_name, new_emoji)
 
     async def send_message(
         self,
