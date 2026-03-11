@@ -33,6 +33,8 @@ class AgentsConfig:
     consolidation_schedule: str = "0 2 * * *"
     consolidation_days_window: int = 7
     consolidation_stale_days: int = 30
+    journal_salience_default: str = "normal"
+    journal_association_decay_days: int = 90
 
 
 @dataclass

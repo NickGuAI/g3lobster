@@ -12,6 +12,7 @@ data/
 │   ├── users/
 │   │   └── {user_id}/
 │   │       └── USER.md               # Per-user preferences
+│   ├── associations.jsonl             # Global association graph edges
 │   └── knowledge/
 │       └── *.md                      # Custom knowledge files
 │
@@ -105,52 +106,55 @@ Steps:
 
 **Key classes:** `Procedure`, `ProcedureStore`, `CandidateStore` in `memory/procedures.py`
 
-### 4. Journal System — Salience-Classified Entries with Association Graph
+### 4. Journal Layer — Structured Daily Entries
 
-The journal layer upgrades daily notes from flat markdown to structured, salience-classified entries stored as JSONL alongside the existing `.md` files.
+Journal entries add structured JSONL records alongside the existing daily markdown notes. Each entry carries a salience classification that determines its weight during search and retrieval.
 
-**Salience Levels:**
+**SalienceLevel** values: `critical`, `high`, `normal`, `low`, `noise`.
 
-| Level | Weight | Use |
-|-------|--------|-----|
-| `critical` | 5.0x | Must-remember facts, critical decisions |
-| `high` | 3.0x | User preferences, important context |
-| `normal` | 1.0x | Standard entries (default) |
-| `low` | 0.5x | Minor details, short replies |
-| `noise` | 0.1x | Chitchat, filler |
+**JournalEntry fields:**
 
-**Journal entry format** (`daily/YYYY-MM-DD.jsonl`):
-```json
-{"id": "uuid", "timestamp": "ISO8601", "content": "...", "salience": "high", "tags": ["python", "ml"], "source_session": "s1", "associations": []}
-```
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique entry identifier |
+| `timestamp` | ISO 8601 | When the entry was recorded |
+| `content` | string | Free-text body of the entry |
+| `salience` | SalienceLevel | Importance classification |
+| `tags` | string[] | Freeform labels for categorization |
+| `source_session` | string | Session ID that produced the entry |
+| `associations` | string[] | IDs of related journal entries |
 
-**Association Graph** (`associations.jsonl`):
-Edges link related journal entries via shared tags, explicit references, or semantic connections.
-```json
-{"source_id": "uuid1", "target_id": "uuid2", "relation_type": "shared_tags", "weight": 2.0}
-```
+**Storage:** `daily/YYYY-MM-DD.jsonl` files inside each agent's `.memory/` directory, one JSON object per line. Entries are also appended as markdown to the corresponding `YYYY-MM-DD.md` daily note for backward compatibility.
 
-When a new journal entry is appended, the system:
-1. Writes the structured JSONL entry
-2. Appends a human-readable line to the daily `.md` for backward compatibility
-3. Auto-creates association edges to existing entries sharing tags
+### 5. Association Graph — Cross-Entry Links
 
-During compaction, messages are classified by salience and written as journal entries — user preferences become `high`, standard messages become `normal`, short chitchat becomes `low`.
+The association graph stores explicit links between journal entries as an append-only JSONL file at `data/.memory/associations.jsonl`.
 
-**Search integration:** `MemorySearchEngine` scans `.jsonl` files alongside `.md` files. Search results are weighted by salience level, so critical entries rank above equal-time lower-salience ones.
+**Edge types:**
 
-**API endpoints:**
-- `GET /agents/{id}/journal` — Query with salience/tag/date filters
-- `POST /agents/{id}/journal` — Create manual journal entry
-- `GET /agents/{id}/journal/{entry_id}/associations` — Traverse association graph
+| Type | Created by | Meaning |
+|------|-----------|---------|
+| `shared_tag` | Auto-discovered | Two entries share one or more tags |
+| `explicit_ref` | Agent / user | One entry explicitly references another |
+| `temporal` | Auto-discovered | Entries within a short time window of the same session |
 
-**Configuration** (`config.yaml` → `agents` section):
-- `journal_salience_default`: Default salience for new entries (default: `"normal"`)
-- `journal_association_decay_days`: Days before association edges are considered stale (default: `90`)
+Edges are traversable via API endpoints, enabling multi-hop lookups (e.g., find all entries related to a topic through transitive associations).
 
-**Key classes:** `SalienceLevel`, `JournalEntry`, `JournalStore`, `AssociationGraph` in `memory/journal.py`
+### 6. Salience-Weighted Search
 
-### 5. GlobalMemoryManager — Cross-Agent Memory
+When journal entries appear in search results, their relevance scores are multiplied by a salience weight:
+
+| SalienceLevel | Weight |
+|---------------|--------|
+| `critical` | 5.0x |
+| `high` | 3.0x |
+| `normal` | 1.0x |
+| `low` | 0.5x |
+| `noise` | 0.1x |
+
+This ensures that critical observations surface first even when their text-match score is modest, while noise-level entries are effectively suppressed unless they are an exact match.
+
+### 7. GlobalMemoryManager — Cross-Agent Memory
 
 Manages shared state under `data/.memory/`:
 
@@ -178,7 +182,7 @@ Knowledge files are written via `GlobalMemoryManager.write_knowledge()` (thread-
 
 **Key class:** `GlobalMemoryManager` in `memory/global_memory.py`
 
-### 6. ContextBuilder — Prompt Assembly
+### 8. ContextBuilder — Prompt Assembly
 
 When an agent receives a task, `ContextBuilder.build()` assembles the full prompt from all memory layers:
 

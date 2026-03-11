@@ -68,7 +68,9 @@ class MemoryManager:
             self.procedures_file.write_text("# PROCEDURES\n\n", encoding="utf-8")
 
         self.journal_store = JournalStore(str(self.daily_dir))
-        self.association_graph = AssociationGraph(str(self.memory_dir))
+        self.association_graph = AssociationGraph(
+            str(self.memory_dir / "associations.jsonl")
+        )
 
         self.sessions = SessionStore(str(self.sessions_dir))
         self.procedure_store = ProcedureStore(
@@ -273,16 +275,17 @@ class MemoryManager:
         with path.open("a", encoding="utf-8") as handle:
             handle.write(text.strip() + "\n")
 
-    def append_journal_entry(self, entry: JournalEntry, day: Optional[date] = None) -> JournalEntry:
+    def append_journal_entry(self, entry: JournalEntry) -> JournalEntry:
         """Write a structured journal entry and also append to the daily .md for backward compat."""
-        saved = self.journal_store.append(entry, day=day)
-        # Human-readable line in the legacy daily markdown.
-        md_line = f"[{entry.salience.value}] {entry.content[:180]}"
-        if entry.tags:
-            md_line += f"  (tags: {', '.join(entry.tags)})"
-        self.append_daily_note(md_line, day=day)
-        # Auto-link by shared tags.
-        self.association_graph.add_edges_for_entry(entry, self.journal_store)
+        saved = self.journal_store.append(entry)
+        # Backward-compatible: also write a human-readable line to the .md daily note.
+        md_line = f"[{saved.salience.value}] {saved.content[:200]}"
+        if saved.tags:
+            md_line += f"  (tags: {', '.join(saved.tags)})"
+        self.append_daily_note(md_line)
+        # Auto-discover associations with recent entries.
+        recent = self.journal_store.query(limit=50)
+        self.association_graph.add_edges_for_entry(saved, recent)
         return saved
 
     def query_journal(
@@ -290,24 +293,17 @@ class MemoryManager:
         *,
         salience_min: Optional[SalienceLevel] = None,
         tags: Optional[List[str]] = None,
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
+        date_start: Optional[date] = None,
+        date_end: Optional[date] = None,
         limit: int = 50,
     ) -> List[JournalEntry]:
         return self.journal_store.query(
             salience_min=salience_min,
             tags=tags,
-            start_date=start_date,
-            end_date=end_date,
+            date_start=date_start,
+            date_end=date_end,
             limit=limit,
         )
-
-    def get_journal_entry(self, entry_id: str) -> Optional[JournalEntry]:
-        return self.journal_store.get_entry(entry_id)
-
-    def get_journal_associations(self, entry_id: str) -> List[Dict[str, Any]]:
-        edges = self.association_graph.get_associations(entry_id)
-        return [e.as_dict() for e in edges]
 
     def append_message(
         self,
@@ -395,6 +391,8 @@ class MemoryManager:
                 salience = self._classify_salience(role, content)
                 # Write structured journal entries for compacted content.
                 journal_entry = JournalEntry(
+                    id="",
+                    timestamp="",
                     content=f"{role}: {content[:300]}",
                     salience=salience,
                     tags=["compaction"],
@@ -409,6 +407,18 @@ class MemoryManager:
 
             if highlights:
                 self.append_memory_section(f"Compaction {session_id}", "\n".join(highlights[:8]))
+                # Also write structured journal entries for compacted highlights.
+                for highlight in highlights[:4]:
+                    salience = SalienceLevel.HIGH if "user preference" in highlight else SalienceLevel.NORMAL
+                    entry = JournalEntry(
+                        id="",
+                        timestamp="",
+                        content=highlight.lstrip("- "),
+                        salience=salience,
+                        tags=["compaction"],
+                        source_session=session_id,
+                    )
+                    self.journal_store.append(entry)
 
         return self.compactor.maybe_compact(
             session_id,
