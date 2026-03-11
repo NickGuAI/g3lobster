@@ -126,6 +126,29 @@ class TestHandoffBuilderBuild:
         assert "# TASK" in result
         assert "deploy application" in result
 
+    def test_no_persona_name_omits_line(self, memory):
+        """When no persona name given, that line is omitted."""
+        memory.write_memory(
+            "# MEMORY\n\n## Notes\n\nSome important context.\n"
+        )
+        builder = HandoffBuilder()
+        result = builder.build("do notes work", memory)
+        assert "Delegated by:" not in result
+
+    def test_task_prompt_preserved_at_end(self, memory):
+        """The original task prompt appears verbatim after # TASK."""
+        memory.write_memory(
+            "# MEMORY\n\n## Info\n\nSome info about logs.\n"
+        )
+        prompt = "Please analyze the logs and report errors."
+        builder = HandoffBuilder()
+        result = builder.build(prompt, memory)
+
+        # Task section should be at the end with the exact prompt
+        lines = result.split("# TASK\n")
+        assert len(lines) == 2
+        assert lines[1].strip() == prompt
+
 
 class TestHandoffBuilderEdgeCases:
     def test_zero_matching_memory_sections(self, memory):
@@ -136,7 +159,7 @@ class TestHandoffBuilderEdgeCases:
         builder = HandoffBuilder()
         result = builder.build("deploy kubernetes", memory)
 
-        # No overlap → no context → raw prompt
+        # No overlap -> no context -> raw prompt
         assert result == "deploy kubernetes"
 
     def test_procedure_budget_overflow(self, memory):
@@ -166,6 +189,22 @@ class TestHandoffBuilderEdgeCases:
         """Budget below 100 is clamped to 100."""
         builder = HandoffBuilder(max_context_chars=10)
         assert builder.max_context_chars == 100
+
+    def test_custom_procedure_limit(self, memory):
+        """procedure_limit parameter is respected."""
+        procs = [
+            _make_procedure(
+                f"Proc {i}", f"do thing {i}",
+                [f"Step A{i}", f"Step B{i}", f"Step C{i}"],
+            )
+            for i in range(5)
+        ]
+        memory.procedure_store.save_procedures(procs)
+
+        builder = HandoffBuilder(procedure_limit=2)
+        result = builder.build("do thing", memory)
+        # Should have at most 2 procedure entries
+        assert result.count("**Proc") <= 2
 
 
 def _make_procedure(title, trigger, steps):
