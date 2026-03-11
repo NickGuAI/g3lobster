@@ -9,6 +9,7 @@ Supported commands
 ------------------
 ``/help``                              — list available commands
 ``/status``                            — fleet dashboard (Cards v2)
+``/quick``                             — show quick action buttons
 ``/cron list``                         — list scheduled tasks for this agent
 ``/cron add "<schedule>" "<task>"``    — create a cron task
 ``/cron delete <id>``                  — delete a cron task
@@ -26,6 +27,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 if TYPE_CHECKING:
     from g3lobster.agents.registry import AgentRegistry
     from g3lobster.cron.store import CronStore
+    from g3lobster.memory.global_memory import GlobalMemoryManager
 
 # Matches a leading slash command token anywhere after optional whitespace /
 # (handles both "/cron list" and "@robo /cron list" after the mention is stripped).
@@ -35,6 +37,7 @@ HELP_TEXT = """\
 *Available commands*
 • `/help` — show this message
 • `/status` — fleet dashboard showing all agents at a glance
+• `/quick` — show quick action buttons
 • `/cron list` — list scheduled tasks for this agent
 • `/cron add "<schedule>" "<instruction>"` — create a new cron task
   _schedule_: standard 5-field cron expression, e.g. `0 9 * * *`
@@ -42,13 +45,16 @@ HELP_TEXT = """\
 • `/cron enable <id>` — enable a disabled task
 • `/cron disable <id>` — disable a task (keeps it)
 • `/sleep <seconds>` — put the agent to sleep for a duration
+• `/teach <fact>` — teach the agents something new
+• `/teach list` — list all taught knowledge
+• `/teach forget <keyword>` — remove a knowledge entry
 """
 
 
 def detect_command(text: str) -> Optional[tuple[str, str]]:
     """Return ``(command, rest)`` if text contains a ``/`` command, else ``None``.
 
-    Recognised commands: ``help``, ``status``, ``cron``, ``sleep``.
+    Recognised commands: ``help``, ``status``, ``quick``, ``teach``, ``cron``, ``sleep``.
     """
     m = _SLASH_RE.search(text)
     if not m:
@@ -63,6 +69,7 @@ async def handle(
     agent_id: str,
     cron_store: "CronStore",
     registry: Optional["AgentRegistry"] = None,
+    global_memory: Optional["GlobalMemoryManager"] = None,
 ) -> Optional[Union[str, Dict[str, Any]]]:
     """Intercept and handle a slash command.
 
@@ -78,6 +85,9 @@ async def handle(
     if cmd == "help":
         return HELP_TEXT
 
+    if cmd == "quick":
+        return _handle_quick()
+
     if cmd == "status":
         return await _handle_status(registry)
 
@@ -87,8 +97,59 @@ async def handle(
     if cmd == "sleep":
         return _handle_sleep(rest, agent_id)
 
+    if cmd == "teach":
+        return _handle_teach(rest, global_memory)
+
     # Unknown command — fall through to AI
     return None
+
+
+def _handle_quick() -> Dict[str, Any]:
+    """Handle /quick — returns a Cards v2 action card."""
+    buttons = [
+        ("\U0001f4cb Morning Briefing", "morning_briefing", "Give me my morning briefing"),
+        ("\U0001f4dd Summarize Thread", "summarize_thread", "Summarize this thread"),
+        ("\U0001f52e What's Next?", "whats_next", "What should I focus on next?"),
+        ("\U0001f4da Teach Something", "teach_something", "Teach me something interesting"),
+        ("\u2699\ufe0f Agent Status", "agent_status", "/status"),
+    ]
+
+    button_widgets = []
+    for label, action_id, prompt_text in buttons:
+        button_widgets.append({
+            "button": {
+                "text": label,
+                "onClick": {
+                    "action": {
+                        "function": "quick_action",
+                        "parameters": [
+                            {"key": "action", "value": action_id},
+                            {"key": "prompt", "value": prompt_text},
+                        ],
+                    }
+                },
+            }
+        })
+
+    cards_v2 = [
+        {
+            "cardId": "quick-actions",
+            "card": {
+                "header": {
+                    "title": "Quick Actions",
+                    "subtitle": "Tap a button to get started",
+                },
+                "sections": [
+                    {
+                        "widgets": [
+                            {"buttonList": {"buttons": [b["button"] for b in button_widgets]}}
+                        ]
+                    }
+                ],
+            },
+        }
+    ]
+    return {"cardsV2": cards_v2}
 
 
 def _handle_sleep(args: str, agent_id: str) -> str:
@@ -108,18 +169,63 @@ def _handle_sleep(args: str, agent_id: str) -> str:
     return f"__SLEEP__:{duration}:{agent_id}"
 
 
+def _handle_teach(args: str, global_memory: Optional["GlobalMemoryManager"]) -> str:
+    """Handle /teach command for global knowledge management."""
+    if global_memory is None:
+        return "\u26a0\ufe0f Knowledge system unavailable."
+
+    args = args.strip()
+    if not args:
+        return (
+            "*Usage:*\n"
+            "\u2022 `/teach <fact>` \u2014 add to global knowledge\n"
+            "\u2022 `/teach list` \u2014 show current knowledge entries\n"
+            "\u2022 `/teach forget <keyword>` \u2014 remove a knowledge entry"
+        )
+
+    parts = args.split(None, 1)
+    sub = parts[0].lower()
+
+    if sub == "list":
+        entries = global_memory.read_all_knowledge()
+        if not entries:
+            return "\U0001f4da No knowledge entries yet. Add one with `/teach <fact>`."
+        lines = ["*\U0001f4da Global Knowledge:*"]
+        for key, content in entries.items():
+            # Show first 100 chars of content
+            preview = content[:100] + ("..." if len(content) > 100 else "")
+            lines.append(f"\u2022 `{key}`: {preview}")
+        return "\n".join(lines)
+
+    if sub == "forget":
+        keyword = parts[1].strip() if len(parts) > 1 else ""
+        if not keyword:
+            return "Usage: `/teach forget <keyword>`"
+        removed = global_memory.remove_knowledge(keyword)
+        if removed == 0:
+            return f"No knowledge entries matching `{keyword}` found."
+        return f"\U0001f5d1 Removed {removed} knowledge entry{'s' if removed > 1 else ''} matching `{keyword}`."
+
+    # Default: add knowledge
+    # Use the full args as content, derive key from first few words
+    words = args.split()
+    key = "_".join(words[:5])
+    global_memory.add_knowledge(key, args)
+    return f"\u2705 Learned: _{args}_"
+
+
 # ---------------------------------------------------------------------------
 # /status — Fleet Dashboard Card
 # ---------------------------------------------------------------------------
 
 _STATE_PILLS: Dict[str, str] = {
-    "idle": "🟢 idle",
-    "busy": "🟡 busy",
-    "starting": "🟡 starting",
-    "stuck": "🔴 stuck",
-    "dead": "🔴 dead",
-    "stopped": "⚪ stopped",
-    "sleeping": "⚪ sleeping",
+    "idle": "\U0001f7e2 idle",
+    "busy": "\U0001f7e1 busy",
+    "starting": "\U0001f7e1 starting",
+    "stuck": "\U0001f534 stuck",
+    "dead": "\U0001f534 dead",
+    "stopped": "\u26aa stopped",
+    "sleeping": "\u26aa sleeping",
 }
 
 
@@ -136,11 +242,11 @@ def _format_uptime(seconds: int) -> str:
 def _build_agent_section(agent: Dict[str, Any]) -> Dict[str, Any]:
     """Build a Cards v2 section for a single agent."""
     state = str(agent.get("state", "stopped"))
-    pill = _STATE_PILLS.get(state, f"⚫ {state}")
-    emoji = agent.get("emoji", "🤖")
+    pill = _STATE_PILLS.get(state, f"\u26ab {state}")
+    emoji = agent.get("emoji", "\U0001f916")
     name = agent.get("name", agent.get("id", "unknown"))
     uptime = _format_uptime(int(agent.get("uptime_s", 0)))
-    task = agent.get("current_task") or "—"
+    task = agent.get("current_task") or "\u2014"
     pending = int(agent.get("pending_assignments", 0))
 
     widgets: List[Dict[str, Any]] = [
@@ -165,11 +271,11 @@ def _build_status_card(
     # Fleet summary counts
     active = sum(1 for a in agents if a.get("state") not in ("stopped", "dead"))
     stopped = sum(1 for a in agents if a.get("state") in ("stopped", "dead"))
-    bridge_label = "🟢 running" if bridge_running else "🔴 stopped"
+    bridge_label = "\U0001f7e2 running" if bridge_running else "\U0001f534 stopped"
 
     sections: List[Dict[str, Any]] = [
         {
-            "header": f"Fleet: {active} active · {stopped} stopped · {len(agents)} total",
+            "header": f"Fleet: {active} active \u00b7 {stopped} stopped \u00b7 {len(agents)} total",
             "widgets": [
                 {
                     "decoratedText": {
@@ -209,7 +315,7 @@ async def _handle_status(
 ) -> Union[str, Dict[str, Any]]:
     """Handle /status — returns a Cards v2 dict or fallback text."""
     if registry is None:
-        return "⚠️ Fleet status unavailable — registry not connected."
+        return "\u26a0\ufe0f Fleet status unavailable \u2014 registry not connected."
 
     status_data = await registry.status()
     bridge = getattr(registry, "chat_bridge", None)
@@ -243,7 +349,7 @@ def _cron_list(agent_id: str, cron_store: "CronStore") -> str:
         return f"No cron tasks for `{agent_id}`. Add one with `/cron add`."
     lines = [f"*Cron tasks for {agent_id}:*"]
     for t in tasks:
-        status = "✅" if t.enabled else "⏸"
+        status = "\u2705" if t.enabled else "\u23f8"
         last = t.last_run[:19].replace("T", " ") if t.last_run else "never"
         lines.append(f"{status} `{t.id[:8]}` | `{t.schedule}` | last: {last}\n  _{t.instruction}_")
     return "\n".join(lines)
@@ -259,7 +365,7 @@ def _cron_add(args: str, agent_id: str, cron_store: "CronStore") -> str:
     schedule, instruction = tokens[0], " ".join(tokens[1:])
     try:
         task = cron_store.add_task(agent_id, schedule, instruction)
-        return f"✅ Cron task created: `{task.id[:8]}` | `{schedule}` | _{instruction}_"
+        return f"\u2705 Cron task created: `{task.id[:8]}` | `{schedule}` | _{instruction}_"
     except Exception as exc:
         return f"Failed to create task: {exc}"
 
@@ -272,10 +378,10 @@ def _cron_delete(task_id_prefix: str, agent_id: str, cron_store: "CronStore") ->
     if not matched:
         return f"No task found with ID starting with `{task_id_prefix}`."
     if len(matched) > 1:
-        return f"Ambiguous ID prefix `{task_id_prefix}` — matches {len(matched)} tasks. Use more characters."
+        return f"Ambiguous ID prefix `{task_id_prefix}` \u2014 matches {len(matched)} tasks. Use more characters."
     deleted = cron_store.delete_task(agent_id, matched[0].id)
     if deleted:
-        return f"🗑 Deleted task `{matched[0].id[:8]}`."
+        return f"\U0001f5d1 Deleted task `{matched[0].id[:8]}`."
     return "Failed to delete task."
 
 
@@ -292,5 +398,6 @@ def _cron_toggle(task_id_prefix: str, agent_id: str, cron_store: "CronStore", *,
     updated = cron_store.update_task(agent_id, matched[0].id, enabled=enabled)
     if updated:
         verb = "enabled" if enabled else "disabled"
-        return f"{'▶' if enabled else '⏸'} Task `{matched[0].id[:8]}` {verb}."
+        icon = "\u25b6" if enabled else "\u23f8"
+        return f"{icon} Task `{matched[0].id[:8]}` {verb}."
     return "Failed to update task."
