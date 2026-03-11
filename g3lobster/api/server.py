@@ -40,6 +40,7 @@ def create_app(
     cron_store: Optional[object] = None,
     cron_manager: Optional[object] = None,
     email_bridge: Optional[object] = None,
+    calendar_bridge: Optional[object] = None,
     control_plane: Optional[object] = None,
     standup_store: Optional[object] = None,
     standup_orchestrator: Optional[object] = None,
@@ -60,9 +61,13 @@ def create_app(
             await app.state.chat_bridge.start()
         if app.state.email_bridge:
             await app.state.email_bridge.start()
+        if app.state.calendar_bridge:
+            await app.state.calendar_bridge.start()
         try:
             yield
         finally:
+            if app.state.calendar_bridge:
+                await app.state.calendar_bridge.stop()
             if app.state.email_bridge:
                 await app.state.email_bridge.stop()
             if app.state.bridge_manager:
@@ -86,6 +91,7 @@ def create_app(
     app.state.cron_store = cron_store
     app.state.cron_manager = cron_manager
     app.state.email_bridge = email_bridge
+    app.state.calendar_bridge = calendar_bridge
     app.state.control_plane = control_plane
     app.state.standup_store = standup_store
     app.state.standup_orchestrator = standup_orchestrator
