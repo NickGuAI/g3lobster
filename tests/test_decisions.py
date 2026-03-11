@@ -85,6 +85,44 @@ def test_decision_log_list_limit(tmp_path):
     assert entries[0]["decision"] == "Decision 7"
 
 
+def test_compactor_extracts_decisions(tmp_path):
+    """CompactionEngine._extract_decisions scans assistant messages for decision patterns."""
+    from g3lobster.memory.compactor import CompactionEngine
+    from g3lobster.memory.sessions import SessionStore
+    from g3lobster.memory.procedures import ProcedureStore
+
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    session_store = SessionStore(str(sessions_dir))
+    procedures_file = tmp_path / "PROCEDURES.md"
+    procedures_file.write_text("# PROCEDURES\n\n")
+    procedure_store = ProcedureStore(str(procedures_file))
+
+    decisions_path = tmp_path / "decisions.jsonl"
+    decision_log = DecisionLog(str(decisions_path))
+
+    engine = CompactionEngine(
+        session_store=session_store,
+        procedure_store=procedure_store,
+        decision_log=decision_log,
+    )
+
+    messages = [
+        {"type": "message", "message": {"role": "user", "content": "What db should we use?"}},
+        {"type": "message", "message": {"role": "assistant", "content": "I decided to use PostgreSQL because it has strong ACID compliance."}},
+        {"type": "message", "message": {"role": "assistant", "content": "Here is the config file."}},
+        {"type": "message", "message": {"role": "assistant", "content": "We chose Redis for the cache layer."}},
+    ]
+
+    engine._extract_decisions("test-session", messages)
+
+    entries = decision_log.list()
+    assert len(entries) == 2
+    assert "PostgreSQL" in entries[0]["decision"]
+    assert "Redis" in entries[1]["decision"]
+    assert all(e["tags"] == ["auto-extracted"] for e in entries)
+
+
 def test_memory_manager_decision_log(tmp_path):
     """MemoryManager should initialize and expose a DecisionLog."""
     manager = MemoryManager(data_dir=str(tmp_path / "data"), compact_threshold=100)
