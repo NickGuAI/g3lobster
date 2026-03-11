@@ -23,6 +23,8 @@ from g3lobster.api.models import (
     AgentResponse,
     AgentUpdateRequest,
     AssociationResponse,
+    DecisionEntryResponse,
+    DecisionQueryResponse,
     JournalCreateRequest,
     JournalEntryResponse,
     JournalQueryRequest,
@@ -775,6 +777,25 @@ async def get_journal_associations(
 
     edges = manager.get_journal_associations(entry_id)
     return [AssociationResponse(**e) for e in edges]
+
+
+@router.get("/{agent_id}/decisions", response_model=DecisionQueryResponse)
+async def query_decisions(
+    agent_id: str,
+    request: Request,
+    q: str = Query(default=""),
+    limit: int = Query(default=20, ge=1, le=200),
+) -> DecisionQueryResponse:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+    manager = _memory_manager(request, agent_id)
+    if q:
+        results = manager.query_decisions(q, limit=limit)
+    else:
+        results = manager.list_decisions(limit=limit)
+    return DecisionQueryResponse(
+        decisions=[DecisionEntryResponse(**entry) for entry in results],
+    )
 
 
 @router.post("/{agent_id}/link-bot")

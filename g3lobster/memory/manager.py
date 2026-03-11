@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from g3lobster.memory.compactor import CompactionEngine
+from g3lobster.memory.decisions import DecisionLog
 from g3lobster.memory.journal import (
     AssociationGraph,
     JournalEntry,
@@ -71,6 +72,7 @@ class MemoryManager:
         self.association_graph = AssociationGraph(str(self.memory_dir))
 
         self.sessions = SessionStore(str(self.sessions_dir))
+        self.decision_log = DecisionLog(str(self.memory_dir))
         self.procedure_store = ProcedureStore(
             str(self.procedures_file),
             min_frequency=self.procedure_min_frequency,
@@ -88,6 +90,7 @@ class MemoryManager:
             gemini_args=gemini_args,
             gemini_timeout_s=gemini_timeout_s,
             gemini_cwd=gemini_cwd,
+            decision_log=self.decision_log,
         )
 
     def read_memory(self) -> str:
@@ -256,6 +259,31 @@ class MemoryManager:
     def get_journal_associations(self, entry_id: str) -> List[Dict[str, Any]]:
         edges = self.association_graph.get_associations(entry_id)
         return [e.as_dict() for e in edges]
+
+    def append_decision(
+        self,
+        session_id: str,
+        decision: str,
+        context: str = "",
+        reasoning: str = "",
+        tags: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Append a decision to the decision log."""
+        return self.decision_log.append(
+            session_id=session_id,
+            decision=decision,
+            context=context,
+            reasoning=reasoning,
+            tags=tags,
+        )
+
+    def query_decisions(self, query: str = "", limit: int = 10) -> List[Dict[str, Any]]:
+        """Query the decision log with optional keyword search."""
+        return self.decision_log.query(query, limit=limit)
+
+    def list_decisions(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """List recent decisions."""
+        return self.decision_log.list(limit=limit)
 
     def append_message(
         self,

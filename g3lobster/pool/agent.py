@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Callable, List, Optional
 
-from g3lobster.cli.parser import clean_text, strip_reasoning
+from g3lobster.cli.parser import clean_text, split_reasoning
 from g3lobster.memory.context import ContextBuilder
 from g3lobster.memory.manager import MemoryManager
 from g3lobster.mcp.manager import MCPManager
@@ -105,12 +105,17 @@ class GeminiAgent:
                 timeout=_normalize_timeout(task.timeout_s),
                 session_id=task.session_id,
             )
-            parsed = strip_reasoning(clean_text(raw_output))
+            reasoning, parsed = split_reasoning(clean_text(raw_output))
             task.result = parsed
             task.status = TaskStatus.COMPLETED
             task.completed_at = time.time()
             task.add_event("completed", {"chars": len(parsed or "")})
-            self.memory_manager.append_message(task.session_id, "assistant", parsed, {"task_id": task.id})
+            if reasoning:
+                task.add_event("reasoning", {"text": reasoning})
+            self.memory_manager.append_message(
+                task.session_id, "assistant", parsed,
+                {"task_id": task.id, "reasoning": reasoning} if reasoning else {"task_id": task.id},
+            )
         except Exception as exc:  # pragma: no cover - defensive path
             if task.status != TaskStatus.CANCELED:
                 task.error = str(exc)
@@ -187,7 +192,8 @@ class GeminiAgent:
                 collected_events.append(event)
                 yield event
 
-            parsed = accumulate_text(collected_events)
+            raw_accumulated = accumulate_text(collected_events)
+            reasoning, parsed = split_reasoning(clean_text(raw_accumulated))
             result_error = None
             stream_error = None
             for event in collected_events:
@@ -211,7 +217,12 @@ class GeminiAgent:
                 task.result = parsed
                 task.status = TaskStatus.COMPLETED
                 task.add_event("completed", {"chars": len(parsed)})
-                self.memory_manager.append_message(task.session_id, "assistant", parsed, {"task_id": task.id})
+                if reasoning:
+                    task.add_event("reasoning", {"text": reasoning})
+                self.memory_manager.append_message(
+                    task.session_id, "assistant", parsed,
+                    {"task_id": task.id, "reasoning": reasoning} if reasoning else {"task_id": task.id},
+                )
         except Exception as exc:
             if task.status != TaskStatus.CANCELED:
                 task.error = str(exc)

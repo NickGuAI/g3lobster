@@ -10,6 +10,7 @@ import subprocess
 import threading
 from typing import Callable, Dict, List, Optional
 
+from g3lobster.memory.decisions import DecisionLog, looks_like_decision
 from g3lobster.memory.procedures import CandidateStore, ProcedureStore
 from g3lobster.memory.sessions import SessionStore
 
@@ -33,10 +34,12 @@ class CompactionEngine:
         gemini_args: Optional[List[str]] = None,
         gemini_timeout_s: float = 45.0,
         gemini_cwd: Optional[str] = None,
+        decision_log: Optional[DecisionLog] = None,
     ):
         self.session_store = session_store
         self.procedure_store = procedure_store
         self.candidate_store = candidate_store
+        self.decision_log = decision_log
         self.compact_threshold = max(1, int(compact_threshold))
         self.compact_keep_ratio = min(0.9, max(0.05, float(compact_keep_ratio)))
         self.compact_chunk_size = max(1, int(compact_chunk_size))
@@ -101,7 +104,39 @@ class CompactionEngine:
             if promoted:
                 self._upsert_procedures_locked(promoted)
 
+        # Extract decisions from compacted messages.
+        self._extract_decisions(session_id, compacted)
+
         return True
+
+    def _extract_decisions(self, session_id: str, messages: List[Dict[str, object]]) -> None:
+        """Scan compacted messages for decision-indicating patterns and log them."""
+        if not self.decision_log:
+            return
+        for entry in messages:
+            message = entry.get("message", {})
+            if not isinstance(message, dict):
+                continue
+            role = str(message.get("role", "")).strip().lower()
+            content = str(message.get("content", "")).strip()
+            if not content or role not in ("assistant", "user"):
+                continue
+            if not looks_like_decision(content):
+                continue
+            reasoning = ""
+            metadata = entry.get("metadata")
+            if isinstance(metadata, dict):
+                reasoning = str(metadata.get("reasoning", ""))
+            try:
+                self.decision_log.append(
+                    session_id=session_id,
+                    decision=content[:500],
+                    context=f"{role} message during session {session_id}",
+                    reasoning=reasoning,
+                    tags=["auto-extracted", "compaction"],
+                )
+            except Exception as exc:
+                logger.warning("Failed to log extracted decision: %s", exc)
 
     def _upsert_procedures_locked(self, procedures: List) -> None:
         """Write to PROCEDURES.md under a lock to prevent concurrent clobber."""

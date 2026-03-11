@@ -65,6 +65,7 @@ _DISPLAY_ORDER = [
     "user_prefs",
     "knowledge",
     "memory",
+    "decisions",
     "recollection",
     "procedures",
     "compaction",
@@ -112,6 +113,26 @@ class ContextBuilder:
             data_dir=data_dir,
             global_data_dir=global_data_dir,
         )
+
+    def _decisions_layer(self, prompt: str) -> str:
+        """Query the decision log for relevant past decisions."""
+        try:
+            decisions = self.memory_manager.query_decisions(prompt, limit=3)
+        except Exception:
+            return ""
+        if not decisions:
+            return ""
+
+        lines = ["# Relevant Past Decisions"]
+        for decision in decisions:
+            text = str(decision.get("decision", "")).strip()
+            reasoning = str(decision.get("reasoning", "")).strip()
+            ts = str(decision.get("timestamp", ""))[:10]
+            entry = f"- [{ts}] {text[:200]}"
+            if reasoning:
+                entry += f"\n  Reasoning: {reasoning[:200]}"
+            lines.append(entry)
+        return "\n".join(lines)
 
     def _recollection_layer(self) -> str:
         """Return recollection content from the association graph.
@@ -174,6 +195,9 @@ class ContextBuilder:
         # --- recollection stub ---
         recollection_content = self._recollection_layer()
 
+        # --- relevant past decisions ---
+        decisions_content = self._decisions_layer(prompt)
+
         # --- construct layers ---
         layers: List[ContextLayer] = [
             ContextLayer(
@@ -230,18 +254,23 @@ class ContextBuilder:
                 content=agents_content,
             ),
             ContextLayer(
-                name="recollection",
+                name="decisions",
                 priority=8,
+                content=decisions_content,
+            ),
+            ContextLayer(
+                name="recollection",
+                priority=9,
                 content=recollection_content,
             ),
             ContextLayer(
                 name="procedures",
-                priority=9,
+                priority=10,
                 content="# Known Procedures\n" + self._format_procedures(matched),
             ),
             ContextLayer(
                 name="compaction",
-                priority=10,
+                priority=11,
                 content=(
                     "# Compaction Summary\n"
                     + (str(compaction.get("summary", "")).strip() or "(none)")

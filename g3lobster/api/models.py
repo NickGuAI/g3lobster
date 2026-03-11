@@ -237,3 +237,16 @@ class AssociationResponse(BaseModel):
     target_id: str
     relation_type: str = "related"
     weight: float = 1.0
+
+
+class DecisionEntryResponse(BaseModel):
+    timestamp: str = ""
+    session_id: str = ""
+    decision: str = ""
+    reasoning: str = ""
+    context: str = ""
+    tags: List[str] = Field(default_factory=list)
+
+
+class DecisionQueryResponse(BaseModel):
+    decisions: List[DecisionEntryResponse] = Field(default_factory=list)
