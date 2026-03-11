@@ -117,6 +117,29 @@ class FakeRegistry:
         return agent_id == self.runtime.persona.id
 
 
+class FakeStreamingRuntime:
+    """Yields multiple MESSAGE events to test throttled streaming updates."""
+
+    def __init__(self, persona):
+        self.persona = persona
+
+    async def assign_stream(self, task):
+        from g3lobster.cli.streaming import StreamEvent, StreamEventType
+
+        task.status = TaskStatus.COMPLETED
+        # Yield several MESSAGE events (simulating incremental text)
+        for chunk in ["Hello ", "world, ", "this ", "is ", "streaming!"]:
+            yield StreamEvent(
+                event_type=StreamEventType.MESSAGE,
+                data={"role": "assistant", "content": chunk, "delta": True},
+            )
+        task.result = "Hello world, this is streaming!"
+        yield StreamEvent(
+            event_type=StreamEventType.RESULT,
+            data={"status": "success"},
+        )
+
+
 class FakeErrorRuntime:
     def __init__(self, persona):
         self.persona = persona

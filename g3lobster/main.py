@@ -250,6 +250,7 @@ def build_runtime(config: AppConfig):
             event_bus=event_bus,
             focus_checker=focus_checker,
             message_buffer=message_buffer,
+            stream_update_interval_s=config.chat.stream_update_interval_s,
         )
 
     bridge_manager = BridgeManager(
