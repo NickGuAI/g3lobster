@@ -155,13 +155,17 @@ def _build_agent_section(agent: Dict[str, Any]) -> Dict[str, Any]:
     return {"widgets": widgets}
 
 
-def _build_status_card(status_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _build_status_card(
+    status_data: Dict[str, Any],
+    bridge_running: bool = False,
+) -> List[Dict[str, Any]]:
     """Build a Cards v2 payload from registry.status() data."""
     agents: List[Dict[str, Any]] = status_data.get("agents", [])
 
     # Fleet summary counts
     active = sum(1 for a in agents if a.get("state") not in ("stopped", "dead"))
     stopped = sum(1 for a in agents if a.get("state") in ("stopped", "dead"))
+    bridge_label = "🟢 running" if bridge_running else "🔴 stopped"
 
     sections: List[Dict[str, Any]] = [
         {
@@ -169,7 +173,12 @@ def _build_status_card(status_data: Dict[str, Any]) -> List[Dict[str, Any]]:
             "widgets": [
                 {
                     "decoratedText": {
-                        "text": f"<b>{active}</b> active &nbsp;|&nbsp; <b>{stopped}</b> stopped &nbsp;|&nbsp; <b>{len(agents)}</b> total",
+                        "text": (
+                            f"Bridge: {bridge_label} &nbsp;|&nbsp; "
+                            f"<b>{active}</b> active &nbsp;|&nbsp; "
+                            f"<b>{stopped}</b> stopped &nbsp;|&nbsp; "
+                            f"<b>{len(agents)}</b> total"
+                        ),
                     }
                 },
             ],
@@ -203,7 +212,9 @@ async def _handle_status(
         return "⚠️ Fleet status unavailable — registry not connected."
 
     status_data = await registry.status()
-    cards_v2 = _build_status_card(status_data)
+    bridge = getattr(registry, "chat_bridge", None)
+    bridge_running = bool(getattr(bridge, "is_running", False)) if bridge else False
+    cards_v2 = _build_status_card(status_data, bridge_running=bridge_running)
     return {"cardsV2": cards_v2}
 
 
