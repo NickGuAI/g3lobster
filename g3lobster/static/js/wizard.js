@@ -147,14 +147,14 @@ export async function render(root, { status, onComplete }) {
             <ol>
               <li>Click <strong>Test Auth</strong> above to generate an authorization URL</li>
               <li>Open the URL in your browser and grant consent</li>
-              <li>Google will redirect to <code>http://localhost</code> &mdash; copy the <code>code</code> parameter from the URL bar</li>
-              <li>Paste it below and click <strong>Complete Auth</strong></li>
+              <li>Google will redirect to <code>http://localhost</code> &mdash; copy the full URL from the browser bar</li>
+              <li>Paste the URL below and click <strong>Complete Auth</strong></li>
             </ol>
           </details>
           <div class="form-grid">
             <div class="field">
               <label for="oauth-code">OAuth Code</label>
-              <input id="oauth-code" type="text" placeholder="Paste code from consent screen" />
+              <input id="oauth-code" type="text" placeholder="Paste the redirect URL or auth code" />
             </div>
           </div>
           <div class="actions">

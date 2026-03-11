@@ -122,6 +122,16 @@ def create_authorization_url(data_dir: Optional[str] = None) -> str:
 def complete_authorization(data_dir: Optional[str], code: str) -> Path:
     from google_auth_oauthlib.flow import InstalledAppFlow
 
+    # Accept full redirect URL — extract code query parameter
+    if code.strip().startswith(("http://", "https://")):
+        from urllib.parse import parse_qs, urlparse
+
+        parsed = urlparse(code.strip())
+        codes = parse_qs(parsed.query).get("code", [])
+        if not codes:
+            raise ValueError("URL does not contain a 'code' parameter")
+        code = codes[0]
+
     creds_path = credentials_path(data_dir)
     if not creds_path.exists():
         raise FileNotFoundError(f"Credentials not found at {creds_path}")
