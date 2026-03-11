@@ -61,10 +61,6 @@ export function configureSpace(payload) {
   });
 }
 
-export function listSpaceBots() {
-  return request("/setup/space-bots", { method: "GET" });
-}
-
 export function startBridge(agentId = null) {
   const suffix = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : "";
   return request(`/setup/start${suffix}`, { method: "POST" });
@@ -170,13 +166,6 @@ export function updateGlobalProcedures(content) {
 
 export function listGlobalKnowledge() {
   return request("/agents/_global/knowledge", { method: "GET" });
-}
-
-export function linkAgentBot(agentId, botUserId) {
-  return request(`/agents/${encodeURIComponent(agentId)}/link-bot`, {
-    method: "POST",
-    body: JSON.stringify({ bot_user_id: botUserId }),
-  });
 }
 
 export function testAgent(agentId, text = "ping") {

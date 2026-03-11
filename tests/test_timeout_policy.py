@@ -244,7 +244,6 @@ async def test_chat_bridge_uses_persona_response_timeout(tmp_path: Path) -> None
             id="luna",
             name="Luna",
             emoji="🦀",
-            bot_user_id="users/999",
             response_timeout_s=0,
         ),
     )
@@ -260,15 +259,9 @@ async def test_chat_bridge_uses_persona_response_timeout(tmp_path: Path) -> None
     )
 
     message = {
-        "text": "Hello there",
+        "text": "/luna Hello there",
         "sender": {"type": "HUMAN", "name": "users/123", "displayName": "Ada"},
         "thread": {"name": "spaces/test/threads/abc"},
-        "annotations": [
-            {
-                "type": "USER_MENTION",
-                "userMention": {"user": {"type": "BOT", "name": "users/999"}},
-            }
-        ],
     }
 
     await bridge.handle_message(message)
@@ -285,7 +278,6 @@ async def test_chat_bridge_falls_back_to_registry_timeout(tmp_path: Path) -> Non
             id="luna",
             name="Luna",
             emoji="🦀",
-            bot_user_id="users/999",
         ),
     )
 
@@ -300,15 +292,9 @@ async def test_chat_bridge_falls_back_to_registry_timeout(tmp_path: Path) -> Non
     )
 
     message = {
-        "text": "Hello there",
+        "text": "/luna Hello there",
         "sender": {"type": "HUMAN", "name": "users/123", "displayName": "Ada"},
         "thread": {"name": "spaces/test/threads/abc"},
-        "annotations": [
-            {
-                "type": "USER_MENTION",
-                "userMention": {"user": {"type": "BOT", "name": "users/999"}},
-            }
-        ],
     }
 
     await bridge.handle_message(message)

@@ -3,9 +3,7 @@ import {
   configureSpace,
   createAgent,
   getSetupStatus,
-  linkAgentBot,
   listAgents,
-  listSpaceBots,
   startAgent,
   startBridge,
   testAgent,
@@ -24,7 +22,6 @@ const STEP_LABELS = [
   "Credentials",
   "Space",
   "First Agent",
-  "Register Bot",
   "Launch",
 ];
 
@@ -38,10 +35,7 @@ function initialStepFromStatus(status) {
   if (!status.agents_ready) {
     return 3;
   }
-  if (!status.bridge_running) {
-    return 5;
-  }
-  return 5;
+  return 4;
 }
 
 function stepDone(step, status) {
@@ -53,9 +47,6 @@ function stepDone(step, status) {
   }
   if (step === 3) {
     return status.agents_ready;
-  }
-  if (step === 4) {
-    return false;
   }
   return status.bridge_running;
 }
@@ -89,7 +80,6 @@ export async function render(root, { status, onComplete }) {
   let currentStep = initialStepFromStatus(status);
   let lastStatus = status;
   let authUrl = "";
-  let detectedBots = null;
   let notice = { tone: "info", text: "Follow each step to bring Google Chat + named agents online." };
 
   async function refreshStatus() {
@@ -230,62 +220,6 @@ export async function render(root, { status, onComplete }) {
       `;
     }
 
-    if (currentStep === 4) {
-      const agentOptions = agents
-        .map((agent) => `<option value="${escapeHtml(agent.id)}">${escapeHtml(agent.emoji)} ${escapeHtml(agent.name)}</option>`)
-        .join("");
-      const detectedBotOptions = (detectedBots || [])
-        .map((b) => `<option value="${escapeHtml(b.user_id)}">${escapeHtml(b.display_name)} (${escapeHtml(b.user_id)})</option>`)
-        .join("");
-      const hasBots = detectedBots && detectedBots.length > 0;
-      return `
-        <div class="step-panel">
-          <h2>Register Chat Bot</h2>
-          <p class="agent-meta">Create a Chat App in GCP, add it to your space, then detect it here.</p>
-          <details class="step-help">
-            <summary>How to create a Chat App in GCP</summary>
-            <ol>
-              <li>Go to <a href="https://console.cloud.google.com/apis/api/chat.googleapis.com/hangouts-chat" target="_blank" rel="noreferrer">GCP Console &rarr; Chat API &rarr; Configuration</a></li>
-              <li>Fill in <strong>App name</strong> (e.g. your agent's name), avatar, and description</li>
-              <li>Under <strong>Functionality</strong>, enable "Receive 1:1 messages" and/or "Join spaces and group conversations"</li>
-              <li>Under <strong>Connection settings</strong>, choose <strong>Apps Script</strong> or <strong>HTTP endpoint</strong> (the bridge uses polling, so connection type is flexible)</li>
-              <li>Under <strong>Visibility</strong>, make the app available to your domain or specific users</li>
-              <li>Save, then add the bot to your space: in Google Chat, click <strong>+</strong> next to the space &rarr; <strong>Apps</strong> &rarr; search for your app name</li>
-              <li>New apps can take <strong>5&ndash;15 minutes</strong> to appear in search</li>
-            </ol>
-          </details>
-          <div class="actions">
-            <button class="btn btn-primary" id="detect-bots-btn">Detect Bots in Space</button>
-          </div>
-          ${hasBots ? `<p class="agent-meta">Found <strong>${detectedBots.length}</strong> bot(s) in your space:</p>` : ""}
-          ${agents.length ? "" : "<p class='empty'>Create an agent first (step 3).</p>"}
-          ${
-            agents.length
-              ? `
-            <div class="form-grid">
-              <div class="field">
-                <label for="link-agent-id">Agent</label>
-                <select id="link-agent-id">${agentOptions}</select>
-              </div>
-              <div class="field">
-                <label for="bot-user-id">Bot User ID</label>
-                ${hasBots
-                  ? `<select id="bot-user-id">${detectedBotOptions}</select>`
-                  : `<input id="bot-user-id" type="text" placeholder="Click Detect Bots above, or paste users/123456789" />`
-                }
-              </div>
-            </div>
-            <div class="actions">
-              <button class="btn btn-primary" id="link-bot-btn">Link Bot</button>
-              <button class="btn btn-secondary" id="test-linked-agent-btn">Send Test Message</button>
-            </div>
-          `
-              : ""
-          }
-        </div>
-      `;
-    }
-
     const bridgeByAgent = new Map((lastStatus.agent_bridges || []).map((item) => [item.agent_id, item]));
     const bridgeRows = agents.length
       ? agents.map((agent) => {
@@ -389,7 +323,7 @@ export async function render(root, { status, onComplete }) {
         ${await renderBody(agents)}
         <div class="step-nav">
           <button class="btn btn-secondary" id="wizard-prev" ${currentStep <= 1 ? "disabled" : ""}>Back</button>
-          <button class="btn btn-secondary" id="wizard-next" ${currentStep >= 5 ? "disabled" : ""}>Next</button>
+          <button class="btn btn-secondary" id="wizard-next" ${currentStep >= 4 ? "disabled" : ""}>Next</button>
         </div>
       </div>
     `;
@@ -400,7 +334,7 @@ export async function render(root, { status, onComplete }) {
     });
 
     root.querySelector("#wizard-next")?.addEventListener("click", () => {
-      currentStep = Math.min(5, currentStep + 1);
+      currentStep = Math.min(4, currentStep + 1);
       rerender();
     });
 
@@ -507,59 +441,6 @@ export async function render(root, { status, onComplete }) {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         setNotice("error", `Failed to create agent: ${message}`);
-      }
-      rerender();
-    });
-
-    root.querySelector("#detect-bots-btn")?.addEventListener("click", async () => {
-      try {
-        const result = await listSpaceBots();
-        detectedBots = result.bots || [];
-        if (detectedBots.length === 0) {
-          setNotice("info", "No bots found in the space yet. Make sure you added the Chat App to your space (can take 5-15 min for new apps).");
-        } else {
-          setNotice("success", `Found ${detectedBots.length} bot(s). Select one and link it to an agent.`);
-        }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        setNotice("error", `Failed to detect bots: ${message}`);
-      }
-      rerender();
-    });
-
-    root.querySelector("#link-bot-btn")?.addEventListener("click", async () => {
-      const agentId = root.querySelector("#link-agent-id")?.value;
-      const botUserId = root.querySelector("#bot-user-id")?.value?.trim();
-      if (!agentId || !botUserId) {
-        setNotice("error", "Select an agent and provide bot user id.");
-        rerender();
-        return;
-      }
-
-      try {
-        await linkAgentBot(agentId, botUserId);
-        setNotice("success", "Bot linked to agent.");
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        setNotice("error", `Failed to link bot: ${message}`);
-      }
-      rerender();
-    });
-
-    root.querySelector("#test-linked-agent-btn")?.addEventListener("click", async () => {
-      const agentId = root.querySelector("#link-agent-id")?.value;
-      if (!agentId) {
-        setNotice("error", "Select an agent first.");
-        rerender();
-        return;
-      }
-
-      try {
-        await testAgent(agentId, "wizard connectivity test");
-        setNotice("success", "Test message sent to Google Chat.");
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        setNotice("error", `Failed to send test message: ${message}`);
       }
       rerender();
     });

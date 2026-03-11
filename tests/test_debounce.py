@@ -104,12 +104,6 @@ def _make_message(text: str, thread: str = "spaces/test/threads/abc") -> dict:
         "text": text,
         "sender": {"type": "HUMAN", "name": "users/123", "displayName": "Ada"},
         "thread": {"name": thread},
-        "annotations": [
-            {
-                "type": "USER_MENTION",
-                "userMention": {"user": {"type": "BOT", "name": "users/999"}},
-            }
-        ],
     }
 
 
@@ -262,7 +256,7 @@ async def test_bridge_debounce_merges_rapid_messages(tmp_path) -> None:
             soul="",
             model="gemini",
             mcp_servers=["*"],
-            bot_user_id="users/999",
+            # routing via /slug prefix
         ),
     )
 
@@ -277,9 +271,9 @@ async def test_bridge_debounce_merges_rapid_messages(tmp_path) -> None:
         debounce_window_ms=100,  # 100ms for fast tests
     )
 
-    await bridge.handle_message(_make_message("hello"))
-    await bridge.handle_message(_make_message("how are you"))
-    await bridge.handle_message(_make_message("what's new"))
+    await bridge.handle_message(_make_message("/luna hello"))
+    await bridge.handle_message(_make_message("/luna how are you"))
+    await bridge.handle_message(_make_message("/luna what's new"))
 
     # Nothing dispatched yet -- still debouncing
     assert len(service.messages_api.created) == 0
@@ -306,7 +300,7 @@ async def test_bridge_slash_command_bypasses_debounce(tmp_path) -> None:
             soul="",
             model="gemini",
             mcp_servers=["*"],
-            bot_user_id="users/999",
+            # routing via /slug prefix
         ),
     )
 

@@ -29,7 +29,6 @@ from g3lobster.api.models import (
     JournalListResponse,
     JournalQueryRequest,
     KnowledgeListResponse,
-    LinkBotRequest,
     MemorySearchRequest,
     MemorySearchResponse,
     MemorySearchResult,
@@ -81,6 +80,7 @@ def _hydrate_agent_payload(
     payload["space_id"] = persona.space_id
     payload["bridge_enabled"] = bool(persona.bridge_enabled)
     payload["bridge_running"] = bool(bridge_item and bridge_item.get("is_running"))
+    payload.setdefault("aliases", list(persona.aliases))
     payload.setdefault("bot_user_id", persona.bot_user_id)
     payload.setdefault("dm_allowlist", list(persona.dm_allowlist))
     return payload
@@ -197,6 +197,7 @@ async def list_agents(request: Request) -> List[AgentResponse]:
             "enabled": persona.enabled,
             "model": persona.model,
             "mcp_servers": list(persona.mcp_servers),
+            "aliases": list(persona.aliases),
             "bot_user_id": persona.bot_user_id,
             "dm_allowlist": list(persona.dm_allowlist),
             "state": "stopped",
@@ -261,6 +262,7 @@ async def create_agent(payload: AgentCreateRequest, request: Request) -> AgentDe
         "enabled": saved.enabled,
         "model": saved.model,
         "mcp_servers": list(saved.mcp_servers),
+        "aliases": list(saved.aliases),
         "bot_user_id": saved.bot_user_id,
         "dm_allowlist": list(saved.dm_allowlist),
         "space_id": saved.space_id,
@@ -352,6 +354,7 @@ async def get_agent(agent_id: str, request: Request) -> AgentDetailResponse:
         "enabled": persona.enabled,
         "model": persona.model,
         "mcp_servers": list(persona.mcp_servers),
+        "aliases": list(persona.aliases),
         "bot_user_id": persona.bot_user_id,
         "dm_allowlist": list(persona.dm_allowlist),
         "space_id": persona.space_id,
@@ -394,6 +397,8 @@ async def update_agent(agent_id: str, payload: AgentUpdateRequest, request: Requ
         persona.mcp_servers = [str(item) for item in (updates["mcp_servers"] or ["*"])]
     if "enabled" in updates:
         persona.enabled = bool(updates["enabled"])
+    if "aliases" in updates:
+        persona.aliases = [str(a).strip().lower() for a in (updates["aliases"] or []) if str(a).strip()]
     if "bot_user_id" in updates:
         raw = updates["bot_user_id"]
         persona.bot_user_id = str(raw).strip() if raw else None
@@ -799,20 +804,6 @@ async def create_journal_entry(
     return JournalEntryResponse(**saved.as_dict())
 
 
-@router.post("/{agent_id}/link-bot")
-async def link_agent_bot(agent_id: str, payload: LinkBotRequest, request: Request) -> dict:
-    config = request.app.state.config
-    registry = request.app.state.registry
-
-    persona = _ensure_persona(config.agents.data_dir, agent_id)
-    persona.bot_user_id = payload.bot_user_id.strip()
-    saved = save_persona(config.agents.data_dir, persona)
-
-    runtime = registry.get_agent(agent_id)
-    if runtime:
-        runtime.persona = saved
-
-    return {"linked": True, "bot_user_id": saved.bot_user_id}
 
 
 @router.post("/{agent_id}/test")

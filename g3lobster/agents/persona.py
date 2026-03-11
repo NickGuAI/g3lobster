@@ -27,6 +27,7 @@ class AgentPersona:
     model: str = "gemini"
     response_timeout_s: Optional[float] = None
     mcp_servers: List[str] = field(default_factory=lambda: ["*"])
+    aliases: List[str] = field(default_factory=list)
     bot_user_id: Optional[str] = None
     enabled: bool = True
     dm_allowlist: List[str] = field(default_factory=list)
@@ -50,6 +51,7 @@ class AgentPersona:
             self.response_timeout_s = float(self.response_timeout_s)
             if self.response_timeout_s < 0:
                 raise ValueError("response_timeout_s must be >= 0 when provided")
+        self.aliases = [str(a).strip().lower() for a in self.aliases if str(a).strip()]
         self.mcp_servers = [str(item).strip() for item in self.mcp_servers if str(item).strip()] or ["*"]
         if self.bot_user_id:
             self.bot_user_id = str(self.bot_user_id).strip() or None
@@ -75,6 +77,7 @@ class AgentPersona:
             "id": self.id,
             "name": self.name,
             "emoji": self.emoji,
+            "aliases": list(self.aliases),
             "model": self.model,
             "response_timeout_s": self.response_timeout_s,
             "mcp_servers": list(self.mcp_servers),
@@ -189,6 +192,7 @@ def load_persona(data_dir: str, agent_id: str, *, skip_migration: bool = False) 
         model=str(payload.get("model", "gemini")),
         response_timeout_s=_parse_timeout(payload.get("response_timeout_s")),
         mcp_servers=list(payload.get("mcp_servers") or ["*"]),
+        aliases=list(payload.get("aliases") or []),
         bot_user_id=payload.get("bot_user_id"),
         enabled=bool(payload.get("enabled", True)),
         dm_allowlist=list(payload.get("dm_allowlist") or []),
@@ -216,6 +220,7 @@ def save_persona(data_dir: str, persona: AgentPersona) -> AgentPersona:
         model=persona.model,
         response_timeout_s=persona.response_timeout_s,
         mcp_servers=list(persona.mcp_servers),
+        aliases=list(persona.aliases),
         bot_user_id=persona.bot_user_id,
         enabled=persona.enabled,
         dm_allowlist=list(persona.dm_allowlist),

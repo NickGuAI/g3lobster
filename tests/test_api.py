@@ -295,10 +295,6 @@ def test_agents_routes_crud_and_memory(tmp_path):
         assert get_global_knowledge.status_code == 200
         assert get_global_knowledge.json() == {"items": []}
 
-        link = client.post(f"/agents/{agent_id}/link-bot", json={"bot_user_id": "users/777"})
-        assert link.status_code == 200
-        assert link.json() == {"linked": True, "bot_user_id": "users/777"}
-
         stop = client.post(f"/agents/{agent_id}/stop")
         assert stop.status_code == 200
         assert stop.json() == {"stopped": True}

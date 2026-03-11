@@ -67,6 +67,25 @@ HELP_TEXT = """\
 """
 
 
+def _handle_help(registry: Optional["AgentRegistry"]) -> str:
+    """Build /help output including available agents with their slug names."""
+    lines = [HELP_TEXT]
+    if registry is not None:
+        try:
+            personas = registry.list_enabled_personas()
+        except Exception:
+            personas = []
+        if personas:
+            lines.append("\n*Available agents*")
+            for p in personas:
+                slugs = [f"/{p.id}"]
+                for alias in getattr(p, "aliases", []):
+                    slugs.append(f"/{alias}")
+                slug_str = ", ".join(slugs)
+                lines.append(f"\u2022 {slug_str} \u2014 {p.emoji} {p.name}")
+    return "\n".join(lines)
+
+
 def detect_command(text: str) -> Optional[tuple[str, str]]:
     """Return ``(command, rest)`` if text contains a ``/`` command, else ``None``.
 
@@ -103,7 +122,7 @@ async def handle(
     cmd, rest = result
 
     if cmd == "help":
-        return HELP_TEXT
+        return _handle_help(registry)
 
     if cmd == "quick":
         return _handle_quick()
