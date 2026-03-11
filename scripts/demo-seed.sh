@@ -347,8 +347,43 @@ EOF
 # ---------------------------------------------------------------------------
 
 seed_procedures() {
-  header "Seeding PROCEDURES.md for DataBot"
+  header "Seeding PROCEDURES.md for Luna and DataBot"
 
+  # --- Luna: brainstorming procedure ---
+  local luna_procedures
+  luna_procedures=$(cat <<'EOF'
+# Learned Procedures
+
+## How to Run a Brainstorm
+**Trigger**: When a team member asks for ideas, brainstorming, or creative input
+**Steps**:
+1. Acknowledge the request and clarify the problem space
+2. Generate 5-7 divergent ideas without filtering
+3. Group ideas by theme (technical, creative, hybrid)
+4. For each group, pick the strongest idea and flesh it out with 2-3 bullet points
+5. Ask the requester which direction resonates before going deeper
+6. If delegation is needed, use delegate_to_agent to pull in DataBot for data backing
+
+## Project Kickoff Coordination
+**Trigger**: When a new project or initiative is announced
+**Steps**:
+1. Break the project into 3-5 workstreams
+2. Identify which agent is best suited for each workstream
+3. Draft a one-paragraph brief for each workstream
+4. Delegate data-gathering tasks to DataBot via delegate_to_agent
+5. Delegate scheduling tasks to Scheduler via delegate_to_agent
+6. Compile results into a kickoff summary and post to the team
+EOF
+  )
+  local body
+  body=$(api_call PUT "/agents/${LUNA_ID}/procedures" "$(python3 -c "import json; print(json.dumps({'content': open('/dev/stdin').read()}))" <<< "$luna_procedures")")
+  if check_status "Seed Luna procedures"; then
+    success "Seeded PROCEDURES.md for Luna"
+  else
+    warn "Failed to seed procedures for Luna (HTTP $LAST_HTTP_CODE)"
+  fi
+
+  # --- DataBot: data procedures ---
   local procedures
   procedures=$(cat <<'EOF'
 # Learned Procedures
