@@ -113,7 +113,7 @@ class CronManager:
                 self._fire,
                 trigger=trigger,
                 id=job_id,
-                args=[task.agent_id, task.id, task.instruction],
+                args=[task.agent_id, task.id, task.instruction, task.dm_target],
                 misfire_grace_time=60,
             )
             logger.debug("Scheduled cron task %s (%s) for agent %s", task.id, task.schedule, task.agent_id)
@@ -139,7 +139,7 @@ class CronManager:
                         self._consolidation_schedule,
                     )
 
-    async def _fire(self, agent_id: str, task_id: str, instruction: str) -> None:
+    async def _fire(self, agent_id: str, task_id: str, instruction: str, dm_target: str | None = None) -> None:
         import time as time_mod
         logger.info("Firing cron task %s for agent %s", task_id, agent_id)
         now = datetime.now(tz=timezone.utc).isoformat()
@@ -188,6 +188,11 @@ class CronManager:
             status = "completed" if result.status.value == "completed" else "failed"
             preview = (result.result or result.error or "")[:200]
             logger.info("Cron task %s completed: status=%s", task_id, result.status)
+
+            # Deliver result to DM target if configured
+            if dm_target and status == "completed" and result.result:
+                await self._deliver_dm(dm_target, result.result)
+
         except Exception:
             duration = round(time_mod.monotonic() - start_time, 1)
             status = "failed"
@@ -215,3 +220,15 @@ class CronManager:
         reports = pipeline.run_all(self._registry)
         for report in reports:
             logger.info("Consolidation report [%s]: %s", report.agent_id, report.summary)
+
+    async def _deliver_dm(self, dm_target: str, text: str) -> None:
+        """Send a cron task result to a user via Google Chat DM."""
+        try:
+            from g3lobster.chat.auth import get_authenticated_service
+            from g3lobster.chat.dm import send_dm
+
+            service = get_authenticated_service()
+            await send_dm(service, dm_target, text)
+            logger.info("Cron result delivered via DM to %s", dm_target)
+        except Exception:
+            logger.exception("Failed to deliver cron result DM to %s", dm_target)
