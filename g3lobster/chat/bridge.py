@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Dict, Optional, Set
 
 if TYPE_CHECKING:
     from g3lobster.cron.store import CronStore
+    from g3lobster.standup.orchestrator import StandupOrchestrator
 
 from g3lobster.chat.auth import get_authenticated_service
 from g3lobster.chat.commands import handle as handle_command
@@ -78,6 +79,7 @@ class ChatBridge:
         seen_content: Optional[Set[str]] = None,
         auth_data_dir: Optional[str] = None,
         cron_store: Optional["CronStore"] = None,
+        standup_orchestrator: Optional["StandupOrchestrator"] = None,
         seen_content_max_size: int = 10_000,
         debug_mode: bool = False,
         agent_filter: Optional[Set[str]] = None,
@@ -89,6 +91,7 @@ class ChatBridge:
         self.spaces_config = Path(spaces_config or (Path.home() / ".gemini" / "chat_bridge_spaces.json"))
         self.auth_data_dir = auth_data_dir
         self.cron_store = cron_store
+        self.standup_orchestrator = standup_orchestrator
         self.debug_mode = debug_mode
 
         self.space_id = space_id
@@ -281,6 +284,15 @@ class ChatBridge:
                     thread_id=thread_id,
                 )
                 return
+
+        # Standup response collection — collect response from tracked team members.
+        if self.standup_orchestrator is not None:
+            sender_name = sender.get("name") or ""
+            if self.standup_orchestrator.is_standup_participant(target_id, sender_name):
+                sender_display = sender.get("displayName") or sender_name
+                self.standup_orchestrator.collect_response(
+                    target_id, sender_name, sender_display, text,
+                )
 
         task = Task(
             prompt=text,
