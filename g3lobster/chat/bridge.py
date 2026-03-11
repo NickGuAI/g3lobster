@@ -14,7 +14,8 @@ if TYPE_CHECKING:
     from g3lobster.standup.orchestrator import StandupOrchestrator
 
 from g3lobster.chat.auth import get_authenticated_service
-from g3lobster.chat.commands import handle as handle_command
+from g3lobster.chat.commands import detect_command, handle as handle_command
+from g3lobster.chat.debounce import DebounceKey, MessageDebouncer
 from g3lobster.cli.parser import get_content_id
 from g3lobster.cli.streaming import StreamEventType, accumulate_text
 from g3lobster.tasks.types import Task, TaskStatus
@@ -84,6 +85,7 @@ class ChatBridge:
         debug_mode: bool = False,
         agent_filter: Optional[Set[str]] = None,
         concierge_agent_id: Optional[str] = None,
+        debounce_window_ms: int = 2000,
     ):
         self.registry = registry
         self.poll_interval_s = poll_interval_s
@@ -102,6 +104,10 @@ class ChatBridge:
         self._last_message_time: Optional[str] = last_message_time
         self._seen_content: BoundedSet = BoundedSet(seen_content_max_size)
         self._agent_filter: Optional[Set[str]] = set(agent_filter) if agent_filter is not None else None
+        self._debouncer = MessageDebouncer(
+            window_s=debounce_window_ms / 1000.0,
+            flush_callback=self._dispatch_to_agent,
+        )
         if seen_content:
             for item in seen_content:
                 self._seen_content.add(item)
@@ -130,6 +136,7 @@ class ChatBridge:
 
     async def stop(self) -> None:
         self._stop_event.set()
+        self._debouncer.cancel_all()
         if self._poll_task:
             self._poll_task.cancel()
             try:
@@ -299,15 +306,12 @@ class ChatBridge:
 
         thread_id = message.get("thread", {}).get("name")
         user_id = sender.get("name") or "unknown"
-        thread_id_safe = (thread_id or "no-thread").replace("/", "_")
-        session_id = f"{self.space_id}__{user_id}__{thread_id_safe}"
 
-        # Slash-command interception — handle locally without hitting the AI.
-        if self.cron_store is not None:
+        # Slash-command interception — handle immediately, bypass debounce.
+        if detect_command(text) is not None and self.cron_store is not None:
             cmd_reply = await handle_command(text, target_id, self.cron_store, registry=self.registry, global_memory=getattr(self.registry, 'global_memory_manager', None))
             if cmd_reply is not None:
                 if isinstance(cmd_reply, dict):
-                    # Cards v2 response (e.g. /status)
                     await self.send_message("", thread_id=thread_id, cards_v2=cmd_reply.get("cardsV2"))
                 else:
                     await self.send_message(
@@ -325,8 +329,39 @@ class ChatBridge:
                     target_id, sender_name, sender_display, text,
                 )
 
+        # Route through debouncer for non-command messages.
+        # When debounce window is zero, dispatch directly (no timer overhead).
+        if self._debouncer.window_s == 0:
+            await self._dispatch_to_agent(text, message, persona, thread_id, target_id)
+        else:
+            key: DebounceKey = (self.space_id or "", user_id, thread_id or "no-thread")
+            self._debouncer.add(key, text, message, persona, thread_id, target_id)
+
+    async def _dispatch_to_agent(
+        self,
+        merged_text: str,
+        message: dict,
+        persona: object,
+        thread_id: Optional[str],
+        target_id: str,
+    ) -> None:
+        """Flush callback — sends the (possibly merged) prompt to the agent."""
+        runtime = self.registry.get_agent(target_id)
+        if not runtime:
+            started = await self.registry.start_agent(target_id)
+            if not started:
+                return
+            runtime = self.registry.get_agent(target_id)
+            if not runtime:
+                return
+
+        sender = message.get("sender", {})
+        user_id = sender.get("name") or "unknown"
+        thread_id_safe = (thread_id or "no-thread").replace("/", "_")
+        session_id = f"{self.space_id}__{user_id}__{thread_id_safe}"
+
         task = Task(
-            prompt=text,
+            prompt=merged_text,
             session_id=session_id,
             timeout_s=_resolve_task_timeout_s(persona, self.registry),
         )
@@ -387,7 +422,6 @@ class ChatBridge:
         else:
             reply_text = f"{reply_persona.emoji} {reply_persona.name}: task finished with no output"
 
-        # Update the thinking message in-place (no extra new message).
         if thinking_name:
             await self.update_message(thinking_name, reply_text)
         else:
