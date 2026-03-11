@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 from g3lobster.api.routes_agents import router as agents_router
 from g3lobster.api.routes_chat_events import router as chat_events_router
 from g3lobster.api.routes_control import router as control_router
+from g3lobster.api.routes_calendar import router as calendar_router
+from g3lobster.api.routes_calendar_setup import router as calendar_setup_router
 from g3lobster.api.routes_cron import router as cron_router
 from g3lobster.api.routes_standup import router as standup_router
 from g3lobster.api.routes_delegation import router as delegation_router
@@ -124,6 +126,8 @@ def create_app(
     app.include_router(export_router)
     app.include_router(cron_router)
     app.include_router(standup_router)
+    app.include_router(calendar_router)
+    app.include_router(calendar_setup_router)
 
     static_dir = Path(__file__).resolve().parent.parent / "static"
     if static_dir.is_dir():

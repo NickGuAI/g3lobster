@@ -17,6 +17,8 @@ import os
 import sys
 from typing import Any, Dict, Optional, Sequence
 
+from g3lobster.mcp.calendar_tools import build_calendar_tool_schemas
+
 logger = logging.getLogger(__name__)
 
 # Default base URL for the g3lobster API
@@ -167,6 +169,7 @@ class DelegationMCPHandler:
                     _build_delegate_tool_schema(),
                     _build_list_agents_tool_schema(),
                     _build_sleep_tool_schema(),
+                    *build_calendar_tool_schemas(),
                 ],
             })
 
@@ -189,6 +192,8 @@ class DelegationMCPHandler:
             return self._list_agents(req_id)
         if tool_name == "sleep":
             return self._sleep(req_id, arguments)
+        if tool_name in ("check_conflicts", "find_meeting_slots", "reschedule_event", "create_event"):
+            return self._calendar_tool(req_id, tool_name, arguments)
 
         return self._error(req_id, -32602, f"Unknown tool: {tool_name}")
 
@@ -330,6 +335,56 @@ class DelegationMCPHandler:
         except Exception as exc:
             return self._respond(req_id, {
                 "content": [{"type": "text", "text": f"Sleep error: {exc}"}],
+                "isError": True,
+            })
+
+    def _calendar_tool(
+        self, req_id: Any, tool_name: str, arguments: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Proxy a calendar tool call to the g3lobster REST API."""
+        # Map MCP tool names to REST API endpoints and methods
+        endpoint_map = {
+            "check_conflicts": ("/calendar/conflicts", "POST"),
+            "find_meeting_slots": ("/calendar/find-slots", "POST"),
+            "reschedule_event": ("/calendar/reschedule", "POST"),
+            "create_event": ("/calendar/create-event", "POST"),
+        }
+        path, method = endpoint_map[tool_name]
+
+        # Remap MCP argument names to REST API field names
+        if tool_name == "check_conflicts":
+            payload = {
+                "calendar_id": arguments.get("calendar_id", "primary"),
+                "hours_ahead": float(arguments.get("hours_ahead", 24.0)),
+            }
+        elif tool_name == "find_meeting_slots":
+            payload = {
+                "attendee_emails": arguments.get("attendee_emails", []),
+                "duration_minutes": int(arguments.get("duration_minutes", 30)),
+                "days_ahead": int(arguments.get("days_ahead", 7)),
+                "max_results": int(arguments.get("max_results", 5)),
+            }
+        else:
+            payload = arguments
+
+        try:
+            import urllib.request
+            url = f"{self.base_url}{path}"
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                url, data=data,
+                headers={"Content-Type": "application/json"},
+                method=method,
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+
+            return self._respond(req_id, {
+                "content": [{"type": "text", "text": json.dumps(result, indent=2)}],
+            })
+        except Exception as exc:
+            return self._respond(req_id, {
+                "content": [{"type": "text", "text": f"Calendar tool error: {exc}"}],
                 "isError": True,
             })
 
