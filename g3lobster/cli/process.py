@@ -98,6 +98,7 @@ class GeminiProcess:
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self.cwd,
                 env=env,
+                limit=30 * 1024 * 1024,
             )
             self._active_process = proc
 
@@ -151,6 +152,7 @@ class GeminiProcess:
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self.cwd,
                 env=env,
+                limit=30 * 1024 * 1024,
             )
             self._active_process = proc
 
@@ -284,6 +286,7 @@ class TmuxSubagentProcess:
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self.cwd,
                 env=env,
+                limit=30 * 1024 * 1024,
             )
 
             events = []
@@ -337,6 +340,7 @@ class TmuxSubagentProcess:
             stderr=asyncio.subprocess.PIPE,
             cwd=self.cwd,
             env=env,
+            limit=30 * 1024 * 1024,
         )
 
         try:
