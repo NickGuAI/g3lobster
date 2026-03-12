@@ -115,7 +115,10 @@ def create_authorization_url(data_dir: Optional[str] = None) -> str:
 
     state_file = oauth_state_path(data_dir)
     state_file.parent.mkdir(parents=True, exist_ok=True)
-    state_file.write_text(json.dumps({"state": state}), encoding="utf-8")
+    state_data = {"state": state}
+    if getattr(flow, "code_verifier", None):
+        state_data["code_verifier"] = flow.code_verifier
+    state_file.write_text(json.dumps(state_data), encoding="utf-8")
     return auth_url
 
 
@@ -124,13 +127,11 @@ def complete_authorization(data_dir: Optional[str], code: str) -> Path:
 
     # Accept full redirect URL — extract code query parameter
     if code.strip().startswith(("http://", "https://")):
-        from urllib.parse import parse_qs, urlparse
-
-        parsed = urlparse(code.strip())
-        codes = parse_qs(parsed.query).get("code", [])
-        if not codes:
-            raise ValueError("URL does not contain a 'code' parameter")
-        code = codes[0]
+        import re
+        match = re.search(r'(?:[?&]|&amp;)code=([^&#]+)', code.strip())
+        if not match:
+            raise ValueError(f"URL does not contain a 'code' parameter. Ensure you copied the full redirect URL correctly. Received: {code[:80]}...")
+        code = match.group(1)
 
     creds_path = credentials_path(data_dir)
     if not creds_path.exists():
@@ -140,9 +141,14 @@ def complete_authorization(data_dir: Optional[str], code: str) -> Path:
     state_file = oauth_state_path(data_dir)
     if state_file.exists():
         try:
-            state = json.loads(state_file.read_text(encoding="utf-8")).get("state")
+            state_data = json.loads(state_file.read_text(encoding="utf-8"))
+            state = state_data.get("state")
+            code_verifier = state_data.get("code_verifier")
         except json.JSONDecodeError:
             state = None
+            code_verifier = None
+    else:
+        code_verifier = None
 
     flow = InstalledAppFlow.from_client_secrets_file(
         str(creds_path),
@@ -150,6 +156,8 @@ def complete_authorization(data_dir: Optional[str], code: str) -> Path:
         redirect_uri="http://localhost",
         state=state,
     )
+    if code_verifier:
+        flow.code_verifier = code_verifier
     flow.fetch_token(code=code.strip())
 
     token = token_path(data_dir)
