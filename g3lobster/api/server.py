@@ -28,6 +28,7 @@ from g3lobster.api.routes_health import router as health_router
 from g3lobster.api.routes_thinking import router as thinking_router
 from g3lobster.api.routes_metrics import router as metrics_router
 from g3lobster.api.routes_setup import router as setup_router
+from g3lobster.api.routes_board import router as board_router
 from g3lobster.api.event_bus import EventBus
 from g3lobster.config import AppConfig
 
@@ -133,6 +134,7 @@ def create_app(
     app.include_router(calendar_router)
     app.include_router(calendar_setup_router)
     app.include_router(thinking_router)
+    app.include_router(board_router)
 
     static_dir = Path(__file__).resolve().parent.parent / "static"
     if static_dir.is_dir():
