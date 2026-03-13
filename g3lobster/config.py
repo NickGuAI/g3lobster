@@ -33,8 +33,6 @@ class AgentsConfig:
     consolidation_schedule: str = "0 2 * * *"
     consolidation_days_window: int = 7
     consolidation_stale_days: int = 30
-    journal_salience_default: str = "normal"
-    journal_association_decay_days: int = 90
 
 
 @dataclass
@@ -132,6 +130,13 @@ class AuthConfig:
 
 
 @dataclass
+class TasksConfig:
+    enabled: bool = True
+    google_sheet_id: Optional[str] = None
+    google_credentials_path: Optional[str] = None
+
+
+@dataclass
 class AppConfig:
     agents: AgentsConfig = field(default_factory=AgentsConfig)
     gemini: GeminiConfig = field(default_factory=GeminiConfig)
@@ -145,6 +150,7 @@ class AppConfig:
     subagent: SubagentConfig = field(default_factory=SubagentConfig)
     control_plane: ControlPlaneConfig = field(default_factory=ControlPlaneConfig)
     auth: AuthConfig = field(default_factory=AuthConfig)
+    tasks: TasksConfig = field(default_factory=TasksConfig)
     debug_mode: bool = False
 
 
@@ -248,6 +254,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
             **_filter_fields(ControlPlaneConfig, data.get("control_plane") or {}, "control_plane")
         ),
         auth=AuthConfig(**_filter_fields(AuthConfig, data.get("auth") or {}, "auth")),
+        tasks=TasksConfig(**_filter_fields(TasksConfig, data.get("tasks") or {}, "tasks")),
         debug_mode=bool(data.get("debug_mode", False)),
     )
 
@@ -263,6 +270,7 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     _apply_env_overrides("subagent", config.subagent)
     _apply_env_overrides("control_plane", config.control_plane)
     _apply_env_overrides("auth", config.auth)
+    _apply_env_overrides("tasks", config.tasks)
 
     debug_env = os.environ.get("G3LOBSTER_DEBUG_MODE", "")
     if debug_env:

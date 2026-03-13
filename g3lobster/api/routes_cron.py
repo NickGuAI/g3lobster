@@ -130,10 +130,15 @@ async def run_cron_task(agent_id: str, task_id: str, request: Request) -> dict:
     store.update_task(agent_id, task_id, last_run=now)
 
     start_time = time_mod.monotonic()
-    result = await runtime.assign(run_task)
-    duration = round(time_mod.monotonic() - start_time, 1)
-    status = "completed" if result.status == TaskStatus.COMPLETED else "failed"
-    preview = (result.result or result.error or "")[:200]
+    try:
+        result = await runtime.assign(run_task)
+        duration = round(time_mod.monotonic() - start_time, 1)
+        status = "completed" if result.status == TaskStatus.COMPLETED else "failed"
+        preview = (result.result or result.error or "")[:200]
+    except Exception as exc:
+        duration = round(time_mod.monotonic() - start_time, 1)
+        status = "failed"
+        preview = f"Exception: {exc}"[:200]
 
     store.record_run(agent_id, CronRunRecord(
         task_id=task_id, fired_at=now, status=status,
