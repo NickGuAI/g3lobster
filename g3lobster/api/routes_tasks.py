@@ -75,6 +75,17 @@ async def insert_task(payload: TaskInsertRequest, request: Request) -> dict:
     return asdict(item)
 
 
+@router.post("/sync")
+async def sync_tasks(payload: SyncRequest, request: Request) -> dict:
+    sync = _get_sheets_sync(request)
+    if payload.mode == "push":
+        return sync.push()
+    elif payload.mode == "pull":
+        return sync.pull()
+    else:
+        return sync.sync()
+
+
 @router.get("/{task_id}")
 async def get_task(task_id: str, request: Request) -> dict:
     store = _get_store(request)
@@ -101,14 +112,3 @@ async def delete_task(task_id: str, request: Request) -> dict:
     if not deleted:
         raise HTTPException(status_code=404, detail="Task not found")
     return {"deleted": True}
-
-
-@router.post("/sync")
-async def sync_tasks(payload: SyncRequest, request: Request) -> dict:
-    sync = _get_sheets_sync(request)
-    if payload.mode == "push":
-        return sync.push()
-    elif payload.mode == "pull":
-        return sync.pull()
-    else:
-        return sync.sync()
