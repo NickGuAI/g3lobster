@@ -6,6 +6,8 @@ from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+HEARTBEAT_MIN_INTERVAL_S = 30.0
+
 
 class AgentCreateRequest(BaseModel):
     name: str = Field(min_length=1)
@@ -18,7 +20,7 @@ class AgentCreateRequest(BaseModel):
     space_id: Optional[str] = None
     bridge_enabled: bool = False
     heartbeat_enabled: bool = True
-    heartbeat_interval_s: float = Field(default=300.0, gt=0)
+    heartbeat_interval_s: float = Field(default=300.0, ge=HEARTBEAT_MIN_INTERVAL_S)
 
 
 class AgentUpdateRequest(BaseModel):
@@ -33,7 +35,7 @@ class AgentUpdateRequest(BaseModel):
     space_id: Optional[str] = None
     bridge_enabled: Optional[bool] = None
     heartbeat_enabled: Optional[bool] = None
-    heartbeat_interval_s: Optional[float] = Field(default=None, gt=0)
+    heartbeat_interval_s: Optional[float] = Field(default=None, ge=HEARTBEAT_MIN_INTERVAL_S)
 
 
 class AgentResponse(BaseModel):

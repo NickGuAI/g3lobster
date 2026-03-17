@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from g3lobster.agents.persona import AgentPersona, load_persona, save_persona
+from g3lobster.agents.persona import (
+    AgentPersona,
+    HEARTBEAT_MIN_INTERVAL_S,
+    load_persona,
+    save_persona,
+)
 from g3lobster.chat.bridge import ChatBridge
 from g3lobster.cli.process import GeminiProcess
 from g3lobster.config import load_config
@@ -320,6 +325,22 @@ def test_persona_response_timeout_roundtrip(tmp_path: Path) -> None:
     assert loaded.response_timeout_s == 0.0
     assert loaded.heartbeat_enabled is False
     assert loaded.heartbeat_interval_s == 123.0
+
+
+def test_persona_heartbeat_interval_clamped_to_safe_min(tmp_path: Path) -> None:
+    data_dir = str(tmp_path / "data")
+    save_persona(
+        data_dir,
+        AgentPersona(
+            id="luna",
+            name="Luna",
+            heartbeat_enabled=True,
+            heartbeat_interval_s=1.0,
+        ),
+    )
+    loaded = load_persona(data_dir, "luna")
+    assert loaded is not None
+    assert loaded.heartbeat_interval_s == HEARTBEAT_MIN_INTERVAL_S
 
 
 def test_health_inspector_builds_heartbeat_review_suggestions() -> None:

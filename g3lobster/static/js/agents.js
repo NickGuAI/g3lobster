@@ -427,7 +427,7 @@ export async function render(root, { onSetupChange }) {
           </div>
           <div class="field">
             <label>Heartbeat Interval (s)</label>
-            <input name="heartbeat_interval_s" type="number" min="1" step="1" value="${escapeHtml(detail.heartbeat_interval_s || 300)}" />
+            <input name="heartbeat_interval_s" type="number" min="30" step="1" value="${escapeHtml(detail.heartbeat_interval_s || 300)}" />
           </div>
         </div>
         <div class="field">
@@ -1172,7 +1172,7 @@ export async function render(root, { onSetupChange }) {
             space_id: String(data.get("space_id") || "").trim() || null,
             bridge_enabled: String(data.get("bridge_enabled") || "false") === "true",
             heartbeat_enabled: String(data.get("heartbeat_enabled") || "false") === "true",
-            heartbeat_interval_s: Math.max(1, Number(data.get("heartbeat_interval_s") || 300)),
+            heartbeat_interval_s: Math.max(30, Number(data.get("heartbeat_interval_s") || 300)),
           };
           detailCache[agentId] = await updateAgent(agentId, payload);
           setNotice("success", `Updated ${agentId}.`);

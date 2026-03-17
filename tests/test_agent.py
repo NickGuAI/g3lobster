@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from g3lobster.pool.agent import GeminiAgent
+from g3lobster.pool.agent import HEARTBEAT_MIN_INTERVAL_S, GeminiAgent
 from g3lobster.pool.types import AgentState
 from g3lobster.tasks.types import Task, TaskStatus
 
@@ -31,6 +31,11 @@ class FakeProcess:
 
     def is_alive(self) -> bool:
         return self.alive
+
+
+@pytest.fixture
+def fast_heartbeat_floor(monkeypatch):
+    monkeypatch.setattr("g3lobster.pool.agent.HEARTBEAT_MIN_INTERVAL_S", 0.01)
 
 
 @pytest.mark.asyncio
@@ -85,8 +90,23 @@ async def test_agent_assign_passes_session_id_to_process(memory_manager, mcp_man
     assert process.session_ids == ["delegation-abc123"]
 
 
+def test_agent_clamps_heartbeat_interval_to_safe_min(memory_manager, mcp_manager, context_builder) -> None:
+    agent = GeminiAgent(
+        agent_id="agent-0",
+        process_factory=lambda: FakeProcess("done"),
+        mcp_manager=mcp_manager,
+        memory_manager=memory_manager,
+        context_builder=context_builder,
+        heartbeat_enabled=True,
+        heartbeat_interval_s=1.0,
+    )
+    assert agent.heartbeat_interval_s == HEARTBEAT_MIN_INTERVAL_S
+
+
 @pytest.mark.asyncio
-async def test_agent_heartbeat_loop_publishes_reviews(memory_manager, mcp_manager, context_builder) -> None:
+async def test_agent_heartbeat_loop_publishes_reviews(
+    memory_manager, mcp_manager, context_builder, fast_heartbeat_floor
+) -> None:
     process = FakeProcess("done")
     published = []
 
@@ -121,7 +141,9 @@ async def test_agent_heartbeat_loop_publishes_reviews(memory_manager, mcp_manage
 
 
 @pytest.mark.asyncio
-async def test_agent_heartbeat_skips_when_busy(memory_manager, mcp_manager, context_builder) -> None:
+async def test_agent_heartbeat_skips_when_busy(
+    memory_manager, mcp_manager, context_builder, fast_heartbeat_floor
+) -> None:
     process = FakeProcess("done")
     published = []
     provider_calls = 0
@@ -163,7 +185,9 @@ async def test_agent_heartbeat_skips_when_busy(memory_manager, mcp_manager, cont
 
 
 @pytest.mark.asyncio
-async def test_agent_heartbeat_loop_stops_with_agent(memory_manager, mcp_manager, context_builder) -> None:
+async def test_agent_heartbeat_loop_stops_with_agent(
+    memory_manager, mcp_manager, context_builder, fast_heartbeat_floor
+) -> None:
     process = FakeProcess("done")
     published = []
 

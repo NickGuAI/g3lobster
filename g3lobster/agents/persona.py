@@ -14,6 +14,7 @@ from g3lobster.memory.migration import migrate_agent_memory_layout
 
 AGENT_ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 RESERVED_AGENT_IDS = frozenset({"global"})
+HEARTBEAT_MIN_INTERVAL_S = 30.0
 
 
 @dataclass
@@ -69,6 +70,8 @@ class AgentPersona:
         self.heartbeat_interval_s = float(self.heartbeat_interval_s)
         if self.heartbeat_interval_s <= 0:
             raise ValueError("heartbeat_interval_s must be > 0")
+        if self.heartbeat_interval_s < HEARTBEAT_MIN_INTERVAL_S:
+            self.heartbeat_interval_s = HEARTBEAT_MIN_INTERVAL_S
         if not isinstance(self.space_overrides, dict):
             self.space_overrides = {}
 
@@ -113,12 +116,21 @@ def _parse_timeout(value: object) -> Optional[float]:
     return timeout_s
 
 
-def _parse_positive_float(value: object, *, field_name: str, default: float) -> float:
+def _parse_positive_float(
+    value: object,
+    *,
+    field_name: str,
+    default: float,
+    min_value: float = 0.0,
+) -> float:
     if value is None:
-        return float(default)
-    parsed = float(value)
+        parsed = float(default)
+    else:
+        parsed = float(value)
     if parsed <= 0:
         raise ValueError(f"{field_name} must be > 0")
+    if parsed < float(min_value):
+        return float(min_value)
     return parsed
 
 
@@ -220,6 +232,7 @@ def load_persona(data_dir: str, agent_id: str, *, skip_migration: bool = False) 
             payload.get("heartbeat_interval_s"),
             field_name="heartbeat_interval_s",
             default=300.0,
+            min_value=HEARTBEAT_MIN_INTERVAL_S,
         ),
         space_overrides=dict(payload.get("space_overrides") or {}),
         created_at=str(payload.get("created_at") or _utc_now()),

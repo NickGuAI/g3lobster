@@ -19,6 +19,8 @@ from g3lobster.tasks.types import Task, TaskStatus, TaskStore
 
 logger = logging.getLogger(__name__)
 
+HEARTBEAT_MIN_INTERVAL_S = 30.0
+
 
 def _normalize_timeout(timeout_s: Optional[float]) -> Optional[float]:
     if timeout_s is None:
@@ -33,6 +35,13 @@ def _normalize_heartbeat_interval(interval_s: float) -> float:
     value = float(interval_s)
     if value <= 0:
         raise ValueError("heartbeat_interval_s must be > 0")
+    if value < HEARTBEAT_MIN_INTERVAL_S:
+        logger.warning(
+            "heartbeat_interval_s=%s is below minimum %ss; clamping",
+            value,
+            HEARTBEAT_MIN_INTERVAL_S,
+        )
+        return HEARTBEAT_MIN_INTERVAL_S
     return value
 
 
