@@ -49,6 +49,7 @@ class GeminiAgent:
         default_mcp_servers: Optional[List[str]] = None,
         task_store: Optional[TaskStore] = None,
         subagent_spawner: Optional[object] = None,
+        board_store: Optional[object] = None,
         heartbeat_enabled: bool = True,
         heartbeat_interval_s: float = 300.0,
         heartbeat_review_provider: Optional[Callable[[], object]] = None,
@@ -68,6 +69,7 @@ class GeminiAgent:
         self.busy_since: Optional[float] = None
         self.task_store = task_store
         self.subagent_spawner = subagent_spawner
+        self.board_store = board_store
         self.heartbeat_enabled = bool(heartbeat_enabled)
         self.heartbeat_interval_s = _normalize_heartbeat_interval(heartbeat_interval_s)
         self.heartbeat_review_provider = heartbeat_review_provider

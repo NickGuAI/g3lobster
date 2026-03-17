@@ -1,6 +1,9 @@
 import {
+  completeBoardTask,
+  createBoardTask,
   createAgent,
   createCronTask,
+  deleteBoardTask,
   deleteAgent,
   deleteCronTask,
   exportAgentUrl,
@@ -16,6 +19,7 @@ import {
   importAgent,
   listAgentSessions,
   listAgents,
+  listBoardTasks,
   listMcpServers,
   listCronTasks,
   listGlobalKnowledge,
@@ -28,6 +32,7 @@ import {
   testAgent,
   updateAgent,
   updateAgentMemory,
+  updateBoardTask,
   updateAgentProcedures,
   updateCronTask,
   validateCronSchedule,
@@ -192,6 +197,8 @@ export async function render(root, { onSetupChange }) {
   const sessionsCache = {};
   const transcriptCache = {};
   const cronsCache = {};
+  const boardTasksCache = {};
+  const heartbeatSuggestionsCache = {};
   const cronUiState = {};
   const pendingLifecycle = {};
 
@@ -199,6 +206,7 @@ export async function render(root, { onSetupChange }) {
   let pollIntervalId = null;
   let metricsIntervalId = null;
   let uptimeIntervalId = null;
+  let boardEventSource = null;
   let rerenderInFlight = null;
   let rerenderQueued = false;
   let metricsCache = new Map();
@@ -524,6 +532,81 @@ export async function render(root, { onSetupChange }) {
       }
     }
     return availableMcpServers;
+  }
+
+  async function ensureAgentBoardTasks(agentId) {
+    if (!agentId) {
+      return [];
+    }
+    if (!boardTasksCache[agentId]) {
+      boardTasksCache[agentId] = await listBoardTasks({
+        agent_id: agentId,
+        limit: 200,
+      });
+    }
+    return boardTasksCache[agentId] || [];
+  }
+
+  function rememberHeartbeatSuggestions(agentId, suggestions) {
+    if (!agentId || !Array.isArray(suggestions) || !suggestions.length) {
+      return;
+    }
+    const existing = heartbeatSuggestionsCache[agentId] || [];
+    const stamped = suggestions.map((item) => ({
+      kind: item.kind || "note",
+      message: item.message || "",
+      task_id: item.task_id || null,
+      title: item.title || "",
+      seen_at: new Date().toISOString(),
+    }));
+    heartbeatSuggestionsCache[agentId] = [...stamped, ...existing].slice(0, 20);
+  }
+
+  function connectBoardStream() {
+    if (boardEventSource) {
+      return;
+    }
+    boardEventSource = new EventSource("/board/stream");
+
+    boardEventSource.onmessage = (msg) => {
+      try {
+        const event = JSON.parse(msg.data);
+        const eventType = String(event?.type || "");
+
+        if (eventType === "heartbeat_review") {
+          const agentId = event.agent_id || "";
+          rememberHeartbeatSuggestions(agentId, event.suggestions || []);
+          if (activeTab === "tasks" && activeAgentId === agentId) {
+            queueRerender();
+          }
+          return;
+        }
+
+        if (eventType.startsWith("board_task_")) {
+          const task = event.task || {};
+          const affectedAgentId = task.agent_id || event.agent_id;
+          if (affectedAgentId && boardTasksCache[affectedAgentId]) {
+            delete boardTasksCache[affectedAgentId];
+          }
+          if (activeTab === "tasks" && activeAgentId) {
+            queueRerender();
+          }
+        }
+      } catch (_err) {
+        // ignore malformed SSE payloads
+      }
+    };
+
+    boardEventSource.onerror = () => {
+      // Let EventSource auto-reconnect.
+    };
+  }
+
+  function disconnectBoardStream() {
+    if (boardEventSource) {
+      boardEventSource.close();
+      boardEventSource = null;
+    }
   }
 
   function getActiveAgent(agents) {
@@ -899,6 +982,95 @@ export async function render(root, { onSetupChange }) {
     `;
   }
 
+  function tasksTabMarkup(agent) {
+    const tasks = boardTasksCache[agent.id] || [];
+    const suggestions = heartbeatSuggestionsCache[agent.id] || [];
+    const rows = tasks.length
+      ? tasks
+          .map((task) => {
+            const updated = String(task.updated_at || "").replace("T", " ").slice(0, 19) || "unknown";
+            const status = String(task.status || "todo");
+            const doneDisabled = status === "done" ? "disabled" : "";
+            return `
+              <tr>
+                <td><code>${escapeHtml(String(task.id || "").slice(0, 8))}</code></td>
+                <td>${escapeHtml(task.title || "")}</td>
+                <td>${escapeHtml(task.type || "chore")}</td>
+                <td>${escapeHtml(task.priority || "normal")}</td>
+                <td>${escapeHtml(status)}</td>
+                <td>${escapeHtml(task.created_by || "human")}</td>
+                <td>${escapeHtml(updated)}</td>
+                <td class="actions">
+                  <button class="btn btn-secondary" data-action="task-set-status" data-agent-id="${escapeHtml(agent.id)}" data-task-id="${escapeHtml(task.id)}" data-next-status="in_progress">Start</button>
+                  <button class="btn btn-secondary" data-action="task-set-status" data-agent-id="${escapeHtml(agent.id)}" data-task-id="${escapeHtml(task.id)}" data-next-status="blocked">Block</button>
+                  <button class="btn btn-secondary" data-action="task-complete" data-agent-id="${escapeHtml(agent.id)}" data-task-id="${escapeHtml(task.id)}" ${doneDisabled}>Done</button>
+                  <button class="btn btn-danger" data-action="task-delete" data-agent-id="${escapeHtml(agent.id)}" data-task-id="${escapeHtml(task.id)}">Delete</button>
+                </td>
+              </tr>
+            `;
+          })
+          .join("")
+      : `<tr><td colspan="8" class="empty">No board tasks for this agent.</td></tr>`;
+
+    const suggestionItems = suggestions.length
+      ? suggestions
+          .map(
+            (item) => `
+              <li>
+                <strong>${escapeHtml(item.kind || "note")}</strong>: ${escapeHtml(item.message || "")}
+              </li>
+            `
+          )
+          .join("")
+      : "<li class='empty'>No heartbeat suggestions yet.</li>";
+
+    return `
+      <div class="actions">
+        <button class="btn btn-secondary" data-action="load-board-tasks" data-agent-id="${escapeHtml(agent.id)}">Refresh</button>
+      </div>
+      <table class="cron-table">
+        <thead>
+          <tr><th>ID</th><th>Title</th><th>Type</th><th>Priority</th><th>Status</th><th>Created By</th><th>Updated</th><th></th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <form class="task-add-form" data-agent-id="${escapeHtml(agent.id)}">
+        <div class="form-grid">
+          <div class="field" style="grid-column: 1 / -1;">
+            <label>Title</label>
+            <input name="title" placeholder="Follow up on incident report" required />
+          </div>
+          <div class="field">
+            <label>Type</label>
+            <select name="type">
+              <option value="chore">chore</option>
+              <option value="feature">feature</option>
+              <option value="bug">bug</option>
+              <option value="research">research</option>
+              <option value="reminder">reminder</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Priority</label>
+            <select name="priority">
+              <option value="normal">normal</option>
+              <option value="high">high</option>
+              <option value="critical">critical</option>
+              <option value="low">low</option>
+            </select>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn btn-primary" type="submit">Add Board Task</button>
+        </div>
+      </form>
+      <div class="field">
+        <label>Heartbeat Suggestions</label>
+        <ul>${suggestionItems}</ul>
+      </div>
+    `;
+  }
+
   // --- Live Thinking ---
   let thinkingEventSource = null;
   let thinkingAgentId = null;
@@ -1071,6 +1243,9 @@ export async function render(root, { onSetupChange }) {
     if (activeTab === "crons") {
       return cronsTabMarkup(agent);
     }
+    if (activeTab === "tasks") {
+      return tasksTabMarkup(agent);
+    }
     return personaTabMarkup(agent, detail, availableMcpServers || []);
   }
 
@@ -1109,6 +1284,13 @@ export async function render(root, { onSetupChange }) {
       }
     }
     await ensureAvailableMcpServers();
+    if (activeTab === "tasks" && activeAgent) {
+      try {
+        boardTasksCache[activeAgent.id] = await ensureAgentBoardTasks(activeAgent.id);
+      } catch (_err) {
+        boardTasksCache[activeAgent.id] = boardTasksCache[activeAgent.id] || [];
+      }
+    }
 
     const bridgeByAgent = new Map((setup.agent_bridges || []).map((item) => [item.agent_id, item]));
     const runningBridgeCount = Array.from(bridgeByAgent.values()).filter((item) => item.is_running).length;
@@ -1226,6 +1408,7 @@ export async function render(root, { onSetupChange }) {
                   ${tabButtonMarkup("procedures", activeTab, "Procedures")}
                   ${tabButtonMarkup("sessions", activeTab, "Sessions")}
                   ${tabButtonMarkup("crons", activeTab, "Cron Jobs")}
+                  ${tabButtonMarkup("tasks", activeTab, "Tasks")}
                 </div>
                 <div class="tab-panel">${tabPanelMarkup(activeAgent, detail)}</div>
               </div>
@@ -1388,6 +1571,8 @@ export async function render(root, { onSetupChange }) {
             delete sessionsCache[agentId];
             delete transcriptCache[agentId];
             delete cronsCache[agentId];
+            delete boardTasksCache[agentId];
+            delete heartbeatSuggestionsCache[agentId];
             if (cronUiState[agentId]?.validationTimerId) {
               window.clearTimeout(cronUiState[agentId].validationTimerId);
             }
@@ -1506,6 +1691,25 @@ export async function render(root, { onSetupChange }) {
             }
             delete state.historyByTaskId[taskId];
             setNotice("info", "Cron task deleted.");
+          } else if (action === "load-board-tasks") {
+            boardTasksCache[agentId] = await listBoardTasks({ agent_id: agentId, limit: 200 });
+            setNotice("info", `Loaded board tasks for ${agentId}.`);
+          } else if (action === "task-set-status") {
+            const taskId = button.dataset.taskId;
+            const nextStatus = button.dataset.nextStatus || "todo";
+            await updateBoardTask(taskId, { status: nextStatus });
+            boardTasksCache[agentId] = await listBoardTasks({ agent_id: agentId, limit: 200 });
+            setNotice("success", `Task moved to ${nextStatus}.`);
+          } else if (action === "task-complete") {
+            const taskId = button.dataset.taskId;
+            await completeBoardTask(taskId, null);
+            boardTasksCache[agentId] = await listBoardTasks({ agent_id: agentId, limit: 200 });
+            setNotice("success", "Task marked complete.");
+          } else if (action === "task-delete") {
+            const taskId = button.dataset.taskId;
+            await deleteBoardTask(taskId);
+            boardTasksCache[agentId] = await listBoardTasks({ agent_id: agentId, limit: 200 });
+            setNotice("info", "Board task deleted.");
           } else if (action === "clear-thinking") {
             thinkingEvents[agentId] = [];
             setNotice("info", "Cleared thinking events.");
@@ -1677,6 +1881,39 @@ export async function render(root, { onSetupChange }) {
         queueRerender(true);
       });
     }
+
+    for (const form of root.querySelectorAll("form.task-add-form")) {
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const agentId = form.dataset.agentId;
+        if (!agentId) return;
+        const data = new FormData(form);
+        const title = String(data.get("title") || "").trim();
+        if (!title) {
+          setNotice("error", "Task title is required.");
+          queueRerender(true);
+          return;
+        }
+        try {
+          await createBoardTask({
+            title,
+            type: String(data.get("type") || "chore"),
+            priority: String(data.get("priority") || "normal"),
+            status: "todo",
+            agent_id: agentId,
+            created_by: "human",
+            metadata: {},
+          });
+          boardTasksCache[agentId] = await listBoardTasks({ agent_id: agentId, limit: 200 });
+          setNotice("success", "Board task added.");
+          form.reset();
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          setNotice("error", `Failed to add board task: ${message}`);
+        }
+        queueRerender(true);
+      });
+    }
   }
 
   function formFieldForAgent(container, agentId, fieldName) {
@@ -1692,6 +1929,8 @@ export async function render(root, { onSetupChange }) {
   } catch (_err) {
     // Keep UI usable even if global files are not available yet.
   }
+
+  connectBoardStream();
 
   await queueRerender();
   pollIntervalId = window.setInterval(() => {
@@ -1732,6 +1971,7 @@ export async function render(root, { onSetupChange }) {
         }
       }
       destroyThinkingStream();
+      disconnectBoardStream();
     },
   };
 }

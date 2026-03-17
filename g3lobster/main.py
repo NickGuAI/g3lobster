@@ -78,10 +78,19 @@ def _ensure_delegation_mcp_config(workspace_dir: str, server_port: int) -> None:
             base_url,
         ],
     }
+    mcp_servers["g3lobster-tasks"] = {
+        "command": sys.executable,
+        "args": [
+            "-m",
+            "g3lobster.mcp.tasks_server",
+            "--base-url",
+            base_url,
+        ],
+    }
 
     _write_gemini_settings(settings_path, settings)
     logger.info(
-        "Registered delegation MCP server in %s (base_url=%s)",
+        "Registered built-in MCP servers in %s (base_url=%s)",
         settings_path,
         base_url,
     )
@@ -124,6 +133,7 @@ def build_runtime(config: AppConfig):
     mcp_loader = MCPConfigLoader(config_dir=config.mcp.config_dir)
     mcp_manager = MCPManager(loader=mcp_loader)
     global_memory_manager = GlobalMemoryManager(config.agents.data_dir)
+    board_store = None
     event_bus = EventBus()
 
     def process_factory(model_name: str, agent_id: str = "") -> GeminiProcess:
@@ -150,6 +160,8 @@ def build_runtime(config: AppConfig):
             memory_manager=memory_manager,
             context_builder=context_builder,
             default_mcp_servers=persona.mcp_servers or config.mcp.default_servers,
+            board_store=board_store,
+            event_bus=event_bus,
             heartbeat_enabled=heartbeat_enabled,
             heartbeat_interval_s=heartbeat_interval_s,
         )
@@ -348,7 +360,6 @@ def build_runtime(config: AppConfig):
     registry.chat_bridge = bridge_manager
 
     # Task board
-    board_store = None
     sheets_sync = None
     if config.tasks.enabled:
         from g3lobster.board.store import BoardStore

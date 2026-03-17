@@ -213,6 +213,47 @@ export function deleteCronTask(agentId, taskId) {
   });
 }
 
+function toQueryString(params = {}) {
+  const search = new URLSearchParams();
+  for (const [key, rawValue] of Object.entries(params || {})) {
+    if (rawValue === null || rawValue === undefined || rawValue === "") {
+      continue;
+    }
+    search.set(key, String(rawValue));
+  }
+  const qs = search.toString();
+  return qs ? `?${qs}` : "";
+}
+
+export function listBoardTasks(filters = {}) {
+  return request(`/tasks${toQueryString(filters)}`, { method: "GET" });
+}
+
+export function createBoardTask(payload) {
+  return request("/tasks", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateBoardTask(taskId, payload) {
+  return request(`/tasks/${encodeURIComponent(taskId)}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function completeBoardTask(taskId, result = null) {
+  return request(`/tasks/${encodeURIComponent(taskId)}/complete`, {
+    method: "POST",
+    body: JSON.stringify({ result }),
+  });
+}
+
+export function deleteBoardTask(taskId) {
+  return request(`/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" });
+}
+
 export function runCronTask(agentId, taskId) {
   return request(`/agents/${encodeURIComponent(agentId)}/crons/${encodeURIComponent(taskId)}/run`, {
     method: "POST",
@@ -224,6 +265,7 @@ export function getCronTaskHistory(agentId, taskId) {
     method: "GET",
   });
 }
+
 
 export function getMetricsSummary() {
   return request("/agents/metrics/summary", { method: "GET" });
