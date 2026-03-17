@@ -19,7 +19,7 @@ class AgentCreateRequest(BaseModel):
     space_id: Optional[str] = None
     bridge_enabled: bool = False
     heartbeat_enabled: bool = True
-    heartbeat_interval_s: float = Field(default=300.0, ge=HEARTBEAT_MIN_INTERVAL_S)
+    heartbeat_interval_s: float = Field(default=3600.0, ge=HEARTBEAT_MIN_INTERVAL_S)
 
 
 class AgentUpdateRequest(BaseModel):
@@ -48,7 +48,7 @@ class AgentResponse(BaseModel):
     space_id: Optional[str] = None
     bridge_enabled: bool = False
     heartbeat_enabled: bool = True
-    heartbeat_interval_s: float = 300.0
+    heartbeat_interval_s: float = 3600.0
     bridge_running: bool = False
     state: str
     uptime_s: int
