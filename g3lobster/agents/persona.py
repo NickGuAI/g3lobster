@@ -33,6 +33,8 @@ class AgentPersona:
     dm_allowlist: List[str] = field(default_factory=list)
     space_id: Optional[str] = None
     bridge_enabled: bool = False
+    heartbeat_enabled: bool = True
+    heartbeat_interval_s: float = 300.0
     space_overrides: Dict[str, Dict[str, str]] = field(default_factory=dict)
     created_at: str = field(default_factory=lambda: _utc_now())
     updated_at: str = field(default_factory=lambda: _utc_now())
@@ -63,6 +65,10 @@ class AgentPersona:
         else:
             self.space_id = None
         self.bridge_enabled = bool(self.bridge_enabled)
+        self.heartbeat_enabled = bool(self.heartbeat_enabled)
+        self.heartbeat_interval_s = float(self.heartbeat_interval_s)
+        if self.heartbeat_interval_s <= 0:
+            raise ValueError("heartbeat_interval_s must be > 0")
         if not isinstance(self.space_overrides, dict):
             self.space_overrides = {}
 
@@ -86,6 +92,8 @@ class AgentPersona:
             "dm_allowlist": list(self.dm_allowlist),
             "space_id": self.space_id,
             "bridge_enabled": bool(self.bridge_enabled),
+            "heartbeat_enabled": bool(self.heartbeat_enabled),
+            "heartbeat_interval_s": self.heartbeat_interval_s,
             "space_overrides": dict(self.space_overrides),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -103,6 +111,15 @@ def _parse_timeout(value: object) -> Optional[float]:
     if timeout_s < 0:
         raise ValueError("response_timeout_s must be >= 0 when provided")
     return timeout_s
+
+
+def _parse_positive_float(value: object, *, field_name: str, default: float) -> float:
+    if value is None:
+        return float(default)
+    parsed = float(value)
+    if parsed <= 0:
+        raise ValueError(f"{field_name} must be > 0")
+    return parsed
 
 
 def is_valid_agent_id(agent_id: str) -> bool:
@@ -198,6 +215,12 @@ def load_persona(data_dir: str, agent_id: str, *, skip_migration: bool = False) 
         dm_allowlist=list(payload.get("dm_allowlist") or []),
         space_id=payload.get("space_id"),
         bridge_enabled=bool(payload.get("bridge_enabled", False)),
+        heartbeat_enabled=bool(payload.get("heartbeat_enabled", True)),
+        heartbeat_interval_s=_parse_positive_float(
+            payload.get("heartbeat_interval_s"),
+            field_name="heartbeat_interval_s",
+            default=300.0,
+        ),
         space_overrides=dict(payload.get("space_overrides") or {}),
         created_at=str(payload.get("created_at") or _utc_now()),
         updated_at=str(payload.get("updated_at") or _utc_now()),
@@ -226,6 +249,8 @@ def save_persona(data_dir: str, persona: AgentPersona) -> AgentPersona:
         dm_allowlist=list(persona.dm_allowlist),
         space_id=persona.space_id,
         bridge_enabled=persona.bridge_enabled,
+        heartbeat_enabled=persona.heartbeat_enabled,
+        heartbeat_interval_s=persona.heartbeat_interval_s,
         space_overrides=dict(persona.space_overrides),
         created_at=(existing.created_at if existing else persona.created_at) or now,
         updated_at=now,

@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 import yaml
 
 from fastapi.testclient import TestClient
 
 from g3lobster.agents.registry import AgentRegistry
+from g3lobster.api.routes_thinking import stream_thinking
 from g3lobster.api.server import create_app
 from g3lobster.chat.bridge_manager import BridgeManager
 from g3lobster.config import AppConfig
@@ -209,24 +214,36 @@ def test_agents_routes_crud_and_memory(tmp_path):
         assert create.json()["space_id"] == "spaces/test-space"
         assert create.json()["bridge_enabled"] is True
         assert create.json()["bridge_running"] is False
+        assert create.json()["heartbeat_enabled"] is True
+        assert create.json()["heartbeat_interval_s"] == 300.0
 
         listing = client.get("/agents")
         assert listing.status_code == 200
         assert [item["id"] for item in listing.json()] == [agent_id]
         assert listing.json()[0]["space_id"] == "spaces/test-space"
         assert listing.json()[0]["bridge_enabled"] is True
+        assert listing.json()[0]["heartbeat_enabled"] is True
 
         detail = client.get(f"/agents/{agent_id}")
         assert detail.status_code == 200
         assert detail.json()["soul"] == "Stay concise."
+        assert detail.json()["heartbeat_interval_s"] == 300.0
 
         updated = client.put(
             f"/agents/{agent_id}",
-            json={"name": "Luna Prime", "soul": "Be exact.", "mcp_servers": ["gmail"]},
+            json={
+                "name": "Luna Prime",
+                "soul": "Be exact.",
+                "mcp_servers": ["gmail"],
+                "heartbeat_enabled": False,
+                "heartbeat_interval_s": 90,
+            },
         )
         assert updated.status_code == 200
         assert updated.json()["name"] == "Luna Prime"
         assert updated.json()["mcp_servers"] == ["gmail"]
+        assert updated.json()["heartbeat_enabled"] is False
+        assert updated.json()["heartbeat_interval_s"] == 90.0
 
         start = client.post(f"/agents/{agent_id}/start")
         assert start.status_code == 200
@@ -477,6 +494,42 @@ def test_task_routes_list_detail_cancel(tmp_path):
         cancel = client.post(f"/agents/{agent_id}/tasks/{running_task.id}/cancel")
         assert cancel.status_code == 200
         assert cancel.json()["status"] == "canceled"
+
+
+@pytest.mark.asyncio
+async def test_thinking_stream_surfaces_heartbeat_review_event(tmp_path):
+    app, _bridge_instances, _config_path = _build_test_app(tmp_path)
+    request = SimpleNamespace(app=app)
+
+    response = await stream_thinking("iris", request)
+    iterator = response.body_iterator
+
+    async def _next_sse_payload():
+        while True:
+            chunk = await iterator.__anext__()
+            line = chunk.decode("utf-8") if isinstance(chunk, (bytes, bytearray)) else str(chunk)
+            if not line.startswith("data: "):
+                continue
+            return json.loads(line[len("data: "):].strip())
+
+    receive_task = asyncio.create_task(_next_sse_payload())
+    await asyncio.sleep(0)
+    app.state.event_bus.publish(
+        "iris",
+        {
+            "type": "heartbeat_review",
+            "timestamp": "2026-03-17T00:00:00+00:00",
+            "summary": "Heartbeat check complete.",
+            "suggestions": [{"category": "proactive_task", "severity": "info", "message": "Create next task"}],
+            "stats": {"pending": 0, "in_progress": 0, "blocked": 0, "overdue": 0},
+        },
+    )
+
+    payload = await asyncio.wait_for(receive_task, timeout=1.0)
+    assert payload["type"] == "heartbeat_review"
+    assert payload["summary"] == "Heartbeat check complete."
+    assert payload["suggestions"][0]["category"] == "proactive_task"
+    await iterator.aclose()
 
 
 def test_subagent_routes(tmp_path, monkeypatch):
