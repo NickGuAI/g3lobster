@@ -170,12 +170,22 @@ def complete_authorization(data_dir: Optional[str], code: str) -> Path:
     return token
 
 
-def get_authenticated_service(data_dir: Optional[str] = None):
-    """Authenticate and return a Google Chat API service client."""
+def get_authenticated_service(data_dir: Optional[str] = None, timeout: float = 30.0):
+    """Authenticate and return a Google Chat API service client.
+
+    Uses google_auth_httplib2.AuthorizedHttp with an explicit socket timeout
+    so that send/update API calls do not hang indefinitely when the Chat API
+    is slow or unreachable.
+    """
+    import httplib2
+    import google_auth_httplib2
     from googleapiclient.discovery import build
 
     creds = _load_saved_credentials(data_dir=data_dir)
-    return build("chat", "v1", credentials=creds, cache_discovery=False)
+    authorized_http = google_auth_httplib2.AuthorizedHttp(
+        creds, http=httplib2.Http(timeout=timeout)
+    )
+    return build("chat", "v1", http=authorized_http, cache_discovery=False)
 
 
 def get_authorized_session(data_dir: Optional[str] = None):

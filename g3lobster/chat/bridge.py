@@ -607,14 +607,20 @@ class ChatBridge:
     async def add_reaction(self, message_name: str, emoji: str) -> Optional[str]:
         """Add an emoji reaction to a message. Returns the reaction name for later deletion."""
         try:
-            result = await asyncio.to_thread(
-                self.service.spaces()
-                .messages()
-                .reactions()
-                .create(parent=message_name, body={"emoji": {"unicode": emoji}})
-                .execute
+            result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self.service.spaces()
+                    .messages()
+                    .reactions()
+                    .create(parent=message_name, body={"emoji": {"unicode": emoji}})
+                    .execute
+                ),
+                timeout=30.0,
             )
             return result.get("name") if result else None
+        except asyncio.TimeoutError:
+            logger.debug("add_reaction %s to %s timed out", emoji, message_name)
+            return None
         except Exception:
             logger.debug("Failed to add reaction %s to %s", emoji, message_name, exc_info=True)
             return None
@@ -622,13 +628,18 @@ class ChatBridge:
     async def remove_reaction(self, reaction_name: str) -> None:
         """Remove a reaction by its resource name."""
         try:
-            await asyncio.to_thread(
-                self.service.spaces()
-                .messages()
-                .reactions()
-                .delete(name=reaction_name)
-                .execute
+            await asyncio.wait_for(
+                asyncio.to_thread(
+                    self.service.spaces()
+                    .messages()
+                    .reactions()
+                    .delete(name=reaction_name)
+                    .execute
+                ),
+                timeout=30.0,
             )
+        except asyncio.TimeoutError:
+            logger.debug("remove_reaction %s timed out", reaction_name)
         except Exception:
             logger.debug("Failed to remove reaction %s", reaction_name, exc_info=True)
 
@@ -645,6 +656,7 @@ class ChatBridge:
         text: str,
         thread_id: Optional[str] = None,
         cards_v2: Optional[list] = None,
+        timeout: float = 30.0,
     ) -> dict:
         body: Dict[str, object] = {"text": format_for_google_chat(text)}
         if thread_id:
@@ -652,9 +664,16 @@ class ChatBridge:
         if cards_v2:
             body["cardsV2"] = cards_v2
 
-        result = await asyncio.to_thread(
-            self.service.spaces().messages().create(parent=self.space_id, body=body).execute
-        )
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self.service.spaces().messages().create(parent=self.space_id, body=body).execute
+                ),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("send_message to %s timed out after %ss", self.space_id, timeout)
+            return {}
         return result or {}
 
     async def send_agent_message(
@@ -730,14 +749,19 @@ class ChatBridge:
         )
         return result or {}
 
-    async def update_message(self, message_name: str, text: str) -> None:
+    async def update_message(self, message_name: str, text: str, timeout: float = 30.0) -> None:
         body = {"text": format_for_google_chat(text)}
         try:
-            await asyncio.to_thread(
-                self.service.spaces()
-                .messages()
-                .update(name=message_name, updateMask="text", body=body)
-                .execute
+            await asyncio.wait_for(
+                asyncio.to_thread(
+                    self.service.spaces()
+                    .messages()
+                    .update(name=message_name, updateMask="text", body=body)
+                    .execute
+                ),
+                timeout=timeout,
             )
+        except asyncio.TimeoutError:
+            logger.warning("update_message %s timed out after %ss", message_name, timeout)
         except Exception:
             logger.debug("Failed to update message %s", message_name, exc_info=True)
