@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+import asyncio
 
 import pytest
 
-from g3lobster.board.store import TaskItem
 from g3lobster.pool.agent import GeminiAgent
 from g3lobster.pool.types import AgentState
 from g3lobster.tasks.types import Task, TaskStatus
@@ -86,85 +85,106 @@ async def test_agent_assign_passes_session_id_to_process(memory_manager, mcp_man
     assert process.session_ids == ["delegation-abc123"]
 
 
-class _FakeBoardStore:
-    def __init__(self, items):
-        self.items = list(items)
-
-    def list_items(
-        self,
-        type_filter=None,
-        status_filter=None,
-        agent_id=None,
-        priority_filter=None,
-        created_by=None,
-        limit=None,
-    ):
-        rows = [item for item in self.items if not agent_id or item.agent_id == agent_id]
-        if limit is not None:
-            rows = rows[: int(limit)]
-        return rows
-
-
-class _CaptureEventBus:
-    def __init__(self):
-        self.events = []
-
-    def publish(self, channel, event):
-        self.events.append((channel, event))
-
-
 @pytest.mark.asyncio
-async def test_agent_heartbeat_review_emits_suggestions(memory_manager, mcp_manager, context_builder) -> None:
-    stale_at = (datetime.now(tz=timezone.utc) - timedelta(hours=7)).isoformat()
-    done_at = (datetime.now(tz=timezone.utc) - timedelta(minutes=20)).isoformat()
-    tasks = [
-        TaskItem(
-            id="t-stale",
-            title="Investigate auth bug",
-            type="bug",
-            status="in_progress",
-            priority="high",
-            agent_id="agent-0",
-            created_by="agent",
-            updated_at=stale_at,
-            created_at=stale_at,
-        ),
-        TaskItem(
-            id="t-done",
-            title="Morning brief complete",
-            type="chore",
-            status="done",
-            priority="normal",
-            agent_id="agent-0",
-            created_by="agent",
-            updated_at=done_at,
-            created_at=done_at,
-        ),
-    ]
-    board_store = _FakeBoardStore(tasks)
-    event_bus = _CaptureEventBus()
+async def test_agent_heartbeat_loop_publishes_reviews(memory_manager, mcp_manager, context_builder) -> None:
+    process = FakeProcess("done")
+    published = []
 
-    memory_manager.write_memory("# MEMORY\n\nGoal: keep response queue clear.\n")
-    memory_manager.write_procedures("# PROCEDURES\n\n## Escalate blockers\nTrigger: blocked\n")
+    async def provider():
+        return {
+            "type": "heartbeat_review",
+            "summary": "Heartbeat check complete.",
+            "suggestions": [],
+            "stats": {"pending": 0, "in_progress": 0, "blocked": 0, "overdue": 0},
+        }
 
     agent = GeminiAgent(
         agent_id="agent-0",
-        process_factory=lambda: FakeProcess("ok"),
+        process_factory=lambda: process,
         mcp_manager=mcp_manager,
         memory_manager=memory_manager,
         context_builder=context_builder,
-        board_store=board_store,
-        event_bus=event_bus,
-        heartbeat_interval_s=30,
+        heartbeat_interval_s=0.05,
+        heartbeat_review_provider=provider,
+        heartbeat_event_publisher=lambda agent_id, event: published.append((agent_id, event)),
     )
+    await agent.start()
+    await asyncio.sleep(0.14)
+    await agent.stop()
 
-    event = await agent.run_heartbeat_review()
-    assert event is not None
-    assert event["type"] == "heartbeat_review"
-    kinds = [item["kind"] for item in event["suggestions"]]
-    assert "stale" in kinds
-    assert "next_step" in kinds
+    assert published
+    first_agent_id, first_event = published[0]
+    assert first_agent_id == "agent-0"
+    assert first_event["type"] == "heartbeat_review"
+    assert "timestamp" in first_event
 
-    channels = [channel for channel, _payload in event_bus.events]
-    assert "agent-0" in channels
-    assert "__board__" in channels
+
+@pytest.mark.asyncio
+async def test_agent_heartbeat_skips_when_busy(memory_manager, mcp_manager, context_builder) -> None:
+    process = FakeProcess("done")
+    published = []
+    provider_calls = 0
+
+    def provider():
+        nonlocal provider_calls
+        provider_calls += 1
+        return {
+            "type": "heartbeat_review",
+            "summary": "ok",
+            "suggestions": [],
+            "stats": {},
+        }
+
+    agent = GeminiAgent(
+        agent_id="agent-0",
+        process_factory=lambda: process,
+        mcp_manager=mcp_manager,
+        memory_manager=memory_manager,
+        context_builder=context_builder,
+        heartbeat_interval_s=0.05,
+        heartbeat_review_provider=provider,
+        heartbeat_event_publisher=lambda _agent_id, event: published.append(event),
+    )
+    await agent.start()
+    agent.state = AgentState.BUSY
+    await asyncio.sleep(0.11)
+
+    assert provider_calls == 0
+    assert published == []
+
+    agent.state = AgentState.IDLE
+    await asyncio.sleep(0.07)
+    await agent.stop()
+
+    assert provider_calls > 0
+    assert published
+
+
+@pytest.mark.asyncio
+async def test_agent_heartbeat_loop_stops_with_agent(memory_manager, mcp_manager, context_builder) -> None:
+    process = FakeProcess("done")
+    published = []
+
+    agent = GeminiAgent(
+        agent_id="agent-0",
+        process_factory=lambda: process,
+        mcp_manager=mcp_manager,
+        memory_manager=memory_manager,
+        context_builder=context_builder,
+        heartbeat_interval_s=0.05,
+        heartbeat_review_provider=lambda: {
+            "type": "heartbeat_review",
+            "summary": "ok",
+            "suggestions": [],
+            "stats": {},
+        },
+        heartbeat_event_publisher=lambda _agent_id, event: published.append(event),
+    )
+    await agent.start()
+    await asyncio.sleep(0.08)
+    await agent.stop()
+
+    published_count_after_stop = len(published)
+    await asyncio.sleep(0.08)
+    assert len(published) == published_count_after_stop
+    assert agent.state == AgentState.STOPPED

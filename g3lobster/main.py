@@ -41,13 +41,8 @@ from g3lobster.pool.tmux_spawn import TmuxSpawner
 logger = logging.getLogger(__name__)
 
 
-def _ensure_delegation_mcp_config(workspace_dir: str, server_port: int) -> None:
-    """Auto-register built-in stdio MCP servers in Gemini CLI settings.
-
-    Writes (or merges) ``g3lobster-delegation`` and ``g3lobster-tasks`` into
-    ``<workspace>/.gemini/settings.json`` so Gemini CLI can launch local
-    stdio MCP servers with the correct ``--base-url``.
-    """
+def _load_gemini_settings(workspace_dir: str) -> tuple[Path, dict]:
+    """Load Gemini CLI workspace settings (or return an empty baseline)."""
     gemini_dir = Path(workspace_dir) / ".gemini"
     gemini_dir.mkdir(parents=True, exist_ok=True)
     settings_path = gemini_dir / "settings.json"
@@ -59,6 +54,18 @@ def _ensure_delegation_mcp_config(workspace_dir: str, server_port: int) -> None:
         except (json.JSONDecodeError, OSError):
             pass
 
+    return settings_path, settings
+
+
+def _write_gemini_settings(settings_path: Path, settings: dict) -> None:
+    settings_path.write_text(
+        json.dumps(settings, indent=2) + "\n", encoding="utf-8"
+    )
+
+
+def _ensure_delegation_mcp_config(workspace_dir: str, server_port: int) -> None:
+    """Auto-register the delegation MCP server in Gemini CLI workspace settings."""
+    settings_path, settings = _load_gemini_settings(workspace_dir)
     mcp_servers = settings.setdefault("mcpServers", {})
     base_url = f"http://127.0.0.1:{server_port}"
 
@@ -81,11 +88,33 @@ def _ensure_delegation_mcp_config(workspace_dir: str, server_port: int) -> None:
         ],
     }
 
-    settings_path.write_text(
-        json.dumps(settings, indent=2) + "\n", encoding="utf-8"
-    )
+    _write_gemini_settings(settings_path, settings)
     logger.info(
         "Registered built-in MCP servers in %s (base_url=%s)",
+        settings_path,
+        base_url,
+    )
+
+
+def _ensure_cron_mcp_config(workspace_dir: str, server_port: int) -> None:
+    """Auto-register the cron MCP server in Gemini CLI workspace settings."""
+    settings_path, settings = _load_gemini_settings(workspace_dir)
+    mcp_servers = settings.setdefault("mcpServers", {})
+    base_url = f"http://127.0.0.1:{server_port}"
+
+    mcp_servers["g3lobster-cron"] = {
+        "command": sys.executable,
+        "args": [
+            "-m",
+            "g3lobster.mcp.cron_server",
+            "--base-url",
+            base_url,
+        ],
+    }
+
+    _write_gemini_settings(settings_path, settings)
+    logger.info(
+        "Registered cron MCP server in %s (base_url=%s)",
         settings_path,
         base_url,
     )
@@ -96,12 +125,16 @@ def build_runtime(config: AppConfig):
         workspace_dir=config.gemini.workspace_dir,
         server_port=config.server.port,
     )
+    _ensure_cron_mcp_config(
+        workspace_dir=config.gemini.workspace_dir,
+        server_port=config.server.port,
+    )
 
     mcp_loader = MCPConfigLoader(config_dir=config.mcp.config_dir)
     mcp_manager = MCPManager(loader=mcp_loader)
     global_memory_manager = GlobalMemoryManager(config.agents.data_dir)
     board_store = None
-    event_bus = None
+    event_bus = EventBus()
 
     def process_factory(model_name: str, agent_id: str = "") -> GeminiProcess:
         args = list(config.gemini.args)
@@ -118,6 +151,8 @@ def build_runtime(config: AppConfig):
         )
 
     def agent_factory(persona, memory_manager: MemoryManager, context_builder: ContextBuilder) -> GeminiAgent:
+        heartbeat_enabled = bool(getattr(persona, "heartbeat_enabled", config.agents.heartbeat_enabled))
+        heartbeat_interval_s = float(getattr(persona, "heartbeat_interval_s", config.agents.heartbeat_interval_s))
         return GeminiAgent(
             agent_id=persona.id,
             process_factory=lambda: process_factory(persona.model, agent_id=persona.id),
@@ -127,7 +162,8 @@ def build_runtime(config: AppConfig):
             default_mcp_servers=persona.mcp_servers or config.mcp.default_servers,
             board_store=board_store,
             event_bus=event_bus,
-            heartbeat_interval_s=max(10.0, float(config.agents.health_check_interval_s)),
+            heartbeat_enabled=heartbeat_enabled,
+            heartbeat_interval_s=heartbeat_interval_s,
         )
 
     alert_manager = AlertManager(
@@ -159,6 +195,7 @@ def build_runtime(config: AppConfig):
         agent_factory=agent_factory,
         alert_manager=alert_manager,
         queue_depth_limit=config.control_plane.queue_depth,
+        event_bus=event_bus,
     )
 
     control_plane = None
@@ -224,8 +261,6 @@ def build_runtime(config: AppConfig):
         focus_checker=focus_checker,
         calendar_cron_schedule=config.calendar.check_interval_cron if config.calendar.enabled else None,
     ) if config.cron.enabled else None
-    event_bus = EventBus()
-
     # Standup conductor — must be created before chat_bridge_factory so it can be captured.
     standup_store = StandupStore(config.agents.data_dir)
     standup_orchestrator = StandupOrchestrator(

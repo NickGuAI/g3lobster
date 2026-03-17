@@ -194,6 +194,7 @@ class AgentRegistry:
         alert_manager: Optional[AlertManager] = None,
         chat_bridge: Optional[object] = None,
         queue_depth_limit: int = 5,
+        event_bus: Optional[object] = None,
         # Legacy parameter; ignored.
         summarize_threshold: int = 20,
     ):
@@ -214,6 +215,7 @@ class AgentRegistry:
         self.alert_manager = alert_manager
         self.chat_bridge = chat_bridge
         self.queue_depth_limit = max(1, int(queue_depth_limit))
+        self.event_bus = event_bus
         self._chat_bridge_was_running = False
         self.agent_factory = agent_factory
         self.control_plane = None
@@ -308,6 +310,38 @@ class AgentRegistry:
         agent = self.agent_factory(persona, memory, context)
         setattr(agent, "task_store", self.task_store)
         setattr(agent, "subagent_spawner", self.tmux_subagent_spawner)
+
+        async def _heartbeat_review_provider() -> Optional[dict]:
+            runtime = self._agents.get(agent_id)
+            active_persona = runtime.persona if runtime else persona
+            active_memory = runtime.memory_manager if runtime else memory
+            active_agent = runtime.agent if runtime else agent
+            return self._build_heartbeat_event(
+                agent_id=agent_id,
+                persona=active_persona,
+                memory_manager=active_memory,
+                agent=active_agent,
+            )
+
+        if hasattr(agent, "set_heartbeat_review_provider"):
+            agent.set_heartbeat_review_provider(_heartbeat_review_provider)
+        else:
+            setattr(agent, "heartbeat_review_provider", _heartbeat_review_provider)
+
+        if hasattr(agent, "set_heartbeat_event_publisher"):
+            agent.set_heartbeat_event_publisher(self._publish_event_bus)
+        else:
+            setattr(agent, "heartbeat_event_publisher", self._publish_event_bus)
+
+        if hasattr(agent, "configure_heartbeat"):
+            agent.configure_heartbeat(
+                enabled=persona.heartbeat_enabled,
+                interval_s=persona.heartbeat_interval_s,
+            )
+        else:
+            setattr(agent, "heartbeat_enabled", bool(persona.heartbeat_enabled))
+            setattr(agent, "heartbeat_interval_s", float(persona.heartbeat_interval_s))
+
         await agent.start(mcp_servers=persona.mcp_servers)
 
         self._agents[agent_id] = RegisteredAgent(
@@ -575,6 +609,71 @@ class AgentRegistry:
             parent_persona_name=parent.persona.name,
         )
 
+    def _resolve_event_bus(self) -> Optional[object]:
+        if self.event_bus is not None:
+            return self.event_bus
+        try:
+            from g3lobster.api.event_bus import EventBus
+        except Exception:  # pragma: no cover - defensive import guard
+            return None
+        latest = EventBus.latest()
+        if latest is not None:
+            self.event_bus = latest
+        return latest
+
+    def _publish_event_bus(self, agent_id: str, event: Dict[str, object]) -> None:
+        bus = self._resolve_event_bus()
+        if bus is None or not hasattr(bus, "publish"):
+            return
+        bus.publish(agent_id, event)
+
+    def _control_plane_tasks_for_agent(self, agent_id: str) -> List[object]:
+        if self.control_plane is None or not hasattr(self.control_plane, "task_registry"):
+            return []
+        task_registry = getattr(self.control_plane, "task_registry", None)
+        if task_registry is None or not hasattr(task_registry, "list"):
+            return []
+        try:
+            tasks = task_registry.list(limit=200)
+        except Exception:  # pragma: no cover - defensive path
+            logger.debug("Failed to read control-plane tasks for agent %s", agent_id, exc_info=True)
+            return []
+        return [item for item in tasks if getattr(item, "agent_id", None) == agent_id]
+
+    @staticmethod
+    def _goal_sources(persona: AgentPersona, memory_manager: MemoryManager) -> List[str]:
+        sources: List[str] = []
+        if persona.soul:
+            sources.append(persona.soul)
+        try:
+            procedures = memory_manager.read_procedures()
+        except Exception:  # pragma: no cover - defensive path
+            procedures = ""
+        if procedures:
+            sources.append(procedures)
+        return sources
+
+    def _build_heartbeat_event(
+        self,
+        *,
+        agent_id: str,
+        persona: AgentPersona,
+        memory_manager: MemoryManager,
+        agent: object,
+    ) -> Dict[str, object]:
+        tasks = self.task_store.list(agent_id, limit=120)
+        current = getattr(agent, "current_task", None)
+        if current is not None and all(existing.id != getattr(current, "id", None) for existing in tasks):
+            tasks = [current, *tasks]
+
+        review = self.health.build_heartbeat_review(
+            agent_id=agent_id,
+            tasks=tasks,
+            goals=self._goal_sources(persona, memory_manager),
+            control_plane_tasks=self._control_plane_tasks_for_agent(agent_id),
+        )
+        return review.as_event(agent_id)
+
     @staticmethod
     def _soul_summary(soul: str) -> str:
         """Return the first non-empty line of the SOUL.md as a brief description."""
@@ -602,6 +701,8 @@ class AgentRegistry:
                     "bot_user_id": persona.bot_user_id,
                     "model": persona.model,
                     "mcp_servers": runtime.mcp_servers or list(persona.mcp_servers),
+                    "heartbeat_enabled": persona.heartbeat_enabled,
+                    "heartbeat_interval_s": persona.heartbeat_interval_s,
                     "state": state,
                     "uptime_s": int(now - runtime.started_at),
                     "current_task": runtime.current_task.id if runtime.current_task else None,
@@ -618,6 +719,8 @@ class AgentRegistry:
                     "bot_user_id": persona.bot_user_id,
                     "model": persona.model,
                     "mcp_servers": list(persona.mcp_servers),
+                    "heartbeat_enabled": persona.heartbeat_enabled,
+                    "heartbeat_interval_s": persona.heartbeat_interval_s,
                     "state": "stopped",
                     "uptime_s": 0,
                     "current_task": None,
