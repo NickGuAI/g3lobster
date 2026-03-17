@@ -72,6 +72,11 @@ def _get_calendar_service(auth_data_dir: Optional[str]):
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
+            if not creds_path.exists():
+                raise FileNotFoundError(
+                    f"Calendar credentials not found at {creds_path}. "
+                    "Upload credentials.json via the setup wizard to enable the calendar bridge."
+                )
             flow = InstalledAppFlow.from_client_secrets_file(str(creds_path), scopes)
             creds = flow.run_local_server(port=0)
         token_path.parent.mkdir(parents=True, exist_ok=True)
@@ -185,6 +190,9 @@ class CalendarBridge:
                 self.service = await asyncio.to_thread(
                     _get_calendar_service, self.auth_data_dir
                 )
+            except FileNotFoundError as exc:
+                logger.warning("CalendarBridge: %s — bridge disabled", exc)
+                return
             except Exception:
                 logger.exception(
                     "CalendarBridge: failed to authenticate — calendar bridge disabled"
