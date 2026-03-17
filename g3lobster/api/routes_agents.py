@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -506,6 +507,22 @@ async def restart_agent(agent_id: str, request: Request) -> dict:
     if not restarted:
         raise HTTPException(status_code=404, detail="Agent not found")
     return {"restarted": True}
+
+
+@router.post("/{agent_id}/heartbeat")
+async def trigger_heartbeat(agent_id: str, request: Request) -> dict:
+    config = request.app.state.config
+    _ensure_persona(config.agents.data_dir, agent_id)
+
+    registry = request.app.state.registry
+    runtime = registry.get_agent(agent_id)
+    if not runtime:
+        raise HTTPException(status_code=409, detail="Agent is not running")
+
+    agent = runtime.agent
+    if hasattr(agent, "_run_heartbeat_tick"):
+        asyncio.create_task(agent._run_heartbeat_tick())
+    return {"triggered": True, "agent_id": agent_id}
 
 
 @router.post("/{agent_id}/sleep")

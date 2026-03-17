@@ -307,3 +307,7 @@ export async function importAgent(file, overwrite = false) {
   }
   return response.json();
 }
+
+export function triggerHeartbeat(agentId) {
+  return request(`/agents/${encodeURIComponent(agentId)}/heartbeat`, { method: "POST" });
+}

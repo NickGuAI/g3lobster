@@ -3,28 +3,20 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>g3lobster Agent Console</title>
+    <title>G3LOBSTER // AGENT CONSOLE</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Roboto+Mono:wght@400&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=VT323:wght@400&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="/ui/css/zen.css" />
-    <link rel="stylesheet" href="/ui/css/wizard.css" />
+    <link rel="stylesheet" href="/ui/css/apocalypse.css" />
     <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
   </head>
-  <body>
-    <div class="scene-bg"></div>
-    <main class="shell">
-      <header class="mast">
-        <p class="eyebrow">g3lobster</p>
-        <h1>Google Chat Agent Console</h1>
-        <p class="subtitle">Guided setup and named-agent management.</p>
-      </header>
-      <section id="app-root" class="card" aria-live="polite"></section>
-    </main>
+  <body data-theme="apocalypse">
+    <div class="crt-scanlines" aria-hidden="true"></div>
+    <div id="app-root" aria-live="polite"></div>
     <script type="module" src="/ui/js/app.js"></script>
   </body>
 </html>

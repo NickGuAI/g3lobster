@@ -161,7 +161,6 @@ def build_runtime(config: AppConfig):
             context_builder=context_builder,
             default_mcp_servers=persona.mcp_servers or config.mcp.default_servers,
             board_store=board_store,
-            event_bus=event_bus,
             heartbeat_enabled=heartbeat_enabled,
             heartbeat_interval_s=heartbeat_interval_s,
         )
