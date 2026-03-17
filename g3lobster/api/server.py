@@ -109,7 +109,7 @@ def create_app(
     app.state.board_store = board_store
     app.state.sheets_sync = sheets_sync
 
-    _AUTH_EXEMPT_PREFIXES = ("/health", "/setup", "/chat/events", "/docs", "/openapi.json", "/ui")
+    _AUTH_EXEMPT_PREFIXES = ("/health", "/setup", "/chat/events", "/docs", "/openapi.json", "/ui", "/css", "/js")
 
     @app.middleware("http")
     async def auth_middleware(request: Request, call_next):
@@ -145,5 +145,6 @@ def create_app(
     static_dir = Path(__file__).resolve().parent.parent / "static"
     if static_dir.is_dir():
         app.mount("/ui", StaticFiles(directory=str(static_dir), html=True), name="ui")
+        app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="root")
 
     return app
