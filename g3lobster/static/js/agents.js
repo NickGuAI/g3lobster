@@ -472,7 +472,14 @@ function buildSessionsTab(agent, { sessions, transcript }) {
   `;
 }
 
-function buildBoardPanel(tasks) {
+function agentSelectOptions(agents, includeBlank) {
+  const blank = includeBlank ? `<option value="">— Unassigned —</option>` : "";
+  return blank + (agents || []).map((a) =>
+    `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name || a.id)}</option>`
+  ).join("");
+}
+
+function buildBoardPanel(tasks, agents) {
   const cols = [
     { key: "todo", label: "TODO" },
     { key: "in_progress", label: "In Progress" },
@@ -542,8 +549,10 @@ function buildBoardPanel(tasks) {
               </select>
             </div>
             <div class="form-row" style="grid-column:1/-1">
-              <label class="form-label">Agent ID (optional)</label>
-              <input class="form-input" name="agent_id" placeholder="Leave blank for unassigned" />
+              <label class="form-label">Assign to Agent (optional)</label>
+              <select class="form-select" name="agent_id">
+                ${agentSelectOptions(agents, true)}
+              </select>
             </div>
           </div>
           <div class="form-actions">
@@ -557,7 +566,7 @@ function buildBoardPanel(tasks) {
   `;
 }
 
-function buildCronPanel(allCrons) {
+function buildCronPanel(allCrons, agents) {
   const rows = allCrons.length
     ? allCrons.map((task) => {
         const lastRun = task.last_run ? formatRelativeTime(task.last_run) : "Never";
@@ -598,8 +607,11 @@ function buildCronPanel(allCrons) {
         <form id="create-cron-form">
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
             <div class="form-row">
-              <label class="form-label">Agent ID</label>
-              <input class="form-input" name="agent_id" placeholder="Agent ID" required />
+              <label class="form-label">Agent</label>
+              <select class="form-select" name="agent_id" required>
+                <option value="">— Select Agent —</option>
+                ${agentSelectOptions(agents, false)}
+              </select>
             </div>
             <div class="form-row">
               <label class="form-label">Schedule (cron)</label>
@@ -988,7 +1000,7 @@ export async function render(root, { status, onSetupChange }) {
     panel.innerHTML = `<div class="loading"><span class="spinner"></span></div>`;
     try {
       const tasks = await listBoardTasks({ limit: 500 });
-      panel.innerHTML = buildBoardPanel(tasks);
+      panel.innerHTML = buildBoardPanel(tasks, agentsCache);
       wireBoardForms(panel);
     } catch (err) {
       panel.innerHTML = `<div style="padding:24px"><div class="notice error">Failed to load board: ${escapeHtml(err.message)}</div></div>`;
@@ -1039,7 +1051,7 @@ export async function render(root, { status, onSetupChange }) {
     panel.innerHTML = `<div class="loading"><span class="spinner"></span></div>`;
     try {
       const allCrons = await listAllCrons();
-      panel.innerHTML = buildCronPanel(allCrons);
+      panel.innerHTML = buildCronPanel(allCrons, agentsCache);
       wireCronForms(panel);
     } catch (err) {
       panel.innerHTML = `<div style="padding:24px"><div class="notice error">Failed to load crons: ${escapeHtml(err.message)}</div></div>`;
