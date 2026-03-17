@@ -120,6 +120,47 @@ async def test_agent_heartbeat_loop_publishes_reviews(memory_manager, mcp_manage
 
 
 @pytest.mark.asyncio
+async def test_agent_heartbeat_skips_when_busy(memory_manager, mcp_manager, context_builder) -> None:
+    process = FakeProcess("done")
+    published = []
+    provider_calls = 0
+
+    def provider():
+        nonlocal provider_calls
+        provider_calls += 1
+        return {
+            "type": "heartbeat_review",
+            "summary": "ok",
+            "suggestions": [],
+            "stats": {},
+        }
+
+    agent = GeminiAgent(
+        agent_id="agent-0",
+        process_factory=lambda: process,
+        mcp_manager=mcp_manager,
+        memory_manager=memory_manager,
+        context_builder=context_builder,
+        heartbeat_interval_s=0.05,
+        heartbeat_review_provider=provider,
+        heartbeat_event_publisher=lambda _agent_id, event: published.append(event),
+    )
+    await agent.start()
+    agent.state = AgentState.BUSY
+    await asyncio.sleep(0.11)
+
+    assert provider_calls == 0
+    assert published == []
+
+    agent.state = AgentState.IDLE
+    await asyncio.sleep(0.07)
+    await agent.stop()
+
+    assert provider_calls > 0
+    assert published
+
+
+@pytest.mark.asyncio
 async def test_agent_heartbeat_loop_stops_with_agent(memory_manager, mcp_manager, context_builder) -> None:
     process = FakeProcess("done")
     published = []

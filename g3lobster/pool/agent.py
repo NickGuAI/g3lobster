@@ -171,6 +171,8 @@ class GeminiAgent:
             logger.exception("Agent %s heartbeat loop failed", self.id)
 
     async def _run_heartbeat_tick(self) -> None:
+        if self.state != AgentState.IDLE:
+            return
         provider = self.heartbeat_review_provider
         if not callable(provider):
             return

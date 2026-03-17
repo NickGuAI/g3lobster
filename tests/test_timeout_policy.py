@@ -374,3 +374,12 @@ def test_env_override_zero_disables_response_timeout(tmp_path: Path, monkeypatch
     monkeypatch.setenv("G3LOBSTER_GEMINI_RESPONSE_TIMEOUT_S", "0")
     config = load_config(str(config_path))
     assert config.gemini.response_timeout_s == 0.0
+
+
+def test_agents_heartbeat_config_defaults(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("agents:\n  data_dir: ./data\n", encoding="utf-8")
+
+    config = load_config(str(config_path))
+    assert config.agents.heartbeat_enabled is True
+    assert config.agents.heartbeat_interval_s == 300

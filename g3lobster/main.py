@@ -91,6 +91,7 @@ def build_runtime(config: AppConfig):
     mcp_loader = MCPConfigLoader(config_dir=config.mcp.config_dir)
     mcp_manager = MCPManager(loader=mcp_loader)
     global_memory_manager = GlobalMemoryManager(config.agents.data_dir)
+    event_bus = EventBus()
 
     def process_factory(model_name: str, agent_id: str = "") -> GeminiProcess:
         args = list(config.gemini.args)
@@ -107,6 +108,8 @@ def build_runtime(config: AppConfig):
         )
 
     def agent_factory(persona, memory_manager: MemoryManager, context_builder: ContextBuilder) -> GeminiAgent:
+        heartbeat_enabled = bool(getattr(persona, "heartbeat_enabled", config.agents.heartbeat_enabled))
+        heartbeat_interval_s = float(getattr(persona, "heartbeat_interval_s", config.agents.heartbeat_interval_s))
         return GeminiAgent(
             agent_id=persona.id,
             process_factory=lambda: process_factory(persona.model, agent_id=persona.id),
@@ -114,6 +117,8 @@ def build_runtime(config: AppConfig):
             memory_manager=memory_manager,
             context_builder=context_builder,
             default_mcp_servers=persona.mcp_servers or config.mcp.default_servers,
+            heartbeat_enabled=heartbeat_enabled,
+            heartbeat_interval_s=heartbeat_interval_s,
         )
 
     alert_manager = AlertManager(
@@ -145,6 +150,7 @@ def build_runtime(config: AppConfig):
         agent_factory=agent_factory,
         alert_manager=alert_manager,
         queue_depth_limit=config.control_plane.queue_depth,
+        event_bus=event_bus,
     )
 
     control_plane = None
@@ -210,8 +216,6 @@ def build_runtime(config: AppConfig):
         focus_checker=focus_checker,
         calendar_cron_schedule=config.calendar.check_interval_cron if config.calendar.enabled else None,
     ) if config.cron.enabled else None
-    event_bus = EventBus()
-
     # Standup conductor — must be created before chat_bridge_factory so it can be captured.
     standup_store = StandupStore(config.agents.data_dir)
     standup_orchestrator = StandupOrchestrator(
