@@ -104,6 +104,7 @@ async def test_agent_heartbeat_loop_publishes_reviews(memory_manager, mcp_manage
         mcp_manager=mcp_manager,
         memory_manager=memory_manager,
         context_builder=context_builder,
+        heartbeat_enabled=True,
         heartbeat_interval_s=0.05,
         heartbeat_review_provider=provider,
         heartbeat_event_publisher=lambda agent_id, event: published.append((agent_id, event)),
@@ -141,6 +142,7 @@ async def test_agent_heartbeat_skips_when_busy(memory_manager, mcp_manager, cont
         mcp_manager=mcp_manager,
         memory_manager=memory_manager,
         context_builder=context_builder,
+        heartbeat_enabled=True,
         heartbeat_interval_s=0.05,
         heartbeat_review_provider=provider,
         heartbeat_event_publisher=lambda _agent_id, event: published.append(event),
@@ -171,6 +173,7 @@ async def test_agent_heartbeat_loop_stops_with_agent(memory_manager, mcp_manager
         mcp_manager=mcp_manager,
         memory_manager=memory_manager,
         context_builder=context_builder,
+        heartbeat_enabled=True,
         heartbeat_interval_s=0.05,
         heartbeat_review_provider=lambda: {
             "type": "heartbeat_review",

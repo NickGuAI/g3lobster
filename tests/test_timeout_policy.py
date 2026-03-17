@@ -381,5 +381,5 @@ def test_agents_heartbeat_config_defaults(tmp_path: Path) -> None:
     config_path.write_text("agents:\n  data_dir: ./data\n", encoding="utf-8")
 
     config = load_config(str(config_path))
-    assert config.agents.heartbeat_enabled is True
+    assert config.agents.heartbeat_enabled is False
     assert config.agents.heartbeat_interval_s == 300

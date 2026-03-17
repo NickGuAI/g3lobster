@@ -214,7 +214,7 @@ def test_agents_routes_crud_and_memory(tmp_path):
         assert create.json()["space_id"] == "spaces/test-space"
         assert create.json()["bridge_enabled"] is True
         assert create.json()["bridge_running"] is False
-        assert create.json()["heartbeat_enabled"] is True
+        assert create.json()["heartbeat_enabled"] is False
         assert create.json()["heartbeat_interval_s"] == 300.0
 
         listing = client.get("/agents")
@@ -222,7 +222,7 @@ def test_agents_routes_crud_and_memory(tmp_path):
         assert [item["id"] for item in listing.json()] == [agent_id]
         assert listing.json()[0]["space_id"] == "spaces/test-space"
         assert listing.json()[0]["bridge_enabled"] is True
-        assert listing.json()[0]["heartbeat_enabled"] is True
+        assert listing.json()[0]["heartbeat_enabled"] is False
 
         detail = client.get(f"/agents/{agent_id}")
         assert detail.status_code == 200

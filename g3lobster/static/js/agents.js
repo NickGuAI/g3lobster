@@ -421,8 +421,8 @@ export async function render(root, { onSetupChange }) {
           <div class="field">
             <label>Heartbeat Enabled</label>
             <select name="heartbeat_enabled">
-              <option value="true" ${detail.heartbeat_enabled !== false ? "selected" : ""}>true</option>
-              <option value="false" ${detail.heartbeat_enabled === false ? "selected" : ""}>false</option>
+              <option value="true" ${detail.heartbeat_enabled === true ? "selected" : ""}>true</option>
+              <option value="false" ${detail.heartbeat_enabled !== true ? "selected" : ""}>false</option>
             </select>
           </div>
           <div class="field">
@@ -1171,7 +1171,7 @@ export async function render(root, { onSetupChange }) {
             dm_allowlist: parseDmAllowlist(data.get("dm_allowlist")),
             space_id: String(data.get("space_id") || "").trim() || null,
             bridge_enabled: String(data.get("bridge_enabled") || "false") === "true",
-            heartbeat_enabled: String(data.get("heartbeat_enabled") || "true") === "true",
+            heartbeat_enabled: String(data.get("heartbeat_enabled") || "false") === "true",
             heartbeat_interval_s: Math.max(1, Number(data.get("heartbeat_interval_s") || 300)),
           };
           detailCache[agentId] = await updateAgent(agentId, payload);

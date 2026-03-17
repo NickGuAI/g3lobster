@@ -49,7 +49,7 @@ class GeminiAgent:
         default_mcp_servers: Optional[List[str]] = None,
         task_store: Optional[TaskStore] = None,
         subagent_spawner: Optional[object] = None,
-        heartbeat_enabled: bool = True,
+        heartbeat_enabled: bool = False,
         heartbeat_interval_s: float = 300.0,
         heartbeat_review_provider: Optional[Callable[[], object]] = None,
         heartbeat_event_publisher: Optional[Callable[[str, dict], None]] = None,
