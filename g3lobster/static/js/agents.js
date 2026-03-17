@@ -1195,7 +1195,7 @@ export async function render(root, { onSetupChange }) {
                   ${tabButtonMarkup("memory", activeTab, "Memory")}
                   ${tabButtonMarkup("procedures", activeTab, "Procedures")}
                   ${tabButtonMarkup("sessions", activeTab, "Sessions")}
-                  ${tabButtonMarkup("crons", activeTab, "Crons")}
+                  ${tabButtonMarkup("crons", activeTab, "Cron Jobs")}
                 </div>
                 <div class="tab-panel">${tabPanelMarkup(activeAgent, detail)}</div>
               </div>

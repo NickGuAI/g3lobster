@@ -179,6 +179,10 @@ export function listCronTasks(agentId) {
   return request(`/agents/${encodeURIComponent(agentId)}/crons`, { method: "GET" });
 }
 
+export function listAllCrons() {
+  return request("/agents/_cron/all", { method: "GET" });
+}
+
 export function validateCronSchedule(schedule) {
   return request("/agents/_cron/validate", {
     method: "POST",
