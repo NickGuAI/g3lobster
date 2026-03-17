@@ -179,10 +179,20 @@ export function listCronTasks(agentId) {
   return request(`/agents/${encodeURIComponent(agentId)}/crons`, { method: "GET" });
 }
 
-export function createCronTask(agentId, schedule, instruction) {
+export function validateCronSchedule(schedule) {
+  return request("/agents/_cron/validate", {
+    method: "POST",
+    body: JSON.stringify({ schedule }),
+  });
+}
+
+export function createCronTask(agentId, payloadOrSchedule, instruction) {
+  const payload = typeof payloadOrSchedule === "object" && payloadOrSchedule !== null
+    ? payloadOrSchedule
+    : { schedule: payloadOrSchedule, instruction };
   return request(`/agents/${encodeURIComponent(agentId)}/crons`, {
     method: "POST",
-    body: JSON.stringify({ schedule, instruction }),
+    body: JSON.stringify(payload),
   });
 }
 
@@ -196,6 +206,18 @@ export function updateCronTask(agentId, taskId, payload) {
 export function deleteCronTask(agentId, taskId) {
   return request(`/agents/${encodeURIComponent(agentId)}/crons/${encodeURIComponent(taskId)}`, {
     method: "DELETE",
+  });
+}
+
+export function runCronTask(agentId, taskId) {
+  return request(`/agents/${encodeURIComponent(agentId)}/crons/${encodeURIComponent(taskId)}/run`, {
+    method: "POST",
+  });
+}
+
+export function getCronTaskHistory(agentId, taskId) {
+  return request(`/agents/${encodeURIComponent(agentId)}/crons/${encodeURIComponent(taskId)}/history`, {
+    method: "GET",
   });
 }
 

@@ -18,12 +18,15 @@ router = APIRouter(prefix="/agents", tags=["cron"])
 class CronTaskCreateRequest(BaseModel):
     schedule: str
     instruction: str
+    enabled: bool = True
+    dm_target: Optional[str] = None
 
 
 class CronTaskUpdateRequest(BaseModel):
     schedule: Optional[str] = None
     instruction: Optional[str] = None
     enabled: Optional[bool] = None
+    dm_target: Optional[str] = None
 
 
 class CronValidateRequest(BaseModel):
@@ -78,7 +81,13 @@ async def list_cron_tasks(agent_id: str, request: Request) -> List[dict]:
 @router.post("/{agent_id}/crons", status_code=201)
 async def create_cron_task(agent_id: str, payload: CronTaskCreateRequest, request: Request) -> dict:
     store = _get_store(request)
-    task = store.add_task(agent_id, payload.schedule, payload.instruction)
+    task = store.add_task(
+        agent_id,
+        payload.schedule,
+        payload.instruction,
+        enabled=payload.enabled,
+        dm_target=payload.dm_target,
+    )
     _reload_manager(request)
     return asdict(task)
 
@@ -86,7 +95,7 @@ async def create_cron_task(agent_id: str, payload: CronTaskCreateRequest, reques
 @router.put("/{agent_id}/crons/{task_id}")
 async def update_cron_task(agent_id: str, task_id: str, payload: CronTaskUpdateRequest, request: Request) -> dict:
     store = _get_store(request)
-    updates = payload.model_dump(exclude_none=True)
+    updates = payload.model_dump(exclude_unset=True)
     task = store.update_task(agent_id, task_id, **updates)
     if task is None:
         raise HTTPException(status_code=404, detail="Cron task not found")

@@ -7,6 +7,7 @@ import {
   getAgent,
   getAgentMemory,
   getAgentProcedures,
+  getCronTaskHistory,
   getAgentSession,
   getGlobalProcedures,
   getGlobalUserMemory,
@@ -19,6 +20,7 @@ import {
   listCronTasks,
   listGlobalKnowledge,
   restartAgent,
+  runCronTask,
   startAgent,
   startBridge,
   stopAgent,
@@ -28,6 +30,7 @@ import {
   updateAgentMemory,
   updateAgentProcedures,
   updateCronTask,
+  validateCronSchedule,
   updateGlobalProcedures,
   updateGlobalUserMemory,
 } from "./api.js";
@@ -65,6 +68,51 @@ function parseDmAllowlist(raw) {
 
 function stateClass(state) {
   return String(state || "").toLowerCase();
+}
+
+function formatDateTime(value) {
+  if (!value) {
+    return "Never";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return String(value);
+  }
+  return parsed.toLocaleString();
+}
+
+function formatRelativeTime(value) {
+  if (!value) {
+    return "Never";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return formatDateTime(value);
+  }
+  const diffMs = parsed.getTime() - Date.now();
+  const absMs = Math.abs(diffMs);
+  const units = [
+    ["day", 86_400_000],
+    ["hour", 3_600_000],
+    ["minute", 60_000],
+    ["second", 1_000],
+  ];
+  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  for (const [unit, divisor] of units) {
+    if (absMs >= divisor || unit === "second") {
+      const delta = Math.round(diffMs / divisor);
+      return formatter.format(delta, unit);
+    }
+  }
+  return formatDateTime(value);
+}
+
+function formatDuration(seconds) {
+  const numeric = Number(seconds);
+  if (!Number.isFinite(numeric)) {
+    return "—";
+  }
+  return `${numeric.toFixed(1)}s`;
 }
 
 function bridgeStatusDetails(bridge) {
@@ -144,6 +192,7 @@ export async function render(root, { onSetupChange }) {
   const sessionsCache = {};
   const transcriptCache = {};
   const cronsCache = {};
+  const cronUiState = {};
   const pendingLifecycle = {};
 
   let availableMcpServers = null;
@@ -160,6 +209,200 @@ export async function render(root, { onSetupChange }) {
 
   function setNotice(tone, text) {
     notice = { tone, text };
+  }
+
+  function defaultCronUiState() {
+    return {
+      mode: "create",
+      editTaskId: null,
+      form: {
+        schedule: "",
+        instruction: "",
+        dm_target: "",
+        enabled: true,
+      },
+      validation: {
+        checkedSchedule: "",
+        validating: false,
+        valid: null,
+        next_run: null,
+        error: "",
+      },
+      historyTaskId: null,
+      historyByTaskId: {},
+      validationTimerId: null,
+    };
+  }
+
+  function ensureCronUi(agentId) {
+    if (!cronUiState[agentId]) {
+      cronUiState[agentId] = defaultCronUiState();
+    }
+    return cronUiState[agentId];
+  }
+
+  function resetCronForm(agentId) {
+    const state = ensureCronUi(agentId);
+    state.mode = "create";
+    state.editTaskId = null;
+    state.form = {
+      schedule: "",
+      instruction: "",
+      dm_target: "",
+      enabled: true,
+    };
+    state.validation = {
+      checkedSchedule: "",
+      validating: false,
+      valid: null,
+      next_run: null,
+      error: "",
+    };
+  }
+
+  function setCronFormFromTask(agentId, task) {
+    const state = ensureCronUi(agentId);
+    state.mode = "edit";
+    state.editTaskId = task.id;
+    state.form = {
+      schedule: String(task.schedule || ""),
+      instruction: String(task.instruction || ""),
+      dm_target: String(task.dm_target || ""),
+      enabled: task.enabled !== false,
+    };
+    state.validation = {
+      checkedSchedule: String(task.schedule || ""),
+      validating: false,
+      valid: true,
+      next_run: task.next_run || null,
+      error: "",
+    };
+  }
+
+  function cronValidationViewModel(validation) {
+    if (validation.validating) {
+      return { className: "pending", text: "Validating schedule..." };
+    }
+    if (!validation.checkedSchedule) {
+      return { className: "muted", text: "Enter a cron schedule to validate." };
+    }
+    if (validation.valid) {
+      const suffix = validation.next_run ? ` Next run: ${formatDateTime(validation.next_run)}.` : "";
+      return { className: "ok", text: `Schedule is valid.${suffix}` };
+    }
+    return { className: "error", text: validation.error ? `Invalid schedule: ${validation.error}` : "Invalid schedule." };
+  }
+
+  function updateCronValidationOutput(agentId) {
+    const state = cronUiState[agentId];
+    if (!state) {
+      return;
+    }
+    const output = root.querySelector(`[data-cron-validate-output='${CSS.escape(agentId)}']`);
+    if (!output) {
+      return;
+    }
+    const view = cronValidationViewModel(state.validation);
+    output.className = `cron-validation ${view.className}`;
+    output.textContent = view.text;
+  }
+
+  async function validateCronForAgent(agentId, schedule, { quiet = false } = {}) {
+    const state = ensureCronUi(agentId);
+    const trimmed = String(schedule || "").trim();
+    if (!trimmed) {
+      state.validation = {
+        checkedSchedule: "",
+        validating: false,
+        valid: null,
+        next_run: null,
+        error: "",
+      };
+      updateCronValidationOutput(agentId);
+      return false;
+    }
+
+    state.validation = {
+      ...state.validation,
+      checkedSchedule: trimmed,
+      validating: true,
+      error: "",
+    };
+    updateCronValidationOutput(agentId);
+
+    try {
+      const result = await validateCronSchedule(trimmed);
+      state.validation = {
+        checkedSchedule: trimmed,
+        validating: false,
+        valid: Boolean(result?.valid),
+        next_run: result?.next_run || null,
+        error: result?.error || "",
+      };
+      updateCronValidationOutput(agentId);
+      if (!quiet && !state.validation.valid) {
+        setNotice("error", state.validation.error ? `Invalid schedule: ${state.validation.error}` : "Invalid cron schedule.");
+      }
+      return state.validation.valid;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      state.validation = {
+        checkedSchedule: trimmed,
+        validating: false,
+        valid: null,
+        next_run: null,
+        error: message,
+      };
+      updateCronValidationOutput(agentId);
+      if (!quiet) {
+        setNotice("error", `Schedule validation failed: ${message}`);
+      }
+      return false;
+    }
+  }
+
+  async function refreshCronTasks(agentId) {
+    const tasks = await listCronTasks(agentId);
+    cronsCache[agentId] = tasks;
+    const state = ensureCronUi(agentId);
+    if (state.mode === "edit" && state.editTaskId && !tasks.some((task) => task.id === state.editTaskId)) {
+      resetCronForm(agentId);
+    }
+    if (state.historyTaskId && !tasks.some((task) => task.id === state.historyTaskId)) {
+      state.historyTaskId = null;
+    }
+    return tasks;
+  }
+
+  async function loadCronHistory(agentId, taskId, { force = false } = {}) {
+    const state = ensureCronUi(agentId);
+    const current = state.historyByTaskId[taskId];
+    if (!force && current && !current.error && Array.isArray(current.runs)) {
+      return current.runs;
+    }
+    state.historyByTaskId[taskId] = {
+      runs: current?.runs || [],
+      loading: true,
+      error: "",
+    };
+    await queueRerender();
+    try {
+      const payload = await getCronTaskHistory(agentId, taskId);
+      state.historyByTaskId[taskId] = {
+        runs: Array.isArray(payload?.runs) ? payload.runs : [],
+        loading: false,
+        error: "",
+      };
+      return state.historyByTaskId[taskId].runs;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      state.historyByTaskId[taskId] = {
+        runs: [],
+        loading: false,
+        error: message,
+      };
+      throw err;
+    }
   }
 
   function clearStatusPoll() {
@@ -509,46 +752,137 @@ export async function render(root, { onSetupChange }) {
 
   function cronsTabMarkup(agent) {
     const tasks = cronsCache[agent.id] || [];
-    const taskRows = tasks.length
-      ? tasks.map((t) => {
-          const status = t.enabled ? "✅" : "⏸";
-          const last = t.last_run ? t.last_run.slice(0, 19).replace("T", " ") : "never";
+    const state = ensureCronUi(agent.id);
+    const activeTasks = tasks.filter((task) => task.enabled);
+    const disabledTasks = tasks.filter((task) => !task.enabled);
+
+    function historyMarkup(taskId) {
+      const history = state.historyByTaskId[taskId] || { runs: [], loading: false, error: "" };
+      if (state.historyTaskId !== taskId) {
+        return "";
+      }
+      if (history.loading) {
+        return `<div class="cron-history"><p class="empty">Loading run history...</p></div>`;
+      }
+      if (history.error) {
+        return `<div class="cron-history"><p class="empty">Failed to load history: ${escapeHtml(history.error)}</p></div>`;
+      }
+      if (!history.runs.length) {
+        return `<div class="cron-history"><p class="empty">No runs yet.</p></div>`;
+      }
+      const rows = history.runs
+        .map((run) => {
+          const status = String(run.status || "unknown").toLowerCase();
+          const statusClass = status === "completed" ? "ok" : "error";
+          const preview = String(run.result_preview || "").trim() || "(no result)";
           return `
-            <tr>
-              <td>${status}</td>
-              <td><code>${escapeHtml(t.id.slice(0, 8))}</code></td>
-              <td><code>${escapeHtml(t.schedule)}</code></td>
-              <td>${escapeHtml(t.instruction)}</td>
-              <td>${escapeHtml(last)}</td>
-              <td class="actions">
-                <button class="btn btn-secondary" data-action="cron-toggle" data-agent-id="${escapeHtml(agent.id)}" data-task-id="${escapeHtml(t.id)}" data-enabled="${t.enabled ? "1" : "0"}">${t.enabled ? "Disable" : "Enable"}</button>
-                <button class="btn btn-danger" data-action="cron-delete" data-agent-id="${escapeHtml(agent.id)}" data-task-id="${escapeHtml(t.id)}">Delete</button>
-              </td>
-            </tr>`;
-        }).join("")
-      : `<tr><td colspan="6" class="empty">No cron tasks. Add one below.</td></tr>`;
+            <li class="cron-history-item">
+              <div class="cron-history-top">
+                <span class="status-pill ${statusClass}">${escapeHtml(status)}</span>
+                <span class="cron-history-time" title="${escapeHtml(formatDateTime(run.fired_at))}">${escapeHtml(formatRelativeTime(run.fired_at))}</span>
+                <span class="cron-history-duration">${escapeHtml(formatDuration(run.duration_s))}</span>
+              </div>
+              <p class="cron-history-preview">${escapeHtml(preview)}</p>
+            </li>
+          `;
+        })
+        .join("");
+      return `<div class="cron-history"><ul class="cron-history-list">${rows}</ul></div>`;
+    }
+
+    function cardMarkup(task) {
+      const isEnabled = task.enabled !== false;
+      const lastRun = task.last_run ? formatRelativeTime(task.last_run) : "Never run";
+      const lastRunTitle = task.last_run ? formatDateTime(task.last_run) : "Never run";
+      const historyOpen = state.historyTaskId === task.id;
+      return `
+        <article class="cron-card ${isEnabled ? "enabled" : "disabled"}">
+          <div class="cron-card-head">
+            <div class="cron-card-meta">
+              <span class="cron-flag">${isEnabled ? "☑" : "☐"}</span>
+              <code class="cron-schedule">${escapeHtml(task.schedule)}</code>
+              <span class="cron-last-run" title="${escapeHtml(lastRunTitle)}">Last run: ${escapeHtml(lastRun)}</span>
+            </div>
+            <span class="cron-id"><code>${escapeHtml(task.id.slice(0, 8))}</code></span>
+          </div>
+          <p class="cron-instruction">"${escapeHtml(task.instruction)}"</p>
+          ${
+            task.dm_target
+              ? `<p class="cron-dm-target">DM target: <code>${escapeHtml(task.dm_target)}</code></p>`
+              : ""
+          }
+          <div class="cron-card-actions">
+            <button class="btn btn-secondary btn-sm" data-action="cron-edit" data-agent-id="${escapeHtml(agent.id)}" data-task-id="${escapeHtml(task.id)}">Edit</button>
+            <button class="btn btn-secondary btn-sm" data-action="cron-run" data-agent-id="${escapeHtml(agent.id)}" data-task-id="${escapeHtml(task.id)}">Run Now</button>
+            <button class="btn btn-secondary btn-sm" data-action="cron-history" data-agent-id="${escapeHtml(agent.id)}" data-task-id="${escapeHtml(task.id)}">${historyOpen ? "Hide History" : "History"}</button>
+            <button class="btn btn-secondary btn-sm" data-action="cron-toggle" data-agent-id="${escapeHtml(agent.id)}" data-task-id="${escapeHtml(task.id)}" data-enabled="${isEnabled ? "1" : "0"}">${isEnabled ? "Disable" : "Enable"}</button>
+            <button class="btn btn-danger btn-sm" data-action="cron-delete" data-agent-id="${escapeHtml(agent.id)}" data-task-id="${escapeHtml(task.id)}">Delete</button>
+          </div>
+          ${historyMarkup(task.id)}
+        </article>
+      `;
+    }
+
+    function sectionMarkup(title, sectionTasks, emptyText) {
+      const body = sectionTasks.length
+        ? sectionTasks.map((task) => cardMarkup(task)).join("")
+        : `<p class="empty">${escapeHtml(emptyText)}</p>`;
+      return `
+        <section class="cron-group">
+          <h4>${escapeHtml(title)}</h4>
+          <div class="cron-group-body">${body}</div>
+        </section>
+      `;
+    }
+
+    const validationView = cronValidationViewModel(state.validation);
+    const editing = state.mode === "edit";
+    const submitLabel = editing ? "Save Cron Task" : "Add Cron Task";
+    const formTitle = editing ? "Edit Cron Task" : "New Cron Task";
+    const editingMeta = editing
+      ? `<p class="cron-form-meta">Editing task <code>${escapeHtml((state.editTaskId || "").slice(0, 8))}</code></p>`
+      : "";
 
     return `
-      <div class="actions">
+      <div class="actions cron-toolbar">
         <button class="btn btn-secondary" data-action="load-crons" data-agent-id="${escapeHtml(agent.id)}">Refresh</button>
+        <button class="btn btn-secondary" data-action="cron-new" data-agent-id="${escapeHtml(agent.id)}">+ New Cron Job</button>
       </div>
-      <table class="cron-table">
-        <thead><tr><th></th><th>ID</th><th>Schedule</th><th>Instruction</th><th>Last Run</th><th></th></tr></thead>
-        <tbody>${taskRows}</tbody>
-      </table>
-      <form class="cron-add-form" data-agent-id="${escapeHtml(agent.id)}">
+
+      ${sectionMarkup("Active", activeTasks, "No active cron tasks.")}
+      ${sectionMarkup("Disabled", disabledTasks, "No disabled cron tasks.")}
+
+      <form class="cron-task-form" data-agent-id="${escapeHtml(agent.id)}">
+        <h4>${formTitle}</h4>
+        ${editingMeta}
         <div class="form-grid">
           <div class="field">
             <label>Schedule (cron)</label>
-            <input name="schedule" placeholder="0 9 * * *" required />
+            <div class="cron-schedule-row">
+              <input name="schedule" value="${escapeHtml(state.form.schedule)}" placeholder="0 9 * * 1-5" required />
+              <button class="btn btn-secondary" type="button" data-action="cron-validate" data-agent-id="${escapeHtml(agent.id)}">Validate</button>
+            </div>
+            <p class="cron-validation ${validationView.className}" data-cron-validate-output="${escapeHtml(agent.id)}">${escapeHtml(validationView.text)}</p>
           </div>
           <div class="field" style="grid-column: 1 / -1;">
             <label>Instruction</label>
-            <input name="instruction" placeholder="Send morning briefing" required />
+            <input name="instruction" value="${escapeHtml(state.form.instruction)}" placeholder="Generate morning briefing for Nick" required />
+          </div>
+          <div class="field">
+            <label>DM Target (optional)</label>
+            <input name="dm_target" value="${escapeHtml(state.form.dm_target)}" placeholder="nick@example.com" />
+          </div>
+          <div class="field">
+            <label>Enabled</label>
+            <select name="enabled">
+              <option value="true" ${state.form.enabled ? "selected" : ""}>true</option>
+              <option value="false" ${state.form.enabled ? "" : "selected"}>false</option>
+            </select>
           </div>
         </div>
         <div class="actions">
-          <button class="btn btn-primary" type="submit">Add Cron Task</button>
+          <button class="btn btn-primary" type="submit">${submitLabel}</button>
+          ${editing ? `<button class="btn btn-secondary" type="button" data-action="cron-cancel-edit" data-agent-id="${escapeHtml(agent.id)}">Cancel Edit</button>` : ""}
         </div>
       </form>
     `;
@@ -751,6 +1085,19 @@ export async function render(root, { onSetupChange }) {
     const bridgeLabel = runningBridgeCount > 0 ? "running" : "stopped";
     const bridgeClass = runningBridgeCount > 0 ? "ok" : "error";
     const detail = activeAgent ? detailCache[activeAgent.id] || activeAgent : null;
+
+    if (activeAgent && activeTab === "crons") {
+      ensureCronUi(activeAgent.id);
+      if (!Object.prototype.hasOwnProperty.call(cronsCache, activeAgent.id)) {
+        try {
+          await refreshCronTasks(activeAgent.id);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          cronsCache[activeAgent.id] = [];
+          setNotice("error", `Failed to load cron tasks: ${message}`);
+        }
+      }
+    }
 
     root.innerHTML = `
       <div class="view-stack">
@@ -1011,6 +1358,10 @@ export async function render(root, { onSetupChange }) {
             delete sessionsCache[agentId];
             delete transcriptCache[agentId];
             delete cronsCache[agentId];
+            if (cronUiState[agentId]?.validationTimerId) {
+              window.clearTimeout(cronUiState[agentId].validationTimerId);
+            }
+            delete cronUiState[agentId];
             if (activeAgentId === agentId) {
               activeAgentId = null;
             }
@@ -1053,18 +1404,77 @@ export async function render(root, { onSetupChange }) {
               setNotice("info", `Loaded session ${sessionId}.`);
             }
           } else if (action === "load-crons") {
-            cronsCache[agentId] = await listCronTasks(agentId);
+            await refreshCronTasks(agentId);
             setNotice("info", `Loaded cron tasks for ${agentId}.`);
+          } else if (action === "cron-new") {
+            resetCronForm(agentId);
+            setNotice("info", "Ready to create a new cron task.");
+          } else if (action === "cron-edit") {
+            const taskId = button.dataset.taskId;
+            const tasks = cronsCache[agentId] || [];
+            const task = tasks.find((item) => item.id === taskId);
+            if (!task) {
+              setNotice("error", "Cron task no longer exists.");
+            } else {
+              setCronFormFromTask(agentId, task);
+              setNotice("info", "Editing cron task.");
+            }
+          } else if (action === "cron-cancel-edit") {
+            resetCronForm(agentId);
+            setNotice("info", "Canceled cron edit.");
+          } else if (action === "cron-validate") {
+            const form = root.querySelector(`form.cron-task-form[data-agent-id='${CSS.escape(agentId)}']`);
+            if (!form) {
+              return;
+            }
+            const schedule = String(new FormData(form).get("schedule") || "").trim();
+            ensureCronUi(agentId).form.schedule = schedule;
+            await validateCronForAgent(agentId, schedule);
+          } else if (action === "cron-history") {
+            const taskId = button.dataset.taskId;
+            const state = ensureCronUi(agentId);
+            if (state.historyTaskId === taskId) {
+              state.historyTaskId = null;
+            } else {
+              state.historyTaskId = taskId;
+              try {
+                await loadCronHistory(agentId, taskId);
+              } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                setNotice("error", `Failed to load cron history: ${message}`);
+              }
+            }
+          } else if (action === "cron-run") {
+            const taskId = button.dataset.taskId;
+            const result = await runCronTask(agentId, taskId);
+            await refreshCronTasks(agentId);
+            const state = ensureCronUi(agentId);
+            if (state.historyTaskId === taskId) {
+              await loadCronHistory(agentId, taskId, { force: true });
+            }
+            setNotice(result.status === "completed" ? "success" : "error", `Cron run ${result.status} (${formatDuration(result.duration_s)}).`);
           } else if (action === "cron-toggle") {
             const taskId = button.dataset.taskId;
             const currentlyEnabled = button.dataset.enabled === "1";
             await updateCronTask(agentId, taskId, { enabled: !currentlyEnabled });
-            cronsCache[agentId] = await listCronTasks(agentId);
+            await refreshCronTasks(agentId);
             setNotice("success", `Cron task ${currentlyEnabled ? "disabled" : "enabled"}.`);
           } else if (action === "cron-delete") {
             const taskId = button.dataset.taskId;
+            const confirmed = window.confirm("Delete this cron task? This cannot be undone.");
+            if (!confirmed) {
+              return;
+            }
             await deleteCronTask(agentId, taskId);
-            cronsCache[agentId] = await listCronTasks(agentId);
+            await refreshCronTasks(agentId);
+            const state = ensureCronUi(agentId);
+            if (state.editTaskId === taskId) {
+              resetCronForm(agentId);
+            }
+            if (state.historyTaskId === taskId) {
+              state.historyTaskId = null;
+            }
+            delete state.historyByTaskId[taskId];
             setNotice("info", "Cron task deleted.");
           } else if (action === "clear-thinking") {
             thinkingEvents[agentId] = [];
@@ -1152,27 +1562,85 @@ export async function render(root, { onSetupChange }) {
       });
     }
 
-    for (const form of root.querySelectorAll("form.cron-add-form")) {
+    for (const input of root.querySelectorAll("form.cron-task-form input[name='schedule']")) {
+      input.addEventListener("input", () => {
+        const form = input.closest("form.cron-task-form");
+        const agentId = form?.dataset.agentId;
+        if (!agentId) {
+          return;
+        }
+        const state = ensureCronUi(agentId);
+        state.form.schedule = input.value;
+        if (state.validationTimerId) {
+          window.clearTimeout(state.validationTimerId);
+        }
+        const schedule = input.value.trim();
+        if (!schedule) {
+          state.validation = {
+            checkedSchedule: "",
+            validating: false,
+            valid: null,
+            next_run: null,
+            error: "",
+          };
+          updateCronValidationOutput(agentId);
+          return;
+        }
+        state.validationTimerId = window.setTimeout(() => {
+          validateCronForAgent(agentId, schedule, { quiet: true }).catch(() => {});
+        }, 450);
+      });
+    }
+
+    for (const form of root.querySelectorAll("form.cron-task-form")) {
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
         const agentId = form.dataset.agentId;
         if (!agentId) return;
+        const state = ensureCronUi(agentId);
         const data = new FormData(form);
         const schedule = String(data.get("schedule") || "").trim();
         const instruction = String(data.get("instruction") || "").trim();
+        const dmTargetRaw = String(data.get("dm_target") || "").trim();
+        const enabled = String(data.get("enabled") || "true") === "true";
         if (!schedule || !instruction) {
           setNotice("error", "Schedule and instruction are required.");
           queueRerender(true);
           return;
         }
         try {
-          await createCronTask(agentId, schedule, instruction);
-          cronsCache[agentId] = await listCronTasks(agentId);
-          setNotice("success", "Cron task added.");
-          form.reset();
+          const valid = await validateCronForAgent(agentId, schedule, { quiet: true });
+          if (!valid) {
+            setNotice("error", state.validation.error ? `Invalid schedule: ${state.validation.error}` : "Schedule is invalid.");
+            queueRerender(true);
+            return;
+          }
+
+          const payload = {
+            schedule,
+            instruction,
+            enabled,
+            dm_target: dmTargetRaw || null,
+          };
+          state.form = {
+            schedule,
+            instruction,
+            enabled,
+            dm_target: dmTargetRaw,
+          };
+
+          if (state.mode === "edit" && state.editTaskId) {
+            await updateCronTask(agentId, state.editTaskId, payload);
+            setNotice("success", "Cron task updated.");
+          } else {
+            await createCronTask(agentId, payload);
+            setNotice("success", "Cron task created.");
+          }
+          await refreshCronTasks(agentId);
+          resetCronForm(agentId);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          setNotice("error", `Failed to add cron task: ${message}`);
+          setNotice("error", `Failed to save cron task: ${message}`);
         }
         queueRerender(true);
       });
@@ -1225,6 +1693,11 @@ export async function render(root, { onSetupChange }) {
       if (metricsIntervalId !== null) {
         window.clearInterval(metricsIntervalId);
         metricsIntervalId = null;
+      }
+      for (const state of Object.values(cronUiState)) {
+        if (state && state.validationTimerId) {
+          window.clearTimeout(state.validationTimerId);
+        }
       }
       destroyThinkingStream();
     },
