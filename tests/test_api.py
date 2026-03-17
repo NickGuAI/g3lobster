@@ -353,6 +353,43 @@ def test_create_agent_rejects_reserved_global_id(tmp_path):
         assert "Use terse answers" in get_global.json()["content"]
 
 
+def test_agent_heartbeat_interval_rejects_sub_minimum_values(tmp_path):
+    app, _bridge_instances, _config_path = _build_test_app(tmp_path)
+
+    with TestClient(app) as client:
+        low_create = client.post(
+            "/agents",
+            json={
+                "name": "Aster",
+                "emoji": "🦀",
+                "soul": "Heartbeat validation test.",
+                "model": "gemini",
+                "mcp_servers": ["*"],
+                "heartbeat_interval_s": 5,
+            },
+        )
+        assert low_create.status_code == 422
+
+        created = client.post(
+            "/agents",
+            json={
+                "name": "Aster",
+                "emoji": "🦀",
+                "soul": "Heartbeat validation test.",
+                "model": "gemini",
+                "mcp_servers": ["*"],
+            },
+        )
+        assert created.status_code == 200
+        agent_id = created.json()["id"]
+
+        low_update = client.put(
+            f"/agents/{agent_id}",
+            json={"heartbeat_interval_s": 5},
+        )
+        assert low_update.status_code == 422
+
+
 def test_setup_routes_bridge_lifecycle(monkeypatch, tmp_path):
     app, bridge_instances, config_path = _build_test_app(tmp_path)
 

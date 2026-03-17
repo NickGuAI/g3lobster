@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
+from g3lobster.agents.persona import HEARTBEAT_MIN_INTERVAL_S
 
 
 class AgentCreateRequest(BaseModel):
@@ -18,7 +19,7 @@ class AgentCreateRequest(BaseModel):
     space_id: Optional[str] = None
     bridge_enabled: bool = False
     heartbeat_enabled: bool = True
-    heartbeat_interval_s: float = Field(default=300.0, gt=0)
+    heartbeat_interval_s: float = Field(default=300.0, ge=HEARTBEAT_MIN_INTERVAL_S)
 
 
 class AgentUpdateRequest(BaseModel):
@@ -33,7 +34,7 @@ class AgentUpdateRequest(BaseModel):
     space_id: Optional[str] = None
     bridge_enabled: Optional[bool] = None
     heartbeat_enabled: Optional[bool] = None
-    heartbeat_interval_s: Optional[float] = Field(default=None, gt=0)
+    heartbeat_interval_s: Optional[float] = Field(default=None, ge=HEARTBEAT_MIN_INTERVAL_S)
 
 
 class AgentResponse(BaseModel):

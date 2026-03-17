@@ -10,6 +10,7 @@ import time
 from datetime import datetime, timezone
 from typing import Callable, List, Optional
 
+from g3lobster.agents.persona import HEARTBEAT_MIN_INTERVAL_S
 from g3lobster.cli.parser import clean_text, split_reasoning
 from g3lobster.memory.context import ContextBuilder
 from g3lobster.memory.manager import MemoryManager
@@ -33,6 +34,13 @@ def _normalize_heartbeat_interval(interval_s: float) -> float:
     value = float(interval_s)
     if value <= 0:
         raise ValueError("heartbeat_interval_s must be > 0")
+    if value < HEARTBEAT_MIN_INTERVAL_S:
+        logger.warning(
+            "heartbeat_interval_s=%s is below minimum %ss; clamping",
+            value,
+            HEARTBEAT_MIN_INTERVAL_S,
+        )
+        return HEARTBEAT_MIN_INTERVAL_S
     return value
 
 
@@ -50,7 +58,7 @@ class GeminiAgent:
         task_store: Optional[TaskStore] = None,
         subagent_spawner: Optional[object] = None,
         board_store: Optional[object] = None,
-        heartbeat_enabled: bool = True,
+        heartbeat_enabled: bool = False,
         heartbeat_interval_s: float = 300.0,
         heartbeat_review_provider: Optional[Callable[[], object]] = None,
         heartbeat_event_publisher: Optional[Callable[[str, dict], None]] = None,

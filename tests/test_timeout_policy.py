@@ -6,11 +6,18 @@ from pathlib import Path
 
 import pytest
 
-from g3lobster.agents.persona import AgentPersona, load_persona, save_persona
+from g3lobster.agents.persona import (
+    AgentPersona,
+    HEARTBEAT_MIN_INTERVAL_S,
+    load_persona,
+    save_persona,
+)
 from g3lobster.chat.bridge import ChatBridge
 from g3lobster.cli.process import GeminiProcess
 from g3lobster.config import load_config
 from g3lobster.pool.agent import GeminiAgent
+from g3lobster.api import models as api_models
+from g3lobster.pool import agent as pool_agent
 from g3lobster.pool.health import HealthInspector
 from g3lobster.pool.types import AgentState
 from g3lobster.tasks.types import Task, TaskStatus
@@ -322,6 +329,22 @@ def test_persona_response_timeout_roundtrip(tmp_path: Path) -> None:
     assert loaded.heartbeat_interval_s == 123.0
 
 
+def test_persona_heartbeat_interval_clamped_to_safe_min(tmp_path: Path) -> None:
+    data_dir = str(tmp_path / "data")
+    save_persona(
+        data_dir,
+        AgentPersona(
+            id="luna",
+            name="Luna",
+            heartbeat_enabled=True,
+            heartbeat_interval_s=1.0,
+        ),
+    )
+    loaded = load_persona(data_dir, "luna")
+    assert loaded is not None
+    assert loaded.heartbeat_interval_s == HEARTBEAT_MIN_INTERVAL_S
+
+
 def test_health_inspector_builds_heartbeat_review_suggestions() -> None:
     now = time.time()
     inspector = HealthInspector()
@@ -381,5 +404,10 @@ def test_agents_heartbeat_config_defaults(tmp_path: Path) -> None:
     config_path.write_text("agents:\n  data_dir: ./data\n", encoding="utf-8")
 
     config = load_config(str(config_path))
-    assert config.agents.heartbeat_enabled is True
+    assert config.agents.heartbeat_enabled is False
     assert config.agents.heartbeat_interval_s == 300
+
+
+def test_heartbeat_min_interval_constant_is_shared() -> None:
+    assert api_models.HEARTBEAT_MIN_INTERVAL_S == HEARTBEAT_MIN_INTERVAL_S
+    assert pool_agent.HEARTBEAT_MIN_INTERVAL_S == HEARTBEAT_MIN_INTERVAL_S

@@ -25,7 +25,7 @@ class AgentsConfig:
     procedure_min_frequency: int = 3
     memory_max_sections: int = 50
     context_messages: int = 12
-    heartbeat_enabled: bool = True
+    heartbeat_enabled: bool = False
     heartbeat_interval_s: int = 300
     health_check_interval_s: int = 30
     stuck_timeout_s: int = 0  # 0 disables stuck-agent auto-restart

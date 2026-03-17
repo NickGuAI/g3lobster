@@ -286,7 +286,9 @@ class HealthInspector:
             task_id = str(cls._value(task, "id", "") or "").strip()
             prompt = str(cls._value(task, "prompt", "") or "").strip()
             error = str(cls._value(task, "error", "") or "").strip()
-            result_md = str(cls._value(task, "result_md", "") or "").strip()
+            result_md = str(
+                cls._value(task, "result_md", cls._value(task, "result", "")) or ""
+            ).strip()
             created_at = cls._float_or_none(cls._value(task, "created_at", None))
             started_at = cls._float_or_none(cls._value(task, "started_at", None))
             updated_at = cls._float_or_none(cls._value(task, "updated_at", None))
