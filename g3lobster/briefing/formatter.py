@@ -16,11 +16,13 @@ def format_briefing(
     events: List[Dict[str, Any]],
     emails: List[Dict[str, Any]],
     mentions: List[Dict[str, Any]],
+    target_date: Optional[datetime] = None,
 ) -> str:
     """Render the three data sources into a concise daily digest."""
     parts: list[str] = []
-    today = datetime.now(tz=timezone.utc).strftime("%A, %B %d, %Y")
-    parts.append(f"*Morning Briefing — {today}*\n")
+    dt = target_date or datetime.now(tz=timezone.utc)
+    date_str = dt.strftime("%A, %B %d, %Y")
+    parts.append(f"*Morning Briefing — {date_str}*\n")
 
     # --- Schedule ---
     parts.append("*Today's Schedule*")

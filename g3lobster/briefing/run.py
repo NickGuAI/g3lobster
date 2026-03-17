@@ -50,6 +50,7 @@ async def run_briefing(
     user_email: Optional[str] = None,
     chat_spaces: Optional[List[str]] = None,
     since_iso: Optional[str] = None,
+    target_date: Optional[datetime] = None,
 ) -> str:
     """Run the full morning briefing pipeline.
 
@@ -64,6 +65,8 @@ async def run_briefing(
         List of Chat space names to scan for @-mentions. Defaults to empty.
     since_iso:
         ISO-8601 timestamp — only gather emails/mentions newer than this.
+    target_date:
+        Target date for calendar events. Defaults to today (UTC).
 
     Returns
     -------
@@ -81,7 +84,7 @@ async def run_briefing(
 
     # Gather data concurrently
     now = datetime.now(tz=timezone.utc)
-    events_coro = fetch_calendar_events(calendar_svc, date=now)
+    events_coro = fetch_calendar_events(calendar_svc, date=target_date or now)
     emails_coro = fetch_priority_emails(gmail_svc, since_iso=since_iso)
     mentions_coro = fetch_unread_mentions(
         chat_svc,
@@ -94,7 +97,7 @@ async def run_briefing(
         events_coro, emails_coro, mentions_coro
     )
 
-    briefing_text = format_briefing(events, emails, mentions)
+    briefing_text = format_briefing(events, emails, mentions, target_date=target_date)
 
     # Deliver via DM if a target email is provided
     if user_email:
