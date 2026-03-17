@@ -5,8 +5,7 @@ from __future__ import annotations
 from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
-
-HEARTBEAT_MIN_INTERVAL_S = 30.0
+from g3lobster.agents.persona import HEARTBEAT_MIN_INTERVAL_S
 
 
 class AgentCreateRequest(BaseModel):

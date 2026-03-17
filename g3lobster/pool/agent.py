@@ -10,6 +10,7 @@ import time
 from datetime import datetime, timezone
 from typing import Callable, List, Optional
 
+from g3lobster.agents.persona import HEARTBEAT_MIN_INTERVAL_S
 from g3lobster.cli.parser import clean_text, split_reasoning
 from g3lobster.memory.context import ContextBuilder
 from g3lobster.memory.manager import MemoryManager
@@ -18,8 +19,6 @@ from g3lobster.pool.types import AgentState
 from g3lobster.tasks.types import Task, TaskStatus, TaskStore
 
 logger = logging.getLogger(__name__)
-
-HEARTBEAT_MIN_INTERVAL_S = 30.0
 
 
 def _normalize_timeout(timeout_s: Optional[float]) -> Optional[float]:

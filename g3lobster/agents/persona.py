@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 from dataclasses import dataclass, field
@@ -15,6 +16,8 @@ from g3lobster.memory.migration import migrate_agent_memory_layout
 AGENT_ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 RESERVED_AGENT_IDS = frozenset({"global"})
 HEARTBEAT_MIN_INTERVAL_S = 30.0
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -71,6 +74,12 @@ class AgentPersona:
         if self.heartbeat_interval_s <= 0:
             raise ValueError("heartbeat_interval_s must be > 0")
         if self.heartbeat_interval_s < HEARTBEAT_MIN_INTERVAL_S:
+            logger.warning(
+                "Agent %s heartbeat_interval_s=%s is below minimum %ss; clamping",
+                self.id,
+                self.heartbeat_interval_s,
+                HEARTBEAT_MIN_INTERVAL_S,
+            )
             self.heartbeat_interval_s = HEARTBEAT_MIN_INTERVAL_S
         if not isinstance(self.space_overrides, dict):
             self.space_overrides = {}
@@ -130,6 +139,12 @@ def _parse_positive_float(
     if parsed <= 0:
         raise ValueError(f"{field_name} must be > 0")
     if parsed < float(min_value):
+        logger.warning(
+            "%s=%s is below minimum %s; clamping",
+            field_name,
+            parsed,
+            min_value,
+        )
         return float(min_value)
     return parsed
 

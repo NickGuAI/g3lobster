@@ -16,6 +16,8 @@ from g3lobster.chat.bridge import ChatBridge
 from g3lobster.cli.process import GeminiProcess
 from g3lobster.config import load_config
 from g3lobster.pool.agent import GeminiAgent
+from g3lobster.api import models as api_models
+from g3lobster.pool import agent as pool_agent
 from g3lobster.pool.health import HealthInspector
 from g3lobster.pool.types import AgentState
 from g3lobster.tasks.types import Task, TaskStatus
@@ -404,3 +406,8 @@ def test_agents_heartbeat_config_defaults(tmp_path: Path) -> None:
     config = load_config(str(config_path))
     assert config.agents.heartbeat_enabled is False
     assert config.agents.heartbeat_interval_s == 300
+
+
+def test_heartbeat_min_interval_constant_is_shared() -> None:
+    assert api_models.HEARTBEAT_MIN_INTERVAL_S == HEARTBEAT_MIN_INTERVAL_S
+    assert pool_agent.HEARTBEAT_MIN_INTERVAL_S == HEARTBEAT_MIN_INTERVAL_S
