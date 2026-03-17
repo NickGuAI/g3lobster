@@ -38,7 +38,7 @@ class AgentPersona:
     space_id: Optional[str] = None
     bridge_enabled: bool = False
     heartbeat_enabled: bool = True
-    heartbeat_interval_s: float = 300.0
+    heartbeat_interval_s: float = 3600.0
     avatar_url: Optional[str] = None
     space_overrides: Dict[str, Dict[str, str]] = field(default_factory=dict)
     created_at: str = field(default_factory=lambda: _utc_now())
