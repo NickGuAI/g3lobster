@@ -728,8 +728,17 @@ function buildSettingsPanel(status) {
     `;
   }).join("");
 
-  const setupPhase = status?.phase || "unknown";
-  const phaseBadge = setupPhase === "running" ? "badge-success" : setupPhase === "error" ? "badge-danger" : "badge-warning";
+  function derivePhase(s) {
+    if (!s) return "unknown";
+    if (!s.credentials_ok || !s.auth_ok) return "setup";
+    if (!s.space_configured) return "configuring";
+    if (s.completed && s.bridge_running) return "running";
+    if (s.agents_ready && !s.bridge_running) return "stopped";
+    if (s.agents_ready) return "starting";
+    return "configuring";
+  }
+  const setupPhase = derivePhase(status);
+  const phaseBadge = setupPhase === "running" ? "badge-success" : setupPhase === "setup" || setupPhase === "stopped" ? "badge-danger" : "badge-warning";
 
   return `
     <div style="padding:24px">
@@ -742,7 +751,7 @@ function buildSettingsPanel(status) {
         <div class="section-title" style="margin-bottom:16px">Setup Status</div>
         <div class="form-row">
           <label class="form-label">Phase</label>
-          <p style="color:#E8ECF0;font-size:14px">${escapeHtml(status?.phase || "&#8212;")}</p>
+          <p style="color:#E8ECF0;font-size:14px">${escapeHtml(setupPhase)}</p>
         </div>
         ${status?.message ? `<div class="form-row"><label class="form-label">Message</label><p class="text-muted">${escapeHtml(status.message)}</p></div>` : ""}
         <div class="form-actions" style="justify-content:flex-start">
