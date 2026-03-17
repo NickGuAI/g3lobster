@@ -160,8 +160,13 @@ function buildAgentsPanel() {
     <div style="padding: 24px">
       <div id="agents-notice"></div>
       <div class="section-header">
-        <span class="section-title">Active Agents</span>
-        <div style="display:flex;gap:8px;align-items:center">
+        <div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0">
+          <span class="section-title" style="flex-shrink:0">Active Agents</span>
+          <select id="agent-select" class="form-select" style="max-width:280px">
+            <option value="">— Select Agent —</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-shrink:0">
           <label class="btn btn-ghost btn-sm" style="cursor:pointer;position:relative">
             Import
             <input type="file" id="import-agent-file" accept=".g3agent,.zip" style="position:absolute;inset:0;opacity:0;cursor:pointer" />
@@ -847,6 +852,14 @@ export async function render(root, { status, onSetupChange }) {
     const addForm = panel.querySelector("#add-agent-form");
     const createForm = panel.querySelector("#create-agent-form");
     const importFile = panel.querySelector("#import-agent-file");
+    const agentSel = panel.querySelector("#agent-select");
+
+    if (agentSel) {
+      agentSel.addEventListener("change", async () => {
+        const id = agentSel.value;
+        if (id) await showAgentDetail(id, "info");
+      });
+    }
 
     if (btnAdd && addForm) {
       btnAdd.addEventListener("click", () => {
@@ -922,6 +935,13 @@ export async function render(root, { status, onSetupChange }) {
         return;
       }
       grid.innerHTML = agents.map(buildAgentCard).join("");
+      const sel = document.getElementById("agent-select");
+      if (sel) {
+        const current = sel.value;
+        sel.innerHTML = `<option value="">— Select Agent —</option>` +
+          agents.map((a) => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name || a.id)}</option>`).join("");
+        if (current) sel.value = current;
+      }
     } catch (err) {
       showNotice("agents-notice", "error", `Failed to load agents: ${err.message}`);
     }
