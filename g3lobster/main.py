@@ -229,6 +229,7 @@ def build_runtime(config: AppConfig):
 
     chat_auth_dir = str(Path(config.agents.data_dir) / "chat_auth")
     cron_store = CronStore(config.agents.data_dir)
+    registry.cron_store = cron_store
 
     # Calendar focus-time guard
     focus_checker = None
@@ -363,6 +364,7 @@ def build_runtime(config: AppConfig):
     if config.tasks.enabled:
         from g3lobster.board.store import BoardStore
         board_store = BoardStore(data_dir=config.agents.data_dir)
+        registry.board_store = board_store
 
         if config.tasks.google_sheet_id:
             from g3lobster.board.sheets import SheetsSync

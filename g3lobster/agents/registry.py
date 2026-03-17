@@ -219,6 +219,9 @@ class AgentRegistry:
         self._chat_bridge_was_running = False
         self.agent_factory = agent_factory
         self.control_plane = None
+        # Late-bound by main.py after construction.
+        self.board_store: Optional[object] = None
+        self.cron_store: Optional[object] = None
 
         self.health = HealthInspector()
         self.task_store = TaskStore(max_tasks_per_agent=task_store_size)
@@ -332,6 +335,40 @@ class AgentRegistry:
             agent.set_heartbeat_event_publisher(self._publish_event_bus)
         else:
             setattr(agent, "heartbeat_event_publisher", self._publish_event_bus)
+
+        # Wire heartbeat prompt provider (builds task/cron/memory context).
+        async def _heartbeat_prompt_provider() -> str:
+            runtime = self._agents.get(agent_id)
+            active_persona = runtime.persona if runtime else persona
+            active_memory = runtime.memory_manager if runtime else memory
+            return self._build_heartbeat_prompt(
+                agent_id=agent_id,
+                persona=active_persona,
+                memory_manager=active_memory,
+            )
+
+        setattr(agent, "heartbeat_prompt_provider", _heartbeat_prompt_provider)
+
+        # Wire heartbeat space sender (posts agent response to its Google Chat space).
+        async def _heartbeat_space_sender(message: str) -> None:
+            space_id = getattr(persona, "space_id", None)
+            if not space_id:
+                logger.debug("Agent %s heartbeat: no space_id configured, skipping send", agent_id)
+                return
+            bridge_manager = self.chat_bridge
+            if bridge_manager is None:
+                return
+            bridges = getattr(bridge_manager, "_bridges_by_space", {})
+            bridge = bridges.get(space_id)
+            if bridge is None:
+                logger.debug("Agent %s heartbeat: no bridge for space %s", agent_id, space_id)
+                return
+            try:
+                await bridge.send_message(message)
+            except Exception:
+                logger.exception("Agent %s heartbeat: failed to send message to space %s", agent_id, space_id)
+
+        setattr(agent, "heartbeat_space_sender", _heartbeat_space_sender)
 
         if hasattr(agent, "configure_heartbeat"):
             agent.configure_heartbeat(
@@ -652,6 +689,86 @@ class AgentRegistry:
         if procedures:
             sources.append(procedures)
         return sources
+
+    def _build_heartbeat_prompt(
+        self,
+        *,
+        agent_id: str,
+        persona: "AgentPersona",
+        memory_manager: "MemoryManager",
+    ) -> str:
+        """Build the context-rich prompt sent to the agent during heartbeat."""
+        lines: List[str] = [
+            f"⏰ HEARTBEAT CHECK-IN",
+            f"",
+            f"You are {persona.name}. This is your periodic check-in. Review your current "
+            f"situation, update the status of your tasks using your tools, then post a brief "
+            f"status update to the team.",
+            f"",
+        ]
+
+        # Board tasks
+        board_store = self.board_store
+        if board_store is not None and hasattr(board_store, "list_items"):
+            try:
+                all_tasks = board_store.list_items(agent_id=agent_id, limit=20)
+                open_tasks = [t for t in all_tasks if getattr(t, "status", "") != "done"]
+                lines.append(f"## Task Board ({len(open_tasks)} open task{'s' if len(open_tasks) != 1 else ''})")
+                if open_tasks:
+                    for t in open_tasks[:10]:
+                        lines.append(
+                            f"- [{getattr(t, 'status', '?').upper()}] {getattr(t, 'title', '?')}"
+                            f"  (id: {str(getattr(t, 'id', ''))[:8]}, priority: {getattr(t, 'priority', 'normal')})"
+                        )
+                else:
+                    lines.append("- No open tasks.")
+                lines.append("")
+            except Exception:
+                logger.debug("Agent %s heartbeat: failed to read board tasks", agent_id, exc_info=True)
+
+        # Cron jobs
+        cron_store = self.cron_store
+        if cron_store is not None and hasattr(cron_store, "list_tasks"):
+            try:
+                crons = cron_store.list_tasks(agent_id)
+                active = [c for c in crons if getattr(c, "enabled", True)]
+                lines.append(f"## Scheduled Jobs ({len(active)} active)")
+                if active:
+                    for c in active[:5]:
+                        last = getattr(c, "last_run", None) or "never"
+                        instr = str(getattr(c, "instruction", ""))[:70]
+                        lines.append(f"- [{getattr(c, 'schedule', '?')}] {instr}  (last: {last})")
+                else:
+                    lines.append("- No active cron jobs.")
+                lines.append("")
+            except Exception:
+                logger.debug("Agent %s heartbeat: failed to read cron jobs", agent_id, exc_info=True)
+
+        # Mission / soul first line
+        soul = getattr(persona, "soul", "") or ""
+        first_soul_line = next((ln.strip().lstrip("#").strip() for ln in soul.splitlines() if ln.strip()), "")
+        if first_soul_line:
+            lines += [f"## Your Mission", first_soul_line, ""]
+
+        # Memory snippet (first 400 chars)
+        try:
+            mem = memory_manager.read_memory()
+            if mem:
+                lines += ["## Your Memory (recent)", mem[:400].strip(), ""]
+        except Exception:
+            pass
+
+        lines += [
+            "## Instructions",
+            "1. Call `list_tasks` to see your board, then use `update_task` / `complete_task` "
+            "to update statuses for any tasks you have progressed or finished.",
+            "2. Use `create_task` to capture new work items you identify.",
+            "3. Write a brief status update (3-5 sentences) covering: what you accomplished, "
+            "what you plan next, and any blockers.",
+            "",
+            "Start your reply with: 📋 **Status Update:**",
+        ]
+        return "\n".join(lines)
 
     def _build_heartbeat_event(
         self,

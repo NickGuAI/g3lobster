@@ -82,6 +82,8 @@ class GeminiAgent:
         self.heartbeat_interval_s = _normalize_heartbeat_interval(heartbeat_interval_s)
         self.heartbeat_review_provider = heartbeat_review_provider
         self.heartbeat_event_publisher = heartbeat_event_publisher
+        self.heartbeat_prompt_provider: Optional[Callable[[], object]] = None
+        self.heartbeat_space_sender: Optional[Callable[[str], object]] = None
         self._heartbeat_task: Optional[asyncio.Task] = None
 
     def _persist_terminal_task(self, task: Task) -> None:
@@ -183,35 +185,69 @@ class GeminiAgent:
     async def _run_heartbeat_tick(self) -> None:
         if self.state != AgentState.IDLE:
             return
-        provider = self.heartbeat_review_provider
-        if not callable(provider):
-            return
-        try:
-            payload = provider()
-            if inspect.isawaitable(payload):
-                payload = await payload
-        except Exception:
-            logger.exception("Agent %s heartbeat review provider failed", self.id)
-            return
-        if payload is None:
-            return
-        if hasattr(payload, "as_event"):
-            payload = payload.as_event(self.id)
-        if not isinstance(payload, dict):
-            logger.warning("Agent %s heartbeat provider returned unsupported payload", self.id)
+
+        # 1. Build and publish the review event (existing behaviour).
+        review_provider = self.heartbeat_review_provider
+        if callable(review_provider):
+            try:
+                payload = review_provider()
+                if inspect.isawaitable(payload):
+                    payload = await payload
+                if payload is not None:
+                    if hasattr(payload, "as_event"):
+                        payload = payload.as_event(self.id)
+                    if isinstance(payload, dict):
+                        event = dict(payload)
+                        event.setdefault("type", "heartbeat_review")
+                        event.setdefault("timestamp", datetime.now(tz=timezone.utc).isoformat())
+                        publisher = self.heartbeat_event_publisher
+                        if callable(publisher):
+                            try:
+                                publisher(self.id, event)
+                            except Exception:
+                                logger.exception("Agent %s heartbeat event publish failed", self.id)
+            except Exception:
+                logger.exception("Agent %s heartbeat review provider failed", self.id)
+
+        # 2. Build a context-rich prompt and let the agent act on it.
+        prompt_provider = self.heartbeat_prompt_provider
+        if not callable(prompt_provider):
             return
 
-        event = dict(payload)
-        event.setdefault("type", "heartbeat_review")
-        event.setdefault("timestamp", datetime.now(tz=timezone.utc).isoformat())
-
-        publisher = self.heartbeat_event_publisher
-        if not callable(publisher):
-            return
         try:
-            publisher(self.id, event)
+            prompt = prompt_provider()
+            if inspect.isawaitable(prompt):
+                prompt = await prompt
         except Exception:
-            logger.exception("Agent %s heartbeat event publish failed", self.id)
+            logger.exception("Agent %s heartbeat prompt provider failed", self.id)
+            return
+
+        if not prompt:
+            return
+
+        self.state = AgentState.BUSY
+        try:
+            raw = await asyncio.wait_for(self.process.ask(prompt), timeout=180.0)
+            from g3lobster.cli.parser import clean_text, split_reasoning
+            _, response = split_reasoning(clean_text(raw))
+            if response:
+                sender = self.heartbeat_space_sender
+                if callable(sender):
+                    try:
+                        result = sender(response)
+                        if inspect.isawaitable(result):
+                            await result
+                    except Exception:
+                        logger.exception("Agent %s heartbeat space sender failed", self.id)
+        except asyncio.TimeoutError:
+            logger.warning("Agent %s heartbeat prompt timed out", self.id)
+        except Exception:
+            logger.exception("Agent %s heartbeat prompt execution failed", self.id)
+        finally:
+            if self.is_alive():
+                self.state = AgentState.IDLE
+            else:
+                self.state = AgentState.DEAD
 
     async def assign(self, task: Task) -> Task:
         if self.state not in {AgentState.IDLE, AgentState.BUSY}:
