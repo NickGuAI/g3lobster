@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from g3lobster.cron.store import CronRunRecord, CronStore
+from g3lobster.cron.store import CronRunRecord, CronStore, CronTask
 
 
 def test_cron_store_crud(tmp_path: Path):
@@ -209,3 +209,131 @@ def test_cron_api_routes(tmp_path: Path):
         resp = client.get("/agents/_cron/all")
         assert resp.status_code == 200
         assert resp.json() == []
+
+
+def test_cron_api_prefers_manager_methods(tmp_path: Path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from g3lobster.api.routes_cron import router
+    from g3lobster.cron.store import CronStore
+
+    class _Manager:
+        def __init__(self):
+            self.calls = []
+
+        def list_tasks(self, agent_id):
+            self.calls.append(("list", agent_id))
+            return []
+
+        def create_task(self, agent_id, schedule, instruction, enabled, dm_target, **kwargs):
+            self.calls.append(("create", agent_id, schedule, instruction, enabled, dm_target, kwargs.get("source")))
+            return CronTask(
+                id="task-1",
+                agent_id=agent_id,
+                schedule=schedule,
+                instruction=instruction,
+                enabled=enabled,
+                dm_target=dm_target,
+            )
+
+        async def run_task(self, agent_id, task_id, **kwargs):
+            self.calls.append(("run", agent_id, task_id, kwargs.get("source")))
+            return {
+                "task_id": task_id,
+                "status": "completed",
+                "duration_s": 0.1,
+                "result_preview": "ok",
+            }
+
+    app = FastAPI()
+    app.include_router(router)
+    app.state.cron_store = CronStore(data_dir=str(tmp_path))
+    manager = _Manager()
+    app.state.cron_manager = manager
+
+    with TestClient(app) as client:
+        list_resp = client.get("/agents/my-agent/crons")
+        assert list_resp.status_code == 200
+        assert list_resp.json() == []
+
+        create_resp = client.post("/agents/my-agent/crons", json={
+            "schedule": "0 9 * * *",
+            "instruction": "ping",
+            "enabled": True,
+            "dm_target": "nick@example.com",
+        })
+        assert create_resp.status_code == 201
+        assert create_resp.json()["id"] == "task-1"
+
+        run_resp = client.post("/agents/my-agent/crons/task-1/run")
+        assert run_resp.status_code == 200
+        assert run_resp.json()["status"] == "completed"
+
+    assert ("list", "my-agent") in manager.calls
+    assert ("run", "my-agent", "task-1", "api") in manager.calls
+
+
+def test_cron_api_marks_mcp_agent_requests(tmp_path: Path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from g3lobster.api.routes_cron import router
+    from g3lobster.cron.store import CronStore
+
+    class _Manager:
+        def __init__(self):
+            self.calls = []
+
+        def create_task(self, **kwargs):
+            self.calls.append(("create", kwargs))
+            return CronTask(
+                id="task-1",
+                agent_id=kwargs["agent_id"],
+                schedule=kwargs["schedule"],
+                instruction=kwargs["instruction"],
+                enabled=kwargs["enabled"],
+                dm_target=kwargs.get("dm_target"),
+            )
+
+        async def run_task(self, **kwargs):
+            self.calls.append(("run", kwargs))
+            return {
+                "task_id": kwargs["task_id"],
+                "status": "completed",
+                "duration_s": 0.1,
+                "result_preview": "ok",
+            }
+
+    app = FastAPI()
+    app.include_router(router)
+    app.state.cron_store = CronStore(data_dir=str(tmp_path))
+    manager = _Manager()
+    app.state.cron_manager = manager
+
+    headers = {
+        "X-G3LOBSTER-AGENT-SOURCE": "mcp",
+        "X-G3LOBSTER-ACTOR-AGENT-ID": "my-agent",
+    }
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/agents/my-agent/crons",
+            json={"schedule": "0 9 * * *", "instruction": "ping"},
+            headers=headers,
+        )
+        assert create_resp.status_code == 201
+
+        run_resp = client.post(
+            "/agents/my-agent/crons/task-1/run",
+            headers=headers,
+        )
+        assert run_resp.status_code == 200
+
+    create_kwargs = manager.calls[0][1]
+    run_kwargs = manager.calls[1][1]
+    assert create_kwargs["enforce_agent_guardrails"] is True
+    assert create_kwargs["actor_agent_id"] == "my-agent"
+    assert create_kwargs["source"] == "mcp"
+    assert run_kwargs["actor_agent_id"] == "my-agent"
+    assert run_kwargs["source"] == "mcp"
