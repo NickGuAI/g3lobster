@@ -292,8 +292,7 @@ class ChatBridge:
                     catchup_persona = runtime.persona if runtime else None
                     if catchup_persona:
                         user_id_safe = (sender.get("name") or "unknown")
-                        thread_id_safe = (thread_id or "no-thread").replace("/", "_")
-                        session_id = f"{self.space_id}__{user_id_safe}__{thread_id_safe}"
+                        session_id = f"{self.space_id}__{user_id_safe}"
                         await self._handle_catchup(catchup_persona, thread_id, session_id)
                     return
                 if isinstance(cmd_reply, dict):
@@ -385,8 +384,7 @@ class ChatBridge:
 
         sender = message.get("sender", {})
         user_id = sender.get("name") or "unknown"
-        thread_id_safe = (thread_id or "no-thread").replace("/", "_")
-        session_id = f"{self.space_id}__{user_id}__{thread_id_safe}"
+        session_id = f"{self.space_id}__{user_id}"
 
         # Natural language catchup intent detection
         if thread_id and detect_catchup_intent(merged_text):

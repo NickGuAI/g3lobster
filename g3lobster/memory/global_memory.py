@@ -9,6 +9,40 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from g3lobster.memory.procedures import ProcedureStore, is_empty_procedure_document
+from g3lobster.memory.sessions import SessionStore
+
+
+class SpaceSessionStore:
+    """Append-only JSONL message log shared across all agents in a space.
+
+    Stores every user and assistant message for the entire space under
+    ``data/spaces/{space_id}.jsonl``.  Each entry carries a ``sender_id``
+    metadata field so callers can reconstruct per-sender threads.
+    """
+
+    _SPACE_SESSION_KEY = "messages"
+
+    def __init__(self, data_dir: str) -> None:
+        self._sessions_dir = Path(data_dir) / "spaces"
+        self._sessions_dir.mkdir(parents=True, exist_ok=True)
+        self._store = SessionStore(str(self._sessions_dir))
+
+    def append(
+        self,
+        space_id: str,
+        sender_id: str,
+        role: str,
+        content: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Append a message to the space-wide session log."""
+        meta: Dict[str, Any] = dict(metadata or {})
+        meta["sender_id"] = sender_id
+        self._store.append_message(space_id, role, content, metadata=meta)
+
+    def read(self, space_id: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Return messages for a space, newest-last."""
+        return self._store.read_messages(space_id, limit=limit)
 
 
 def _parse_frontmatter(text: str) -> tuple[Dict[str, str], str]:
@@ -59,6 +93,7 @@ class GlobalMemoryManager:
             self.procedures_file.write_text("# PROCEDURES\n\n", encoding="utf-8")
 
         self.procedures = ProcedureStore(str(self.procedures_file))
+        self.space_sessions = SpaceSessionStore(str(self.data_dir))
 
     def read_user_memory(self) -> str:
         return self.user_file.read_text(encoding="utf-8")

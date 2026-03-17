@@ -67,7 +67,7 @@ import re
 import threading
 from datetime import date
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from g3lobster.memory.compactor import CompactionEngine
 from g3lobster.memory.decisions import DecisionLog
@@ -84,6 +84,9 @@ from g3lobster.memory.procedures import (
     is_empty_procedure_document,
 )
 from g3lobster.memory.sessions import SessionStore
+
+if TYPE_CHECKING:
+    from g3lobster.memory.global_memory import SpaceSessionStore
 
 
 class MemoryManager:
@@ -102,6 +105,7 @@ class MemoryManager:
         gemini_args: Optional[List[str]] = None,
         gemini_timeout_s: float = 45.0,
         gemini_cwd: Optional[str] = None,
+        space_session_store: Optional["SpaceSessionStore"] = None,
         # Legacy parameter kept for backward compatibility; ignored.
         summarize_threshold: int = 20,
     ):
@@ -119,6 +123,7 @@ class MemoryManager:
         self.memory_max_sections = max(5, int(memory_max_sections))
         self.procedure_extract_interval = max(2, int(procedure_extract_interval))
         self._memory_lock = threading.Lock()
+        self._space_session_store = space_session_store
 
         self.memory_dir.mkdir(parents=True, exist_ok=True)
         self.daily_dir.mkdir(parents=True, exist_ok=True)
@@ -391,6 +396,11 @@ class MemoryManager:
                     message_count=count,
                     extract_interval=self.procedure_extract_interval,
                 )
+        # Mirror to space-wide session (sender_id = session_id minus space prefix).
+        if self._space_session_store and space_id:
+            prefix = space_id + "__"
+            sender_id = session_id[len(prefix):] if session_id.startswith(prefix) else session_id
+            self._space_session_store.append(space_id, sender_id, role, content, metadata)
 
     def read_session(self, session_id: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         return self.sessions.read_session(session_id, limit=limit)

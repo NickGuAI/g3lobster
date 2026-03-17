@@ -278,6 +278,7 @@ class AgentRegistry:
             gemini_args=self.gemini_args,
             gemini_timeout_s=self.gemini_timeout_s,
             gemini_cwd=self.gemini_cwd,
+            space_session_store=self.global_memory_manager.space_sessions if self.global_memory_manager else None,
         )
         current_agent_id = agent_id
 

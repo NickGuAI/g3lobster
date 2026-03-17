@@ -1,35 +1,56 @@
-"""Tests for per-thread session isolation and per-user global memory."""
+"""Tests for per-sender session isolation and per-user global memory."""
 
 from pathlib import Path
 
 import pytest
 
-from g3lobster.memory.global_memory import GlobalMemoryManager
+from g3lobster.memory.global_memory import GlobalMemoryManager, SpaceSessionStore
 
 
-def test_thread_scoped_session_id():
-    """Session ID should include thread_id for isolation."""
+def test_sender_scoped_session_id():
+    """Session ID should be scoped to (space, sender) — no thread component."""
     space_id = "spaces/X"
     user_id = "users/alice"
-    thread_id = "spaces/X/threads/abc"
 
-    thread_id_safe = (thread_id or "no-thread").replace("/", "_")
-    session_id = f"{space_id}__{user_id}__{thread_id_safe}"
+    session_id = f"{space_id}__{user_id}"
 
-    assert "threads" in session_id
     assert "alice" in session_id
+    assert "thread" not in session_id
 
 
-def test_thread_scoped_no_thread():
-    """Without a thread, session_id should use 'no-thread'."""
+def test_same_sender_same_session_across_threads():
+    """The same sender in different threads maps to the same session."""
     space_id = "spaces/X"
     user_id = "users/bob"
-    thread_id = None
 
-    thread_id_safe = (thread_id or "no-thread").replace("/", "_")
-    session_id = f"{space_id}__{user_id}__{thread_id_safe}"
+    session_id_t1 = f"{space_id}__{user_id}"
+    session_id_t2 = f"{space_id}__{user_id}"
 
-    assert "no-thread" in session_id
+    assert session_id_t1 == session_id_t2
+
+
+def test_space_session_store_append_and_read(tmp_path):
+    """SpaceSessionStore should accumulate messages from all senders."""
+    store = SpaceSessionStore(str(tmp_path / "data"))
+    store.append("space-A", "users/alice", "user", "hello")
+    store.append("space-A", "users/bob", "user", "hi")
+    store.append("space-A", "users/alice", "assistant", "hey there")
+
+    messages = store.read("space-A")
+    assert len(messages) == 3
+    senders = [m["metadata"]["sender_id"] for m in messages]
+    assert senders.count("users/alice") == 2
+    assert senders.count("users/bob") == 1
+
+
+def test_space_session_store_isolated_per_space(tmp_path):
+    """Different spaces should have separate session logs."""
+    store = SpaceSessionStore(str(tmp_path / "data"))
+    store.append("space-A", "users/alice", "user", "in A")
+    store.append("space-B", "users/alice", "user", "in B")
+
+    assert len(store.read("space-A")) == 1
+    assert len(store.read("space-B")) == 1
 
 
 def test_per_user_memory_fallback(tmp_path):
