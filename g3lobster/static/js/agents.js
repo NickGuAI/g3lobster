@@ -69,19 +69,15 @@ function stateClass(state) {
 
 function bridgeStatusDetails(bridge) {
   if (!bridge || !bridge.space_id) {
-    return {
-      destroy() { label: "not configured", className: "warn", canStart: false, canStop: false };
+    return { label: "not configured", className: "warn", canStart: false, canStop: false };
   }
   if (!bridge.bridge_enabled) {
-    return {
-      destroy() { label: "disabled", className: "stopped", canStart: false, canStop: false };
+    return { label: "disabled", className: "stopped", canStart: false, canStop: false };
   }
   if (bridge.is_running) {
-    return {
-      destroy() { label: "running", className: "ok", canStart: false, canStop: true };
+    return { label: "running", className: "ok", canStart: false, canStop: true };
   }
-  return {
-      destroy() { label: "stopped", className: "error", canStart: true, canStop: false };
+  return { label: "stopped", className: "error", canStart: true, canStop: false };
 }
 
 function bridgeTableMarkup(agents, bridgeByAgent) {
@@ -188,15 +184,12 @@ export async function render(root, { onSetupChange }) {
   function lifecycleStatus(agentId, fallbackState) {
     const pending = pendingLifecycle[agentId];
     if (pending === "start" || pending === "restart") {
-      return {
-      destroy() { state: "starting", className: "starting", pending };
+      return { state: "starting", className: "starting", pending };
     }
     if (pending === "stop") {
-      return {
-      destroy() { state: "stopping", className: "starting", pending };
+      return { state: "stopping", className: "starting", pending };
     }
     return {
-      destroy() {
       state: String(fallbackState || ""),
       className: stateClass(fallbackState),
       pending: null,
@@ -223,13 +216,13 @@ export async function render(root, { onSetupChange }) {
     }, UPTIME_TICK_INTERVAL_MS);
   }
 
-  async function queueRerender() {
+  async function queueRerender(force = false) {
     if (disposed) {
       return;
     }
 
     const ae = document.activeElement;
-    if (ae && root.contains(ae) && ["INPUT", "TEXTAREA", "SELECT"].includes(ae.tagName)) {
+    if (!force && ae && root.contains(ae) && ["INPUT", "TEXTAREA", "SELECT"].includes(ae.tagName)) {
       rerenderQueued = true;
       return;
     }
@@ -885,7 +878,7 @@ export async function render(root, { onSetupChange }) {
       const name = String(data.get("name") || "").trim();
       if (!name) {
         setNotice("error", "Agent name is required.");
-        queueRerender();
+        queueRerender(true);
         return;
       }
 
@@ -905,7 +898,7 @@ export async function render(root, { onSetupChange }) {
         const message = err instanceof Error ? err.message : String(err);
         setNotice("error", `Failed to create agent: ${message}`);
       }
-      queueRerender();
+      queueRerender(true);
     });
 
     // Connect SSE stream when Live Thinking tab is active
@@ -1155,7 +1148,7 @@ export async function render(root, { onSetupChange }) {
           const message = err instanceof Error ? err.message : String(err);
           setNotice("error", `Failed to update ${agentId}: ${message}`);
         }
-        queueRerender();
+        queueRerender(true);
       });
     }
 
@@ -1169,7 +1162,7 @@ export async function render(root, { onSetupChange }) {
         const instruction = String(data.get("instruction") || "").trim();
         if (!schedule || !instruction) {
           setNotice("error", "Schedule and instruction are required.");
-          queueRerender();
+          queueRerender(true);
           return;
         }
         try {
@@ -1181,7 +1174,7 @@ export async function render(root, { onSetupChange }) {
           const message = err instanceof Error ? err.message : String(err);
           setNotice("error", `Failed to add cron task: ${message}`);
         }
-        queueRerender();
+        queueRerender(true);
       });
     }
   }
@@ -1211,22 +1204,21 @@ export async function render(root, { onSetupChange }) {
       queueRerender();
     }
   }, METRICS_POLL_INTERVAL_MS);
+
   root.addEventListener("focusout", (e) => {
-    // Wait for the new focus to settle
     setTimeout(() => {
       if (disposed) return;
       const ae = document.activeElement;
       if (!ae || !root.contains(ae) || !["INPUT", "TEXTAREA", "SELECT"].includes(ae.tagName)) {
         if (rerenderQueued) {
-          queueRerender();
+          queueRerender(true);
         }
       }
     }, 10);
   });
 
   return {
-      destroy() {
-
+    destroy() {
       disposed = true;
       clearStatusPoll();
       clearUptimeTicker();
