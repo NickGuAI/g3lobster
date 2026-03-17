@@ -9,10 +9,11 @@ is scheduled with a ``CronTrigger`` derived from its ``schedule`` field
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
-from g3lobster.cron.store import CronRunRecord, CronStore
+from g3lobster.cron.store import CronRunRecord, CronStore, CronTask
 from g3lobster.tasks.types import Task, TaskStatus
 
 if TYPE_CHECKING:
@@ -22,6 +23,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _INCIDENT_PROMPT_PREFIX = "__INCIDENT_PROMPT__"
+_DEFAULT_MAX_JOBS_PER_AGENT = 20
+_DEFAULT_MIN_INTERVAL_S = 60
 
 
 class CronManager:
@@ -31,6 +34,8 @@ class CronManager:
         self,
         cron_store: CronStore,
         registry: "AgentRegistry",
+        max_jobs_per_agent: Optional[int] = None,
+        min_interval_s: Optional[int] = None,
         consolidation_enabled: bool = False,
         consolidation_schedule: str = "0 2 * * *",
         consolidation_days_window: int = 7,
@@ -46,6 +51,18 @@ class CronManager:
     ) -> None:
         self._store = cron_store
         self._registry = registry
+        self._max_jobs_per_agent = self._resolve_int(
+            explicit=max_jobs_per_agent,
+            env_var="G3LOBSTER_CRON_MAX_JOBS_PER_AGENT",
+            default=_DEFAULT_MAX_JOBS_PER_AGENT,
+            minimum=1,
+        )
+        self._min_interval_s = self._resolve_int(
+            explicit=min_interval_s,
+            env_var="G3LOBSTER_CRON_MIN_INTERVAL_SECONDS",
+            default=_DEFAULT_MIN_INTERVAL_S,
+            minimum=60,
+        )
         self._incident_store = incident_store
         self._scheduler = None  # initialised lazily to avoid import-time dependency
         self._standup_orchestrator = standup_orchestrator
@@ -59,6 +76,244 @@ class CronManager:
         self._gemini_cwd = gemini_cwd
         self._focus_checker = focus_checker
         self._calendar_cron_schedule = calendar_cron_schedule
+
+    @staticmethod
+    def _resolve_int(explicit: Optional[int], env_var: str, default: int, minimum: int) -> int:
+        raw = explicit if explicit is not None else os.environ.get(env_var)
+        if raw in (None, ""):
+            return max(default, minimum)
+        try:
+            return max(int(raw), minimum)
+        except (TypeError, ValueError):
+            logger.warning("Invalid %s=%r; using default=%d", env_var, raw, default)
+            return max(default, minimum)
+
+    def list_tasks(self, agent_id: str) -> list[CronTask]:
+        """List all cron tasks for an agent."""
+        return self._store.list_tasks(agent_id)
+
+    def create_task(
+        self,
+        agent_id: str,
+        schedule: str,
+        instruction: str,
+        enabled: bool = True,
+        dm_target: str | None = None,
+        *,
+        enforce_agent_guardrails: bool = False,
+        actor_agent_id: str | None = None,
+        source: str = "api",
+    ) -> CronTask:
+        schedule = (schedule or "").strip()
+        instruction = (instruction or "").strip()
+        dm_target = (dm_target or "").strip() or None
+
+        if enforce_agent_guardrails:
+            self._enforce_agent_guardrails(
+                agent_id=agent_id,
+                schedule=schedule,
+                instruction=instruction,
+                creating_task=True,
+            )
+
+        task = self._store.add_task(agent_id, schedule, instruction)
+        updated = self._store.update_task(
+            agent_id,
+            task.id,
+            enabled=bool(enabled),
+            dm_target=dm_target,
+        )
+        self.reload()
+        saved = updated or task
+        self._audit(
+            action="create",
+            actor_agent_id=actor_agent_id,
+            owner_agent_id=agent_id,
+            task_id=saved.id,
+            source=source,
+            details=f"schedule={saved.schedule!r} enabled={saved.enabled}",
+        )
+        return saved
+
+    def update_task(
+        self,
+        agent_id: str,
+        task_id: str,
+        *,
+        schedule: str | None = None,
+        instruction: str | None = None,
+        enabled: bool | None = None,
+        dm_target: str | None = None,
+        enforce_agent_guardrails: bool = False,
+        actor_agent_id: str | None = None,
+        source: str = "api",
+    ) -> CronTask | None:
+        updates: dict = {}
+        if schedule is not None:
+            updates["schedule"] = schedule.strip()
+        if instruction is not None:
+            updates["instruction"] = instruction.strip()
+        if enabled is not None:
+            updates["enabled"] = bool(enabled)
+        if dm_target is not None:
+            updates["dm_target"] = dm_target.strip() or None
+
+        if enforce_agent_guardrails:
+            self._enforce_agent_guardrails(
+                agent_id=agent_id,
+                schedule=updates.get("schedule"),
+                instruction=updates.get("instruction"),
+                creating_task=False,
+            )
+
+        if not updates:
+            return self._store.get_task(agent_id, task_id)
+
+        task = self._store.update_task(agent_id, task_id, **updates)
+        if task is None:
+            return None
+
+        self.reload()
+        self._audit(
+            action="update",
+            actor_agent_id=actor_agent_id,
+            owner_agent_id=agent_id,
+            task_id=task_id,
+            source=source,
+            details=f"fields={sorted(updates.keys())}",
+        )
+        return task
+
+    def delete_task(
+        self,
+        agent_id: str,
+        task_id: str,
+        *,
+        actor_agent_id: str | None = None,
+        source: str = "api",
+    ) -> bool:
+        deleted = self._store.delete_task(agent_id, task_id)
+        if not deleted:
+            return False
+        self.reload()
+        self._audit(
+            action="delete",
+            actor_agent_id=actor_agent_id,
+            owner_agent_id=agent_id,
+            task_id=task_id,
+            source=source,
+        )
+        return True
+
+    async def run_task(
+        self,
+        agent_id: str,
+        task_id: str,
+        *,
+        actor_agent_id: str | None = None,
+        source: str = "api",
+    ) -> dict:
+        task = self._store.get_task(agent_id, task_id)
+        if not task:
+            raise KeyError(task_id)
+
+        await self._fire(task.agent_id, task.id, task.instruction, task.dm_target)
+        latest = self._store.get_history(agent_id, task_id)
+        run = latest[-1] if latest else {}
+
+        self._audit(
+            action="run",
+            actor_agent_id=actor_agent_id,
+            owner_agent_id=agent_id,
+            task_id=task_id,
+            source=source,
+            details=f"status={run.get('status', 'unknown')}",
+        )
+        return {
+            "task_id": task_id,
+            "status": run.get("status", "unknown"),
+            "duration_s": run.get("duration_s", 0.0),
+            "result_preview": run.get("result_preview", ""),
+        }
+
+    def get_task_history(self, agent_id: str, task_id: str, limit: int = 20) -> list[dict]:
+        task = self._store.get_task(agent_id, task_id)
+        if not task:
+            raise KeyError(task_id)
+        history = self._store.get_history(agent_id, task_id)
+        bounded = max(1, int(limit))
+        return history[-bounded:]
+
+    def _enforce_agent_guardrails(
+        self,
+        *,
+        agent_id: str,
+        schedule: str | None,
+        instruction: str | None,
+        creating_task: bool,
+    ) -> None:
+        if creating_task:
+            existing = self._store.list_tasks(agent_id)
+            if len(existing) >= self._max_jobs_per_agent:
+                raise ValueError(
+                    f"Maximum cron jobs per agent exceeded (limit={self._max_jobs_per_agent})"
+                )
+
+        if schedule is not None:
+            self._validate_min_interval(schedule)
+        if instruction is not None:
+            self._validate_instruction(instruction)
+
+    def _validate_min_interval(self, schedule: str) -> None:
+        parts = (schedule or "").strip().split()
+        if len(parts) > 5:
+            raise ValueError("Sub-minute cron schedules are not allowed")
+        try:
+            from apscheduler.triggers.cron import CronTrigger  # type: ignore
+            trigger = CronTrigger.from_crontab(schedule)
+            now = datetime.now(tz=timezone.utc)
+            first = trigger.get_next_fire_time(None, now)
+            if not first:
+                return
+            second = trigger.get_next_fire_time(first, first)
+            if second and (second - first).total_seconds() < self._min_interval_s:
+                raise ValueError(
+                    f"Cron schedule interval must be at least {self._min_interval_s} seconds"
+                )
+        except ImportError:
+            # 5-field cron syntax has minute-level granularity in this codebase.
+            return
+
+    @staticmethod
+    def _validate_instruction(instruction: str) -> None:
+        if not instruction or not instruction.strip():
+            raise ValueError("Instruction must be non-empty")
+        length = len(instruction.strip())
+        if length > 2000:
+            raise ValueError("Instruction must be 2000 characters or fewer")
+
+    def _audit(
+        self,
+        *,
+        action: str,
+        actor_agent_id: str | None,
+        owner_agent_id: str,
+        task_id: str,
+        source: str,
+        details: str = "",
+    ) -> None:
+        if not actor_agent_id:
+            return
+        detail_suffix = f" {details}" if details else ""
+        logger.info(
+            "cron_audit action=%s source=%s actor_agent_id=%s owner_agent_id=%s task_id=%s%s",
+            action,
+            source,
+            actor_agent_id,
+            owner_agent_id,
+            task_id,
+            detail_suffix,
+        )
 
     def _get_scheduler(self):
         if self._scheduler is None:

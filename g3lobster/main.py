@@ -41,13 +41,8 @@ from g3lobster.pool.tmux_spawn import TmuxSpawner
 logger = logging.getLogger(__name__)
 
 
-def _ensure_delegation_mcp_config(workspace_dir: str, server_port: int) -> None:
-    """Auto-register the delegation MCP server in Gemini CLI workspace settings.
-
-    Writes (or merges) a ``g3lobster-delegation`` entry into
-    ``<workspace>/.gemini/settings.json`` so that Gemini CLI can launch the
-    delegation stdio server with the correct ``--base-url``.
-    """
+def _load_gemini_settings(workspace_dir: str) -> tuple[Path, dict]:
+    """Load Gemini CLI workspace settings (or return an empty baseline)."""
     gemini_dir = Path(workspace_dir) / ".gemini"
     gemini_dir.mkdir(parents=True, exist_ok=True)
     settings_path = gemini_dir / "settings.json"
@@ -59,6 +54,18 @@ def _ensure_delegation_mcp_config(workspace_dir: str, server_port: int) -> None:
         except (json.JSONDecodeError, OSError):
             pass
 
+    return settings_path, settings
+
+
+def _write_gemini_settings(settings_path: Path, settings: dict) -> None:
+    settings_path.write_text(
+        json.dumps(settings, indent=2) + "\n", encoding="utf-8"
+    )
+
+
+def _ensure_delegation_mcp_config(workspace_dir: str, server_port: int) -> None:
+    """Auto-register the delegation MCP server in Gemini CLI workspace settings."""
+    settings_path, settings = _load_gemini_settings(workspace_dir)
     mcp_servers = settings.setdefault("mcpServers", {})
     base_url = f"http://127.0.0.1:{server_port}"
 
@@ -72,9 +79,7 @@ def _ensure_delegation_mcp_config(workspace_dir: str, server_port: int) -> None:
         ],
     }
 
-    settings_path.write_text(
-        json.dumps(settings, indent=2) + "\n", encoding="utf-8"
-    )
+    _write_gemini_settings(settings_path, settings)
     logger.info(
         "Registered delegation MCP server in %s (base_url=%s)",
         settings_path,
@@ -82,8 +87,36 @@ def _ensure_delegation_mcp_config(workspace_dir: str, server_port: int) -> None:
     )
 
 
+def _ensure_cron_mcp_config(workspace_dir: str, server_port: int) -> None:
+    """Auto-register the cron MCP server in Gemini CLI workspace settings."""
+    settings_path, settings = _load_gemini_settings(workspace_dir)
+    mcp_servers = settings.setdefault("mcpServers", {})
+    base_url = f"http://127.0.0.1:{server_port}"
+
+    mcp_servers["g3lobster-cron"] = {
+        "command": sys.executable,
+        "args": [
+            "-m",
+            "g3lobster.mcp.cron_server",
+            "--base-url",
+            base_url,
+        ],
+    }
+
+    _write_gemini_settings(settings_path, settings)
+    logger.info(
+        "Registered cron MCP server in %s (base_url=%s)",
+        settings_path,
+        base_url,
+    )
+
+
 def build_runtime(config: AppConfig):
     _ensure_delegation_mcp_config(
+        workspace_dir=config.gemini.workspace_dir,
+        server_port=config.server.port,
+    )
+    _ensure_cron_mcp_config(
         workspace_dir=config.gemini.workspace_dir,
         server_port=config.server.port,
     )

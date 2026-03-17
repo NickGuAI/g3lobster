@@ -1,0 +1,16 @@
+name: g3lobster-cron
+enabled: true
+transport:
+  type: stdio
+  command: python
+  args:
+    - -m
+    - g3lobster.mcp.cron_server
+description: Agent-scoped cron management tools via g3lobster REST API
+tool_patterns:
+  - list_cron_jobs
+  - create_cron_job
+  - update_cron_job
+  - delete_cron_job
+  - run_cron_job
+  - get_cron_history
