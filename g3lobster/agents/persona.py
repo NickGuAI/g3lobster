@@ -33,7 +33,7 @@ class AgentPersona:
     dm_allowlist: List[str] = field(default_factory=list)
     space_id: Optional[str] = None
     bridge_enabled: bool = False
-    heartbeat_enabled: bool = False
+    heartbeat_enabled: bool = True
     heartbeat_interval_s: float = 300.0
     space_overrides: Dict[str, Dict[str, str]] = field(default_factory=dict)
     created_at: str = field(default_factory=lambda: _utc_now())
@@ -215,7 +215,7 @@ def load_persona(data_dir: str, agent_id: str, *, skip_migration: bool = False) 
         dm_allowlist=list(payload.get("dm_allowlist") or []),
         space_id=payload.get("space_id"),
         bridge_enabled=bool(payload.get("bridge_enabled", False)),
-        heartbeat_enabled=bool(payload.get("heartbeat_enabled", False)),
+        heartbeat_enabled=bool(payload.get("heartbeat_enabled", True)),
         heartbeat_interval_s=_parse_positive_float(
             payload.get("heartbeat_interval_s"),
             field_name="heartbeat_interval_s",

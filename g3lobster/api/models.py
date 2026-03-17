@@ -17,7 +17,7 @@ class AgentCreateRequest(BaseModel):
     dm_allowlist: List[str] = Field(default_factory=list)
     space_id: Optional[str] = None
     bridge_enabled: bool = False
-    heartbeat_enabled: bool = False
+    heartbeat_enabled: bool = True
     heartbeat_interval_s: float = Field(default=300.0, gt=0)
 
 
@@ -46,7 +46,7 @@ class AgentResponse(BaseModel):
     bot_user_id: Optional[str] = None
     space_id: Optional[str] = None
     bridge_enabled: bool = False
-    heartbeat_enabled: bool = False
+    heartbeat_enabled: bool = True
     heartbeat_interval_s: float = 300.0
     bridge_running: bool = False
     state: str
