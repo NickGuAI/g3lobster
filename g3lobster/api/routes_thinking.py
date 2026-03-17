@@ -20,6 +20,9 @@ HEARTBEAT_INTERVAL_S = 15
 async def stream_thinking(agent_id: str, request: Request) -> StreamingResponse:
     """SSE endpoint that streams live thinking events for an agent."""
     event_bus = request.app.state.event_bus
+    registry = getattr(request.app.state, "registry", None)
+    if registry is not None:
+        setattr(registry, "event_bus", event_bus)
 
     async def event_generator():
         async with event_bus.subscribe(agent_id) as queue:

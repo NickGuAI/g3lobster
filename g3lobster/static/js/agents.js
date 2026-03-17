@@ -418,6 +418,17 @@ export async function render(root, { onSetupChange }) {
               <option value="false" ${detail.enabled ? "" : "selected"}>false</option>
             </select>
           </div>
+          <div class="field">
+            <label>Heartbeat Enabled</label>
+            <select name="heartbeat_enabled">
+              <option value="true" ${detail.heartbeat_enabled !== false ? "selected" : ""}>true</option>
+              <option value="false" ${detail.heartbeat_enabled === false ? "selected" : ""}>false</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Heartbeat Interval (s)</label>
+            <input name="heartbeat_interval_s" type="number" min="1" step="1" value="${escapeHtml(detail.heartbeat_interval_s || 300)}" />
+          </div>
         </div>
         <div class="field">
           <label>DM Allowlist (one sender ID per line)</label>
@@ -638,6 +649,25 @@ export async function render(root, { onSetupChange }) {
         ? window.DOMPurify.sanitize(window.marked.parse(String(text)))
         : `<p>${escapeHtml(text)}</p>`;
       return `<div class="thinking-block thinking-response"><span class="thinking-label">response</span> <div class="thinking-response-body">${rendered}</div></div>`;
+    }
+    if (type === "heartbeat_review") {
+      const summary = escapeHtml(event.summary || "Heartbeat review generated.");
+      const suggestions = Array.isArray(event.suggestions) ? event.suggestions : [];
+      const stats = event.stats && typeof event.stats === "object" ? event.stats : {};
+      const statsText = Object.keys(stats).length
+        ? `<p>stats: pending=${escapeHtml(String(stats.pending ?? 0))}, in_progress=${escapeHtml(String(stats.in_progress ?? 0))}, blocked=${escapeHtml(String(stats.blocked ?? 0))}, overdue=${escapeHtml(String(stats.overdue ?? 0))}</p>`
+        : "";
+      const suggestionsHtml = suggestions.length
+        ? `<ul>${suggestions
+            .map((item) => {
+              const category = escapeHtml(item.category || "suggestion");
+              const severity = escapeHtml(item.severity || "info");
+              const message = escapeHtml(item.message || "");
+              return `<li><strong>${category}</strong> [${severity}] ${message}</li>`;
+            })
+            .join("")}</ul>`
+        : "<p>No suggestions.</p>";
+      return `<div class="thinking-block thinking-response"><span class="thinking-label">heartbeat</span> <div class="thinking-response-body"><p>${summary}</p>${statsText}${suggestionsHtml}</div></div>`;
     }
     if (type === "error") {
       const msg = escapeHtml(event.data?.message || event.text || "error");
@@ -1141,6 +1171,8 @@ export async function render(root, { onSetupChange }) {
             dm_allowlist: parseDmAllowlist(data.get("dm_allowlist")),
             space_id: String(data.get("space_id") || "").trim() || null,
             bridge_enabled: String(data.get("bridge_enabled") || "false") === "true",
+            heartbeat_enabled: String(data.get("heartbeat_enabled") || "true") === "true",
+            heartbeat_interval_s: Math.max(1, Number(data.get("heartbeat_interval_s") || 300)),
           };
           detailCache[agentId] = await updateAgent(agentId, payload);
           setNotice("success", `Updated ${agentId}.`);

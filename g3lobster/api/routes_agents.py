@@ -79,6 +79,8 @@ def _hydrate_agent_payload(
     payload = dict(current)
     payload["space_id"] = persona.space_id
     payload["bridge_enabled"] = bool(persona.bridge_enabled)
+    payload["heartbeat_enabled"] = bool(persona.heartbeat_enabled)
+    payload["heartbeat_interval_s"] = float(persona.heartbeat_interval_s)
     payload["bridge_running"] = bool(bridge_item and bridge_item.get("is_running"))
     payload.setdefault("aliases", list(persona.aliases))
     payload.setdefault("bot_user_id", persona.bot_user_id)
@@ -246,6 +248,8 @@ async def create_agent(payload: AgentCreateRequest, request: Request) -> AgentDe
         dm_allowlist=list(payload.dm_allowlist),
         space_id=space_id,
         bridge_enabled=bridge_enabled,
+        heartbeat_enabled=payload.heartbeat_enabled,
+        heartbeat_interval_s=payload.heartbeat_interval_s,
     )
     saved = save_persona(config.agents.data_dir, persona)
 
@@ -408,6 +412,10 @@ async def update_agent(agent_id: str, payload: AgentUpdateRequest, request: Requ
         persona.space_id = normalize_space_id(updates["space_id"])
     if "bridge_enabled" in updates:
         persona.bridge_enabled = bool(updates["bridge_enabled"])
+    if "heartbeat_enabled" in updates:
+        persona.heartbeat_enabled = bool(updates["heartbeat_enabled"])
+    if "heartbeat_interval_s" in updates:
+        persona.heartbeat_interval_s = float(updates["heartbeat_interval_s"])
 
     saved = save_persona(config.agents.data_dir, persona)
 
@@ -415,6 +423,14 @@ async def update_agent(agent_id: str, payload: AgentUpdateRequest, request: Requ
     if runtime:
         runtime.persona = saved
         runtime.context_builder.system_preamble = saved.soul
+        if hasattr(runtime.agent, "configure_heartbeat"):
+            runtime.agent.configure_heartbeat(
+                enabled=saved.heartbeat_enabled,
+                interval_s=saved.heartbeat_interval_s,
+            )
+        else:
+            setattr(runtime.agent, "heartbeat_enabled", bool(saved.heartbeat_enabled))
+            setattr(runtime.agent, "heartbeat_interval_s", float(saved.heartbeat_interval_s))
 
     if "enabled" in changed_keys and not saved.enabled:
         await registry.stop_agent(agent_id)
