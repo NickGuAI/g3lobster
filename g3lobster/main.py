@@ -42,11 +42,11 @@ logger = logging.getLogger(__name__)
 
 
 def _ensure_delegation_mcp_config(workspace_dir: str, server_port: int) -> None:
-    """Auto-register the delegation MCP server in Gemini CLI workspace settings.
+    """Auto-register built-in stdio MCP servers in Gemini CLI settings.
 
-    Writes (or merges) a ``g3lobster-delegation`` entry into
-    ``<workspace>/.gemini/settings.json`` so that Gemini CLI can launch the
-    delegation stdio server with the correct ``--base-url``.
+    Writes (or merges) ``g3lobster-delegation`` and ``g3lobster-tasks`` into
+    ``<workspace>/.gemini/settings.json`` so Gemini CLI can launch local
+    stdio MCP servers with the correct ``--base-url``.
     """
     gemini_dir = Path(workspace_dir) / ".gemini"
     gemini_dir.mkdir(parents=True, exist_ok=True)
@@ -71,12 +71,21 @@ def _ensure_delegation_mcp_config(workspace_dir: str, server_port: int) -> None:
             base_url,
         ],
     }
+    mcp_servers["g3lobster-tasks"] = {
+        "command": sys.executable,
+        "args": [
+            "-m",
+            "g3lobster.mcp.tasks_server",
+            "--base-url",
+            base_url,
+        ],
+    }
 
     settings_path.write_text(
         json.dumps(settings, indent=2) + "\n", encoding="utf-8"
     )
     logger.info(
-        "Registered delegation MCP server in %s (base_url=%s)",
+        "Registered built-in MCP servers in %s (base_url=%s)",
         settings_path,
         base_url,
     )
@@ -91,6 +100,8 @@ def build_runtime(config: AppConfig):
     mcp_loader = MCPConfigLoader(config_dir=config.mcp.config_dir)
     mcp_manager = MCPManager(loader=mcp_loader)
     global_memory_manager = GlobalMemoryManager(config.agents.data_dir)
+    board_store = None
+    event_bus = None
 
     def process_factory(model_name: str, agent_id: str = "") -> GeminiProcess:
         args = list(config.gemini.args)
@@ -114,6 +125,9 @@ def build_runtime(config: AppConfig):
             memory_manager=memory_manager,
             context_builder=context_builder,
             default_mcp_servers=persona.mcp_servers or config.mcp.default_servers,
+            board_store=board_store,
+            event_bus=event_bus,
+            heartbeat_interval_s=max(10.0, float(config.agents.health_check_interval_s)),
         )
 
     alert_manager = AlertManager(
@@ -311,7 +325,6 @@ def build_runtime(config: AppConfig):
     registry.chat_bridge = bridge_manager
 
     # Task board
-    board_store = None
     sheets_sync = None
     if config.tasks.enabled:
         from g3lobster.board.store import BoardStore

@@ -1,8 +1,15 @@
 name: g3lobster-tasks
 enabled: true
 transport:
-  type: sse
-  url: ${G3LOBSTER_TASKS_MCP_URL}
-description: Task management MCP tools for listing, inspecting, and canceling agent tasks
+  type: stdio
+  command: python
+  args:
+    - -m
+    - g3lobster.mcp.tasks_server
+description: Unified self-managed task-board MCP tools (create/update/complete/list/delete)
 tool_patterns:
-  - g3lobster__tasks__*
+  - create_task
+  - update_task
+  - complete_task
+  - list_tasks
+  - delete_task

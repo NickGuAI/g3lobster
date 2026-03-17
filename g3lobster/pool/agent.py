@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import logging
 import time
-from typing import Callable, List, Optional
+from collections import Counter
+from datetime import datetime, timezone
+from typing import Any, Callable, Dict, List, Optional
 
 from g3lobster.cli.parser import clean_text, split_reasoning, strip_reasoning
 from g3lobster.memory.context import ContextBuilder
@@ -11,6 +16,11 @@ from g3lobster.memory.manager import MemoryManager
 from g3lobster.mcp.manager import MCPManager
 from g3lobster.pool.types import AgentState
 from g3lobster.tasks.types import Task, TaskStatus, TaskStore
+
+logger = logging.getLogger(__name__)
+
+STALE_TASK_THRESHOLD_S = 6 * 60 * 60
+CRON_PATTERN_WINDOW_S = 7 * 24 * 60 * 60
 
 
 def _normalize_timeout(timeout_s: Optional[float]) -> Optional[float]:
@@ -35,6 +45,9 @@ class GeminiAgent:
         default_mcp_servers: Optional[List[str]] = None,
         task_store: Optional[TaskStore] = None,
         subagent_spawner: Optional[object] = None,
+        board_store: Optional[object] = None,
+        event_bus: Optional[object] = None,
+        heartbeat_interval_s: float = 30.0,
     ):
         self.id = agent_id
         self.state = AgentState.STARTING
@@ -50,6 +63,11 @@ class GeminiAgent:
         self.busy_since: Optional[float] = None
         self.task_store = task_store
         self.subagent_spawner = subagent_spawner
+        self.board_store = board_store
+        self.event_bus = event_bus
+        self.heartbeat_interval_s = max(5.0, float(heartbeat_interval_s or 30.0))
+        self._heartbeat_task: Optional[asyncio.Task] = None
+        self._heartbeat_stop_event: Optional[asyncio.Event] = None
 
     def _persist_terminal_task(self, task: Task) -> None:
         if not self.task_store:
@@ -75,14 +93,218 @@ class GeminiAgent:
         self.process = self._process_factory()
         await self.process.spawn(mcp_server_names=self.mcp_servers)
         self.state = AgentState.IDLE
+        self._start_heartbeat_loop()
 
     def is_alive(self) -> bool:
         return bool(self.process and self.process.is_alive())
 
     async def stop(self) -> None:
+        await self._stop_heartbeat_loop()
         if self.process:
             await self.process.kill()
         self.state = AgentState.STOPPED
+
+    def _start_heartbeat_loop(self) -> None:
+        if self.board_store is None or self.event_bus is None:
+            return
+        if self._heartbeat_task and not self._heartbeat_task.done():
+            return
+        self._heartbeat_stop_event = asyncio.Event()
+        self._heartbeat_task = asyncio.create_task(
+            self._heartbeat_loop(),
+            name=f"g3lobster-heartbeat-review-{self.id}",
+        )
+
+    async def _stop_heartbeat_loop(self) -> None:
+        if self._heartbeat_task is None:
+            return
+        if self._heartbeat_stop_event is not None:
+            self._heartbeat_stop_event.set()
+        self._heartbeat_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._heartbeat_task
+        self._heartbeat_task = None
+        self._heartbeat_stop_event = None
+
+    @staticmethod
+    def _parse_iso_ts(raw: str) -> datetime:
+        text = str(raw or "").strip()
+        if not text:
+            return datetime.fromtimestamp(0, tz=timezone.utc)
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except ValueError:
+            return datetime.fromtimestamp(0, tz=timezone.utc)
+
+    def _extract_goals_and_directives(self) -> List[str]:
+        snippets: List[str] = []
+        memory = ""
+        procedures = ""
+        try:
+            memory = self.memory_manager.read_memory()
+        except Exception:
+            logger.debug("Failed reading MEMORY.md for heartbeat suggestions", exc_info=True)
+        try:
+            procedures = self.memory_manager.read_procedures()
+        except Exception:
+            logger.debug("Failed reading PROCEDURES.md for heartbeat suggestions", exc_info=True)
+
+        for source in (memory, procedures):
+            for line in source.splitlines():
+                normalized = line.strip()
+                if not normalized:
+                    continue
+                lowered = normalized.lower()
+                if any(token in lowered for token in ("goal", "directive", "priority", "must")):
+                    snippets.append(normalized.lstrip("#- ").strip())
+                if len(snippets) >= 5:
+                    return snippets
+        return snippets
+
+    def _build_heartbeat_suggestions(self, tasks: List[object], goals: List[str]) -> List[Dict[str, Any]]:
+        now = datetime.now(tz=timezone.utc)
+        suggestions: List[Dict[str, Any]] = []
+
+        normalized = sorted(
+            tasks,
+            key=lambda item: self._parse_iso_ts(getattr(item, "updated_at", "")),
+        )
+
+        open_tasks = [
+            item
+            for item in normalized
+            if str(getattr(item, "status", "")).strip() in {"todo", "in_progress"}
+        ]
+        for item in open_tasks:
+            updated_at = self._parse_iso_ts(getattr(item, "updated_at", ""))
+            age_s = max(0, int((now - updated_at).total_seconds()))
+            if age_s < STALE_TASK_THRESHOLD_S:
+                continue
+            suggestions.append({
+                "kind": "stale",
+                "task_id": str(getattr(item, "id", "")),
+                "title": str(getattr(item, "title", "")),
+                "message": (
+                    f"Task '{getattr(item, 'title', 'Untitled')}' has been idle for "
+                    f"{age_s // 3600}h. Escalate or re-scope."
+                ),
+            })
+            if len([s for s in suggestions if s["kind"] == "stale"]) >= 3:
+                break
+
+        blocked = [
+            item
+            for item in normalized
+            if str(getattr(item, "status", "")).strip() == "blocked"
+        ]
+        for item in blocked[:3]:
+            suggestions.append({
+                "kind": "blocked",
+                "task_id": str(getattr(item, "id", "")),
+                "title": str(getattr(item, "title", "")),
+                "message": f"Task '{getattr(item, 'title', 'Untitled')}' is blocked. Request input or unblock dependency.",
+            })
+
+        done_tasks = [
+            item
+            for item in normalized
+            if str(getattr(item, "status", "")).strip() == "done"
+        ]
+        if done_tasks:
+            latest_done = sorted(
+                done_tasks,
+                key=lambda item: self._parse_iso_ts(getattr(item, "updated_at", "")),
+                reverse=True,
+            )[0]
+            suggestions.append({
+                "kind": "next_step",
+                "task_id": str(getattr(latest_done, "id", "")),
+                "title": str(getattr(latest_done, "title", "")),
+                "message": (
+                    f"Completed '{getattr(latest_done, 'title', 'Untitled')}'. "
+                    "Capture result and queue the next concrete step."
+                ),
+            })
+
+        recent_done = [
+            item
+            for item in done_tasks
+            if (now - self._parse_iso_ts(getattr(item, "updated_at", ""))).total_seconds() <= CRON_PATTERN_WINDOW_S
+        ]
+        if len(recent_done) >= 3:
+            title_tokens = [
+                str(getattr(item, "title", "")).strip().split(" ", 1)[0].lower()
+                for item in recent_done
+                if str(getattr(item, "title", "")).strip()
+            ]
+            if title_tokens:
+                token, count = Counter(title_tokens).most_common(1)[0]
+                if token and count >= 2:
+                    suggestions.append({
+                        "kind": "cron_candidate",
+                        "message": (
+                            f"Detected repeated completed tasks starting with '{token}' "
+                            f"({count} times in 7d). Consider a recurring cron."
+                        ),
+                    })
+
+        if goals and open_tasks:
+            first_goal = goals[0]
+            suggestions.append({
+                "kind": "next_step",
+                "message": f"Current directive check: align active tasks with '{first_goal}'.",
+            })
+
+        return suggestions[:8]
+
+    async def run_heartbeat_review(self) -> Optional[Dict[str, Any]]:
+        """Compute and publish heartbeat-driven board suggestions."""
+        if self.board_store is None or self.event_bus is None:
+            return None
+
+        tasks = await asyncio.to_thread(
+            self.board_store.list_items,
+            None,
+            None,
+            self.id,
+            None,
+            None,
+            200,
+        )
+        goals = await asyncio.to_thread(self._extract_goals_and_directives)
+        suggestions = self._build_heartbeat_suggestions(tasks, goals)
+        if not suggestions:
+            return None
+
+        event = {
+            "type": "heartbeat_review",
+            "agent_id": self.id,
+            "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+            "suggestions": suggestions,
+            "goals": goals[:3],
+            "task_count": len(tasks),
+        }
+        self.event_bus.publish(self.id, event)
+        self.event_bus.publish("__board__", event)
+        return event
+
+    async def _heartbeat_loop(self) -> None:
+        stop_event = self._heartbeat_stop_event or asyncio.Event()
+        while not stop_event.is_set():
+            try:
+                await self.run_heartbeat_review()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.debug("Heartbeat review failed for agent %s", self.id, exc_info=True)
+
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=self.heartbeat_interval_s)
+            except asyncio.TimeoutError:
+                continue
 
     async def assign(self, task: Task) -> Task:
         if self.state not in {AgentState.IDLE, AgentState.BUSY}:

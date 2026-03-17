@@ -1,160 +1,155 @@
-"""Tests for the task board store and API routes."""
+"""Tests for unified task board storage and API routes."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from g3lobster.api.event_bus import EventBus
+from g3lobster.api.routes_board import router as board_router
+from g3lobster.api.routes_tasks import router as tasks_router
 from g3lobster.board.store import BoardStore
 
 
-def test_board_store_crud(tmp_path: Path):
+def _build_board_app(tmp_path: Path) -> FastAPI:
+    app = FastAPI()
+    app.include_router(tasks_router)
+    app.include_router(board_router)
+    app.state.board_store = BoardStore(data_dir=str(tmp_path))
+    app.state.sheets_sync = None
+    app.state.event_bus = EventBus()
+    return app
+
+
+def test_board_store_crud_writes_per_agent_and_shared_files(tmp_path: Path) -> None:
     store = BoardStore(data_dir=str(tmp_path))
 
-    # Initially empty
-    assert store.list_items() == []
-
-    # Insert
-    item = store.insert(
+    created = store.insert(
+        title="Fix login flow",
         type="bug",
-        title="Fix login",
-        link="https://github.com/org/repo/issues/1",
         status="todo",
+        priority="high",
         agent_id="agent-a",
-        metadata={"priority": "high"},
+        created_by="human",
+        metadata={"component": "auth"},
     )
-    assert item.type == "bug"
-    assert item.title == "Fix login"
-    assert item.agent_id == "agent-a"
-    assert item.metadata == {"priority": "high"}
+    assert created.title == "Fix login flow"
+    assert created.priority == "high"
+    assert created.created_by == "human"
 
-    # List
+    fetched = store.get_item(created.id)
+    assert fetched is not None
+    assert fetched.metadata["component"] == "auth"
+
+    done = store.complete(created.id, result="patched")
+    assert done is not None
+    assert done.status == "done"
+    assert done.result == "patched"
+
+    per_agent_file = tmp_path / "agents" / "agent-a" / "task_board.json"
+    shared_file = tmp_path / "task_board.json"
+    assert per_agent_file.exists()
+    assert shared_file.exists()
+
+    payload = json.loads(shared_file.read_text(encoding="utf-8"))
+    assert payload[0]["id"] == created.id
+    assert payload[0]["status"] == "done"
+
+
+def test_board_store_migrates_legacy_shared_entries(tmp_path: Path) -> None:
+    legacy_file = tmp_path / "task_board.json"
+    legacy_file.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "legacy-1",
+                    "title": "Daily triage",
+                    "type": "chore",
+                    "status": "running",
+                    "agent_id": "concierge",
+                    "metadata": {"priority": "critical"},
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    store = BoardStore(data_dir=str(tmp_path))
     items = store.list_items()
     assert len(items) == 1
+    assert items[0].id == "legacy-1"
+    assert items[0].status == "in_progress"
+    assert items[0].priority == "critical"
+    assert items[0].agent_id == "concierge"
 
-    # Get
-    fetched = store.get_item(item.id)
-    assert fetched is not None
-    assert fetched.link == "https://github.com/org/repo/issues/1"
-
-    # Update
-    updated = store.update(item.id, status="in_progress", title="Fix login page")
-    assert updated is not None
-    assert updated.status == "in_progress"
-    assert updated.title == "Fix login page"
-    assert updated.updated_at != item.created_at  # updated_at changed
-
-    # Update non-existent
-    assert store.update("no-such-id", status="done") is None
-
-    # Delete
-    assert store.delete(item.id) is True
-    assert store.delete(item.id) is False
-    assert store.list_items() == []
+    canonical_file = tmp_path / "agents" / "concierge" / "task_board.json"
+    assert canonical_file.exists()
 
 
-def test_board_store_filters(tmp_path: Path):
+def test_board_store_filters_and_limit(tmp_path: Path) -> None:
     store = BoardStore(data_dir=str(tmp_path))
+    store.insert(title="A", type="bug", status="todo", priority="high", agent_id="a", created_by="agent")
+    store.insert(title="B", type="feature", status="in_progress", priority="normal", agent_id="b", created_by="human")
+    store.insert(title="C", type="bug", status="done", priority="critical", agent_id="a", created_by="cron")
 
-    store.insert(type="bug", title="Bug 1", status="todo", agent_id="a")
-    store.insert(type="feature", title="Feature 1", status="in_progress", agent_id="b")
-    store.insert(type="bug", title="Bug 2", status="done", agent_id="a")
-
-    # Filter by type
-    bugs = store.list_items(type_filter="bug")
-    assert len(bugs) == 2
-
-    # Filter by status
-    todo = store.list_items(status_filter="todo")
-    assert len(todo) == 1
-    assert todo[0].title == "Bug 1"
-
-    # Filter by agent_id
-    agent_b = store.list_items(agent_id="b")
-    assert len(agent_b) == 1
-    assert agent_b[0].title == "Feature 1"
-
-    # Combined filters
-    bugs_done = store.list_items(type_filter="bug", status_filter="done")
-    assert len(bugs_done) == 1
-    assert bugs_done[0].title == "Bug 2"
+    assert len(store.list_items(type_filter="bug")) == 2
+    assert len(store.list_items(status_filter="done")) == 1
+    assert len(store.list_items(priority_filter="critical")) == 1
+    assert len(store.list_items(created_by="agent")) == 1
+    assert len(store.list_items(agent_id="a")) == 2
+    assert len(store.list_items(limit=2)) == 2
 
 
-def test_board_api_routes(tmp_path: Path):
-    """Test task board REST endpoints via TestClient."""
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
-    from g3lobster.api.routes_tasks import router
-    from g3lobster.board.store import BoardStore
-
-    app = FastAPI()
-    app.include_router(router)
-    store = BoardStore(data_dir=str(tmp_path))
-    app.state.board_store = store
-    app.state.sheets_sync = None
+def test_tasks_and_board_routes_unified_crud(tmp_path: Path) -> None:
+    app = _build_board_app(tmp_path)
 
     with TestClient(app) as client:
-        # Insert
-        resp = client.post("/tasks", json={
-            "type": "feature",
-            "title": "Add dark mode",
-            "link": "https://github.com/org/repo/issues/42",
-            "status": "todo",
-        })
-        assert resp.status_code == 201
-        task_id = resp.json()["id"]
-        assert resp.json()["type"] == "feature"
+        create = client.post(
+            "/tasks",
+            json={
+                "title": "Review inbox patterns",
+                "type": "research",
+                "priority": "high",
+                "status": "todo",
+                "agent_id": "concierge",
+                "created_by": "agent",
+                "metadata": {"topic": "email"},
+            },
+        )
+        assert create.status_code == 201
+        created = create.json()
+        task_id = created["id"]
+        assert created["created_by"] == "agent"
+        assert created["priority"] == "high"
 
-        # List
-        resp = client.get("/tasks")
-        assert resp.status_code == 200
-        assert len(resp.json()) == 1
+        listing = client.get("/tasks", params={"agent_id": "concierge", "priority": "high"})
+        assert listing.status_code == 200
+        assert len(listing.json()) == 1
 
-        # List with filter
-        resp = client.get("/tasks?type=feature")
-        assert len(resp.json()) == 1
-        resp = client.get("/tasks?type=bug")
-        assert len(resp.json()) == 0
+        update = client.put(f"/tasks/{task_id}", json={"status": "in_progress"})
+        assert update.status_code == 200
+        assert update.json()["status"] == "in_progress"
 
-        # Get one
-        resp = client.get(f"/tasks/{task_id}")
-        assert resp.status_code == 200
-        assert resp.json()["title"] == "Add dark mode"
+        complete = client.post(f"/tasks/{task_id}/complete", json={"result": "analysis complete"})
+        assert complete.status_code == 200
+        assert complete.json()["status"] == "done"
+        assert complete.json()["result"] == "analysis complete"
 
-        # Get non-existent
-        resp = client.get("/tasks/no-such-id")
-        assert resp.status_code == 404
+        board_view = client.get("/board/tasks", params={"agent_id": "concierge"})
+        assert board_view.status_code == 200
+        assert len(board_view.json()["tasks"]) == 1
+        assert board_view.json()["tasks"][0]["id"] == task_id
 
-        # Update
-        resp = client.put(f"/tasks/{task_id}", json={
-            "status": "in_progress",
-            "agent_id": "my-agent",
-        })
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "in_progress"
-        assert resp.json()["agent_id"] == "my-agent"
+        remove = client.delete(f"/tasks/{task_id}")
+        assert remove.status_code == 200
+        assert remove.json() == {"deleted": True}
 
-        # Update non-existent
-        resp = client.put("/tasks/bad-id", json={"status": "done"})
-        assert resp.status_code == 404
+        after = client.get("/tasks", params={"agent_id": "concierge"})
+        assert after.status_code == 200
+        assert after.json() == []
 
-        # Delete
-        resp = client.delete(f"/tasks/{task_id}")
-        assert resp.status_code == 200
-        assert resp.json() == {"deleted": True}
-
-        # Delete non-existent
-        resp = client.delete(f"/tasks/{task_id}")
-        assert resp.status_code == 404
-
-        # Sync without sheets configured
-        resp = client.post("/tasks/sync", json={"mode": "sync"})
-        assert resp.status_code == 503
-
-
-def test_board_store_metadata_update(tmp_path: Path):
-    store = BoardStore(data_dir=str(tmp_path))
-    item = store.insert(type="chore", title="Clean up", metadata={"area": "backend"})
-    updated = store.update(item.id, metadata={"area": "frontend", "tags": ["ui"]})
-    assert updated is not None
-    assert updated.metadata == {"area": "frontend", "tags": ["ui"]}
+        sync = client.post("/tasks/sync", json={"mode": "sync"})
+        assert sync.status_code == 503

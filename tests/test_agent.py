@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
+from g3lobster.board.store import TaskItem
 from g3lobster.pool.agent import GeminiAgent
 from g3lobster.pool.types import AgentState
 from g3lobster.tasks.types import Task, TaskStatus
@@ -81,3 +84,87 @@ async def test_agent_assign_passes_session_id_to_process(memory_manager, mcp_man
     await agent.assign(task)
 
     assert process.session_ids == ["delegation-abc123"]
+
+
+class _FakeBoardStore:
+    def __init__(self, items):
+        self.items = list(items)
+
+    def list_items(
+        self,
+        type_filter=None,
+        status_filter=None,
+        agent_id=None,
+        priority_filter=None,
+        created_by=None,
+        limit=None,
+    ):
+        rows = [item for item in self.items if not agent_id or item.agent_id == agent_id]
+        if limit is not None:
+            rows = rows[: int(limit)]
+        return rows
+
+
+class _CaptureEventBus:
+    def __init__(self):
+        self.events = []
+
+    def publish(self, channel, event):
+        self.events.append((channel, event))
+
+
+@pytest.mark.asyncio
+async def test_agent_heartbeat_review_emits_suggestions(memory_manager, mcp_manager, context_builder) -> None:
+    stale_at = (datetime.now(tz=timezone.utc) - timedelta(hours=7)).isoformat()
+    done_at = (datetime.now(tz=timezone.utc) - timedelta(minutes=20)).isoformat()
+    tasks = [
+        TaskItem(
+            id="t-stale",
+            title="Investigate auth bug",
+            type="bug",
+            status="in_progress",
+            priority="high",
+            agent_id="agent-0",
+            created_by="agent",
+            updated_at=stale_at,
+            created_at=stale_at,
+        ),
+        TaskItem(
+            id="t-done",
+            title="Morning brief complete",
+            type="chore",
+            status="done",
+            priority="normal",
+            agent_id="agent-0",
+            created_by="agent",
+            updated_at=done_at,
+            created_at=done_at,
+        ),
+    ]
+    board_store = _FakeBoardStore(tasks)
+    event_bus = _CaptureEventBus()
+
+    memory_manager.write_memory("# MEMORY\n\nGoal: keep response queue clear.\n")
+    memory_manager.write_procedures("# PROCEDURES\n\n## Escalate blockers\nTrigger: blocked\n")
+
+    agent = GeminiAgent(
+        agent_id="agent-0",
+        process_factory=lambda: FakeProcess("ok"),
+        mcp_manager=mcp_manager,
+        memory_manager=memory_manager,
+        context_builder=context_builder,
+        board_store=board_store,
+        event_bus=event_bus,
+        heartbeat_interval_s=30,
+    )
+
+    event = await agent.run_heartbeat_review()
+    assert event is not None
+    assert event["type"] == "heartbeat_review"
+    kinds = [item["kind"] for item in event["suggestions"]]
+    assert "stale" in kinds
+    assert "next_step" in kinds
+
+    channels = [channel for channel, _payload in event_bus.events]
+    assert "agent-0" in channels
+    assert "__board__" in channels
