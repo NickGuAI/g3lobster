@@ -39,6 +39,7 @@ class AgentPersona:
     bridge_enabled: bool = False
     heartbeat_enabled: bool = True
     heartbeat_interval_s: float = 300.0
+    avatar_url: Optional[str] = None
     space_overrides: Dict[str, Dict[str, str]] = field(default_factory=dict)
     created_at: str = field(default_factory=lambda: _utc_now())
     updated_at: str = field(default_factory=lambda: _utc_now())
@@ -81,6 +82,10 @@ class AgentPersona:
                 HEARTBEAT_MIN_INTERVAL_S,
             )
             self.heartbeat_interval_s = HEARTBEAT_MIN_INTERVAL_S
+        if self.avatar_url:
+            self.avatar_url = str(self.avatar_url).strip() or None
+        else:
+            self.avatar_url = None
         if not isinstance(self.space_overrides, dict):
             self.space_overrides = {}
 
@@ -106,6 +111,7 @@ class AgentPersona:
             "bridge_enabled": bool(self.bridge_enabled),
             "heartbeat_enabled": bool(self.heartbeat_enabled),
             "heartbeat_interval_s": self.heartbeat_interval_s,
+            "avatar_url": self.avatar_url,
             "space_overrides": dict(self.space_overrides),
             "created_at": self.created_at,
             "updated_at": self.updated_at,

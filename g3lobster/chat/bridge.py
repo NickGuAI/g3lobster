@@ -509,32 +509,35 @@ class ChatBridge:
                 reply_persona = delegated_persona
                 logger.info("Concierge routed to agent: %s", delegated_persona.id)
 
-        if task.status == TaskStatus.FAILED and final_error:
-            reply_text = f"{reply_persona.emoji} {reply_persona.name}: error: {final_error}"
+        is_error = task.status == TaskStatus.FAILED or bool(final_error)
+        if is_error:
+            reply_content = f"error: {final_error}"
             if self.debug_mode:
-                reply_text += f"\n```\n{final_error}\n```"
+                reply_content += f"\n```\n{final_error}\n```"
         elif final_result:
-            reply_text = f"{reply_persona.emoji} {reply_persona.name}: {final_result}"
+            reply_content = final_result
         elif final_error:
-            reply_text = f"{reply_persona.emoji} {reply_persona.name}: error: {final_error}"
+            reply_content = f"error: {final_error}"
             if self.debug_mode:
-                reply_text += f"\n```\n{final_error}\n```"
+                reply_content += f"\n```\n{final_error}\n```"
         else:
-            reply_text = f"{reply_persona.emoji} {reply_persona.name}: task finished with no output"
+            reply_content = "task finished with no output"
 
         # Emit response event to SSE subscribers
         if self.event_bus:
             self.event_bus.publish(target_id, {
                 "type": "response",
                 "text": final_result or final_error or "no output",
-                "status": "error" if (task.status == TaskStatus.FAILED or final_error) else "success",
+                "status": "error" if is_error else "success",
             })
 
-        # Update the thinking message in-place (no extra new message).
+        # Update the thinking message in-place (plain text, keeps emoji prefix),
+        # or send a fresh attributed message when there's no placeholder.
+        reply_text = f"{reply_persona.emoji} {reply_persona.name}: {reply_content}"
         if thinking_name:
             await self.update_message(thinking_name, reply_text)
         else:
-            await self.send_message(reply_text, thread_id=thread_id)
+            await self.send_agent_message(reply_content, reply_persona, thread_id=thread_id)
 
         # ✅ or ❌ — final status reaction
         if user_message_name:
@@ -655,6 +658,55 @@ class ChatBridge:
             self.service.spaces().messages().create(parent=self.space_id, body=body).execute
         )
         return result or {}
+
+    async def send_agent_message(
+        self,
+        text: str,
+        persona: object,
+        thread_id: Optional[str] = None,
+    ) -> dict:
+        """Send a message attributed to a specific agent persona.
+
+        If the persona has an avatar_url, sends a Cards v2 message with a
+        profile picture header.  Otherwise prepends a bold ``*emoji name*``
+        line so the agent is clearly identified even in plain-text mode.
+        """
+        avatar_url = getattr(persona, "avatar_url", None)
+        name = getattr(persona, "name", "Agent")
+        emoji = getattr(persona, "emoji", "🤖")
+        agent_id = getattr(persona, "id", "agent")
+
+        if avatar_url:
+            card_header: Dict[str, object] = {
+                "title": name,
+                "subtitle": agent_id,
+                "imageUrl": avatar_url,
+                "imageType": "CIRCLE",
+            }
+            cards_v2 = [
+                {
+                    "cardId": f"agent-msg-{agent_id}",
+                    "card": {
+                        "header": card_header,
+                        "sections": [
+                            {
+                                "widgets": [
+                                    {
+                                        "textParagraph": {
+                                            "text": format_for_google_chat(text)
+                                        }
+                                    }
+                                ]
+                            }
+                        ],
+                    },
+                }
+            ]
+            return await self.send_message("", thread_id=thread_id, cards_v2=cards_v2)
+
+        # No avatar — prefix with bold name so agent is identifiable.
+        prefixed = f"*{emoji} {name}*\n{text}"
+        return await self.send_message(prefixed, thread_id=thread_id)
 
     async def send_card_message(
         self,

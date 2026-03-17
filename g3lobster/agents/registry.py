@@ -363,14 +363,17 @@ class AgentRegistry:
             if bridge is None:
                 logger.debug("Agent %s heartbeat: no bridge for space %s", agent_id, space_id)
                 return
+            runtime = self._agents.get(agent_id)
+            active_persona = runtime.persona if runtime else persona
             try:
-                await bridge.send_message(message)
+                await bridge.send_agent_message(message, active_persona)
             except Exception:
                 logger.exception("Agent %s heartbeat: failed to send message to space %s", agent_id, space_id)
 
         setattr(agent, "heartbeat_space_sender", _heartbeat_space_sender)
 
         # Wake message posted to space at the start of each heartbeat tick.
+        # Keep wake as plain text so it appears as a lightweight status ping.
         wake_msg = f"{persona.emoji} *{persona.name}* is awake — checking in now..."
         setattr(agent, "heartbeat_wake_message", wake_msg)
 
