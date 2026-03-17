@@ -310,6 +310,21 @@ def build_runtime(config: AppConfig):
         alert_manager.email_bridge = email_bridge
     registry.chat_bridge = bridge_manager
 
+    # Task board
+    board_store = None
+    sheets_sync = None
+    if config.tasks.enabled:
+        from g3lobster.board.store import BoardStore
+        board_store = BoardStore(data_dir=config.agents.data_dir)
+
+        if config.tasks.google_sheet_id:
+            from g3lobster.board.sheets import SheetsSync
+            sheets_sync = SheetsSync(
+                sheet_id=config.tasks.google_sheet_id,
+                store=board_store,
+                credentials_path=config.tasks.google_credentials_path,
+            )
+
     return (
         registry,
         bridge_manager,
@@ -324,6 +339,8 @@ def build_runtime(config: AppConfig):
         standup_store,
         standup_orchestrator,
         event_bus,
+        board_store,
+        sheets_sync,
     )
 
 
@@ -344,6 +361,8 @@ def build_app(config_path: Optional[str] = None):
         standup_store,
         standup_orchestrator,
         event_bus,
+        board_store,
+        sheets_sync,
     ) = build_runtime(config)
     app = create_app(
         registry=registry,
@@ -361,6 +380,8 @@ def build_app(config_path: Optional[str] = None):
         standup_store=standup_store,
         standup_orchestrator=standup_orchestrator,
         event_bus=event_bus,
+        board_store=board_store,
+        sheets_sync=sheets_sync,
     )
     return app, config
 

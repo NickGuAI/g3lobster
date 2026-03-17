@@ -108,6 +108,22 @@ class CronStore:
     # Public API
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def validate_schedule(schedule: str) -> None:
+        """Raise ValueError if *schedule* is not a valid 5-field cron expression."""
+        try:
+            from apscheduler.triggers.cron import CronTrigger  # type: ignore
+            CronTrigger.from_crontab(schedule)
+        except ImportError:
+            # apscheduler not installed — fall back to basic field-count check
+            parts = schedule.strip().split()
+            if len(parts) != 5:
+                raise ValueError(
+                    f"Invalid cron expression (expected 5 fields, got {len(parts)}): {schedule!r}"
+                )
+        except (ValueError, TypeError) as exc:
+            raise ValueError(f"Invalid cron expression: {exc}") from exc
+
     def list_tasks(self, agent_id: str) -> List[CronTask]:
         return self._read_tasks(agent_id)
 
@@ -118,11 +134,13 @@ class CronStore:
         return None
 
     def add_task(self, agent_id: str, schedule: str, instruction: str) -> CronTask:
+        schedule = schedule.strip()
+        self.validate_schedule(schedule)
         tasks = self._read_tasks(agent_id)
         task = CronTask(
             id=str(uuid.uuid4()),
             agent_id=agent_id,
-            schedule=schedule.strip(),
+            schedule=schedule,
             instruction=instruction.strip(),
         )
         tasks.append(task)
@@ -130,6 +148,8 @@ class CronStore:
         return task
 
     def update_task(self, agent_id: str, task_id: str, **kwargs) -> Optional[CronTask]:
+        if "schedule" in kwargs and kwargs["schedule"] is not None:
+            self.validate_schedule(kwargs["schedule"].strip())
         tasks = self._read_tasks(agent_id)
         for i, task in enumerate(tasks):
             if task.id == task_id:

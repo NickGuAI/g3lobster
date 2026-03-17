@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
 from g3lobster.cron.store import CronRunRecord, CronStore
-from g3lobster.tasks.types import Task
+from g3lobster.tasks.types import Task, TaskStatus
 
 if TYPE_CHECKING:
     from g3lobster.agents.registry import AgentRegistry
@@ -263,7 +263,7 @@ class CronManager:
         try:
             result = await runtime.assign(task)
             duration = round(time_mod.monotonic() - start_time, 1)
-            status = "completed" if result.status.value == "completed" else "failed"
+            status = "completed" if result.status == TaskStatus.COMPLETED else "failed"
             preview = (result.result or result.error or "")[:200]
             logger.info("Cron task %s completed: status=%s", task_id, result.status)
 
