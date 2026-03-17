@@ -1,5 +1,66 @@
 """Persistent markdown + JSONL memory management."""
 
+# Seeded into every new agent's PROCEDURES.md on first init.
+# Uses permanent weight (10) so these are always injected into context.
+DEFAULT_PROCEDURES = """\
+# PROCEDURES
+
+## Managing Your Task Board
+Trigger: review tasks, update task status, check what to work on next
+Weight: 10
+Status: permanent
+Steps:
+- Call list_tasks to see your current board (optionally filter by status=todo or in_progress)
+- For tasks you have finished, call complete_task with the task_id and a brief result summary
+- For tasks you are actively working on, call update_task with status=in_progress
+- For tasks that are blocked, call update_task with status=blocked and note the blocker in result
+- Call create_task to log new work items you discover during your work
+
+## Creating Tasks for New Work
+Trigger: I need to track something, log a task, add a todo item
+Weight: 10
+Status: permanent
+Steps:
+- Call create_task with a clear title describing the work
+- Set type: feature, bug, research, chore, or reminder as appropriate
+- Set priority: critical, high, normal, or low based on urgency
+- The task is automatically assigned to you; no agent_id needed
+
+## Delegating Work to Other Agents
+Trigger: delegate a task, ask another agent, get help from a teammate
+Weight: 10
+Status: permanent
+Steps:
+- Call list_agents to see all available agents and their current state
+- Choose an agent whose description matches the work (prefer idle agents)
+- Call delegate_task with agent_name set to the target agent id and a clear prompt
+- If no specific agent is needed, omit agent_name to auto-route to the least-busy agent
+- The result is returned once the delegated task completes
+
+## Managing Your Scheduled Jobs (Cron)
+Trigger: schedule recurring work, create a cron job, manage scheduled tasks
+Weight: 10
+Status: permanent
+Steps:
+- Call list_cron_jobs to see your existing schedules
+- Call create_cron_job with a 5-field cron schedule (e.g. 0 9 * * 1-5) and an instruction
+- Call update_cron_job to change the schedule, instruction, or enabled flag of an existing job
+- Call run_cron_job to manually trigger a scheduled job immediately
+- Call delete_cron_job to remove a job you no longer need
+- Common schedules: daily 9am weekdays = 0 9 * * 1-5 | every hour = 0 * * * * | daily midnight = 0 0 * * *
+
+## Heartbeat Check-In
+Trigger: heartbeat check-in, periodic review, wake up, status update
+Weight: 10
+Status: permanent
+Steps:
+- Call list_tasks to review your current board
+- Update any tasks whose status has changed using update_task or complete_task
+- Call list_cron_jobs to confirm your scheduled jobs are still relevant
+- Write a brief status update (3-5 sentences): what you accomplished, what is next, any blockers
+- Begin your status message with the emoji 📋 followed by Status Update:
+"""
+
 from __future__ import annotations
 
 import re
@@ -66,7 +127,7 @@ class MemoryManager:
         if not self.memory_file.exists():
             self.memory_file.write_text("# MEMORY\n\n", encoding="utf-8")
         if not self.procedures_file.exists():
-            self.procedures_file.write_text("# PROCEDURES\n\n", encoding="utf-8")
+            self.procedures_file.write_text(DEFAULT_PROCEDURES, encoding="utf-8")
 
         self.journal_store = JournalStore(str(self.daily_dir))
         self.association_graph = AssociationGraph(
