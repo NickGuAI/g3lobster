@@ -3,193 +3,809 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>g3lobster Kanban Board</title>
+    <title>g3lobster Task Board</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Roboto+Mono:wght@400&display=swap"
-      rel="stylesheet"
-    />
-    <link rel="stylesheet" href="/ui/css/zen.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
     <style>
+      :root {
+        --bg: #f3f0e8;
+        --panel: #fffdf8;
+        --ink: #1f1f1b;
+        --muted: #67675f;
+        --line: #d7d3c9;
+        --accent: #0d7f6f;
+        --todo: #7b66ff;
+        --doing: #0d7f6f;
+        --blocked: #c24c2f;
+        --done: #3f8f3b;
+        --critical: #b12b16;
+        --high: #c26700;
+        --normal: #0d7f6f;
+        --low: #4d7a86;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
       body {
-        background: #0f0f0f;
-        color: #e0e0e0;
-        font-family: 'Roboto', sans-serif;
         margin: 0;
-        padding: 20px;
+        min-height: 100vh;
+        background: radial-gradient(circle at top left, #fefbf3, var(--bg) 45%);
+        color: var(--ink);
+        font-family: "Space Grotesk", sans-serif;
+        padding: 1.25rem;
       }
-      .board {
+
+      .topbar {
         display: flex;
-        gap: 20px;
-        overflow-x: auto;
-        padding-bottom: 20px;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        flex-wrap: wrap;
       }
+
+      .title h1 {
+        margin: 0;
+        font-size: 1.7rem;
+        letter-spacing: -0.03em;
+      }
+
+      .title p {
+        margin: 0.2rem 0 0;
+        color: var(--muted);
+      }
+
+      .actions {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+      }
+
+      button,
+      select,
+      input {
+        font: inherit;
+      }
+
+      select,
+      input {
+        border: 1px solid var(--line);
+        background: var(--panel);
+        color: var(--ink);
+        border-radius: 0.55rem;
+        padding: 0.45rem 0.65rem;
+      }
+
+      button {
+        border: 0;
+        border-radius: 0.55rem;
+        padding: 0.52rem 0.8rem;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .btn-primary {
+        background: var(--accent);
+        color: #f8fffd;
+      }
+
+      .btn-subtle {
+        background: #eae6db;
+        color: var(--ink);
+      }
+
+      .filters {
+        margin-top: 0.9rem;
+        display: flex;
+        gap: 0.55rem;
+        flex-wrap: wrap;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        border-radius: 999px;
+        background: #ece7da;
+        color: #434338;
+        padding: 0.18rem 0.58rem;
+        font-size: 0.78rem;
+      }
+
+      .meta-row {
+        display: flex;
+        gap: 1rem;
+        margin-top: 0.55rem;
+        color: var(--muted);
+        font-size: 0.83rem;
+      }
+
+      .suggestions {
+        margin-top: 1rem;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 0.9rem;
+        padding: 0.7rem;
+      }
+
+      .suggestions h2 {
+        margin: 0;
+        font-size: 0.95rem;
+      }
+
+      .suggestion-list {
+        margin-top: 0.55rem;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+        gap: 0.55rem;
+      }
+
+      .suggestion-card {
+        border: 1px solid var(--line);
+        border-radius: 0.65rem;
+        background: #fffcf6;
+        padding: 0.5rem;
+      }
+
+      .suggestion-card strong {
+        display: block;
+        font-size: 0.8rem;
+        margin-bottom: 0.24rem;
+      }
+
+      .board {
+        margin-top: 1rem;
+        display: grid;
+        gap: 0.7rem;
+        grid-template-columns: repeat(4, minmax(250px, 1fr));
+        align-items: start;
+      }
+
       .column {
-        background: #1a1a1a;
-        border-radius: 8px;
-        min-width: 300px;
-        max-width: 350px;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 0.9rem;
+        min-height: 380px;
         display: flex;
         flex-direction: column;
-        max-height: calc(100vh - 100px);
       }
+
       .column-header {
-        padding: 15px;
-        background: #252525;
-        border-radius: 8px 8px 0 0;
-        font-weight: 700;
-        text-transform: uppercase;
-        font-size: 0.9rem;
-        letter-spacing: 0.05rem;
-        border-bottom: 2px solid #333;
-      }
-      .task-list {
-        padding: 10px;
-        overflow-y: auto;
-        flex-grow: 1;
-      }
-      .task-card {
-        background: #2a2a2a;
-        border-radius: 6px;
-        padding: 12px;
-        margin-bottom: 10px;
-        border-left: 4px solid #444;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-        cursor: pointer;
-        transition: transform 0.1s;
-      }
-      .task-card:hover {
-        transform: translateY(-2px);
-        background: #333;
-      }
-      .task-prompt {
-        font-size: 0.95rem;
-        margin-bottom: 8px;
-        line-height: 1.4;
-      }
-      .task-meta {
-        font-size: 0.75rem;
-        color: #888;
+        padding: 0.7rem;
+        border-bottom: 1px solid var(--line);
         display: flex;
-        justify-content: space-between;
         align-items: center;
-      }
-      .agent-tag {
-        background: #3d3d3d;
-        color: #ccc;
-        padding: 2px 6px;
-        border-radius: 4px;
-        font-family: 'Roboto Mono', monospace;
+        justify-content: space-between;
       }
 
-      /* Status colors */
-      .status-pending { border-left-color: #f1c40f; }
-      .status-running { border-left-color: #3498db; }
-      .status-completed { border-left-color: #2ecc71; }
-      .status-failed { border-left-color: #e74c3c; }
-      .status-canceled { border-left-color: #95a5a6; }
-
-      header {
-        margin-bottom: 30px;
+      .column-header strong {
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        font-size: 0.75rem;
       }
-      h1 {
+
+      .column[data-status="todo"] .column-header {
+        border-top: 4px solid var(--todo);
+      }
+
+      .column[data-status="in_progress"] .column-header {
+        border-top: 4px solid var(--doing);
+      }
+
+      .column[data-status="blocked"] .column-header {
+        border-top: 4px solid var(--blocked);
+      }
+
+      .column[data-status="done"] .column-header {
+        border-top: 4px solid var(--done);
+      }
+
+      .task-list {
+        padding: 0.55rem;
+        display: grid;
+        gap: 0.55rem;
+        align-content: start;
+      }
+
+      .task-card {
+        border: 1px solid #d4d0c4;
+        border-radius: 0.75rem;
+        padding: 0.55rem;
+        background: #fff;
+        cursor: grab;
+      }
+
+      .task-card.dragging {
+        opacity: 0.35;
+      }
+
+      .task-title {
         margin: 0;
-        font-size: 1.8rem;
+        font-weight: 600;
+        line-height: 1.3;
       }
-      .refresh-btn {
-        background: #3498db;
-        color: white;
-        border: none;
-        padding: 8px 16px;
-        border-radius: 4px;
-        cursor: pointer;
-        font-weight: 500;
-        margin-top: 10px;
+
+      .task-badges {
+        margin-top: 0.42rem;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.28rem;
       }
-      .refresh-btn:hover { background: #2980b9; }
-    </style>
-  </head>
-  <body>
-    <header>
-      <h1>Task Kanban Board</h1>
-      <button class="refresh-btn" onclick="fetchTasks()">SMASH TO REFRESH!!!</button>
-    </header>
 
-    <div class="board">
-      <div class="column" id="col-pending">
-        <div class="column-header">Pending</div>
-        <div class="task-list"></div>
-      </div>
-      <div class="column" id="col-running">
-        <div class="column-header">Running</div>
-        <div class="task-list"></div>
-      </div>
-      <div class="column" id="col-completed">
-        <div class="column-header">Completed</div>
-        <div class="task-list"></div>
-      </div>
-      <div class="column" id="col-terminal">
-        <div class="column-header">Failed / Canceled</div>
-        <div class="task-list"></div>
-      </div>
-    </div>
+      .badge {
+        border-radius: 999px;
+        font-size: 0.7rem;
+        padding: 0.13rem 0.45rem;
+      }
 
-    <script>
-      async function fetchTasks() {
-        try {
-          // Get the API key from some standard place if possible, 
-          // but for /ui it should be exempt if configured.
-          const response = await fetch('/board/tasks');
-          if (!response.ok) throw new Error('SMASH FAILED: ' + response.statusText);
-          const data = await response.json();
-          renderBoard(data.tasks);
-        } catch (err) {
-          console.error(err);
-          alert(err.message);
+      .badge-priority-low { background: rgba(77, 122, 134, 0.16); color: var(--low); }
+      .badge-priority-normal { background: rgba(13, 127, 111, 0.14); color: var(--normal); }
+      .badge-priority-high { background: rgba(194, 103, 0, 0.16); color: var(--high); }
+      .badge-priority-critical { background: rgba(177, 43, 22, 0.16); color: var(--critical); }
+      .badge-created { background: #ede8dc; color: #595949; }
+      .badge-agent { background: #e8f0ea; color: #385142; font-family: "IBM Plex Mono", monospace; }
+
+      .task-meta {
+        margin-top: 0.45rem;
+        color: var(--muted);
+        font-size: 0.72rem;
+      }
+
+      .task-actions {
+        margin-top: 0.45rem;
+        display: flex;
+        gap: 0.35rem;
+      }
+
+      .task-actions button {
+        flex: 1;
+        font-size: 0.72rem;
+        padding: 0.35rem 0.4rem;
+      }
+
+      .empty {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+
+      .modal {
+        position: fixed;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(30, 30, 24, 0.48);
+        padding: 1rem;
+      }
+
+      .modal.open {
+        display: flex;
+      }
+
+      .modal-card {
+        width: min(520px, 100%);
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 0.85rem;
+        padding: 0.9rem;
+      }
+
+      .modal-card h3 {
+        margin: 0 0 0.65rem;
+      }
+
+      .form-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.55rem;
+      }
+
+      .form-grid .field-full {
+        grid-column: 1 / -1;
+      }
+
+      .form-actions {
+        margin-top: 0.7rem;
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.55rem;
+      }
+
+      @media (max-width: 1100px) {
+        .board {
+          grid-template-columns: repeat(2, minmax(250px, 1fr));
         }
       }
 
-      function renderBoard(tasks) {
-        const cols = {
-          pending: document.querySelector('#col-pending .task-list'),
-          running: document.querySelector('#col-running .task-list'),
-          completed: document.querySelector('#col-completed .task-list'),
-          terminal: document.querySelector('#col-terminal .task-list')
-        };
+      @media (max-width: 760px) {
+        body {
+          padding: 0.85rem;
+        }
 
-        // Clear columns
-        Object.values(cols).forEach(el => el.innerHTML = '');
+        .board {
+          grid-template-columns: 1fr;
+        }
 
-        tasks.forEach(task => {
-          const card = document.createElement('div');
-          card.className = `task-card status-${task.status}`;
-          
-          let targetCol = cols.terminal;
-          if (task.status === 'pending') targetCol = cols.pending;
-          else if (task.status === 'running') targetCol = cols.running;
-          else if (task.status === 'completed') targetCol = cols.completed;
+        .form-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="title">
+        <h1>Task Board</h1>
+        <p>Unified board for human + agent + cron + heartbeat tasks.</p>
+      </div>
+      <div class="actions">
+        <button id="refresh-btn" class="btn-subtle" type="button">Refresh</button>
+        <button id="add-task-btn" class="btn-primary" type="button">+ Task</button>
+      </div>
+    </header>
 
-          card.innerHTML = `
-            <div class="task-prompt">${escapeHtml(task.prompt)}</div>
-            <div class="task-meta">
-              <span class="agent-tag">${task.agent_id || 'unknown'}</span>
-              <span>${new Date(task.created_at * 1000).toLocaleTimeString()}</span>
-            </div>
-          `;
-          targetCol.appendChild(card);
+    <section class="filters">
+      <select id="filter-agent">
+        <option value="">All Agents</option>
+      </select>
+      <select id="filter-priority">
+        <option value="">All Priorities</option>
+        <option value="critical">Critical</option>
+        <option value="high">High</option>
+        <option value="normal">Normal</option>
+        <option value="low">Low</option>
+      </select>
+      <select id="filter-type">
+        <option value="">All Types</option>
+        <option value="bug">Bug</option>
+        <option value="feature">Feature</option>
+        <option value="chore">Chore</option>
+        <option value="research">Research</option>
+        <option value="reminder">Reminder</option>
+      </select>
+      <select id="filter-created-by">
+        <option value="">All Creators</option>
+        <option value="human">Human</option>
+        <option value="agent">Agent</option>
+        <option value="cron">Cron</option>
+        <option value="heartbeat">Heartbeat</option>
+      </select>
+    </section>
+
+    <div class="meta-row">
+      <span id="live-status" class="pill">SSE: connecting</span>
+      <span id="task-count" class="pill">0 tasks</span>
+    </div>
+
+    <section class="suggestions">
+      <h2>Heartbeat Suggestions</h2>
+      <div id="suggestion-list" class="suggestion-list">
+        <p class="empty">No suggestions yet.</p>
+      </div>
+    </section>
+
+    <main class="board" id="board">
+      <section class="column" data-status="todo">
+        <div class="column-header"><strong>Todo</strong><span id="count-todo">0</span></div>
+        <div class="task-list" id="list-todo"></div>
+      </section>
+      <section class="column" data-status="in_progress">
+        <div class="column-header"><strong>In Progress</strong><span id="count-in_progress">0</span></div>
+        <div class="task-list" id="list-in_progress"></div>
+      </section>
+      <section class="column" data-status="blocked">
+        <div class="column-header"><strong>Blocked</strong><span id="count-blocked">0</span></div>
+        <div class="task-list" id="list-blocked"></div>
+      </section>
+      <section class="column" data-status="done">
+        <div class="column-header"><strong>Done</strong><span id="count-done">0</span></div>
+        <div class="task-list" id="list-done"></div>
+      </section>
+    </main>
+
+    <div id="task-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <form id="task-form" class="modal-card">
+        <h3 id="modal-title">Create Task</h3>
+        <div class="form-grid">
+          <div class="field-full">
+            <label for="task-title">Title</label>
+            <input id="task-title" name="title" required />
+          </div>
+          <div>
+            <label for="task-type">Type</label>
+            <select id="task-type" name="type">
+              <option value="chore">chore</option>
+              <option value="feature">feature</option>
+              <option value="bug">bug</option>
+              <option value="research">research</option>
+              <option value="reminder">reminder</option>
+            </select>
+          </div>
+          <div>
+            <label for="task-priority">Priority</label>
+            <select id="task-priority" name="priority">
+              <option value="normal">normal</option>
+              <option value="high">high</option>
+              <option value="critical">critical</option>
+              <option value="low">low</option>
+            </select>
+          </div>
+          <div>
+            <label for="task-agent">Agent ID</label>
+            <input id="task-agent" name="agent_id" placeholder="concierge" />
+          </div>
+          <div>
+            <label for="task-created-by">Created By</label>
+            <select id="task-created-by" name="created_by">
+              <option value="human">human</option>
+              <option value="agent">agent</option>
+              <option value="cron">cron</option>
+              <option value="heartbeat">heartbeat</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn-subtle" id="cancel-task-btn">Cancel</button>
+          <button type="submit" class="btn-primary">Create</button>
+        </div>
+      </form>
+    </div>
+
+    <script>
+      const state = {
+        tasks: [],
+        suggestions: [],
+        filters: {
+          agent_id: "",
+          priority: "",
+          type: "",
+          created_by: "",
+        },
+        eventSource: null,
+      };
+
+      const statusBuckets = ["todo", "in_progress", "blocked", "done"];
+
+      function escapeHtml(value) {
+        return String(value ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/\"/g, "&quot;")
+          .replace(/'/g, "&#039;");
+      }
+
+      async function request(path, options = {}) {
+        const response = await fetch(path, {
+          ...options,
+          headers: {
+            "Content-Type": "application/json",
+            ...(options.headers || {}),
+          },
+        });
+        if (!response.ok) {
+          let detail = `${response.status} ${response.statusText}`;
+          try {
+            const payload = await response.json();
+            if (payload?.detail) {
+              detail = typeof payload.detail === "string" ? payload.detail : JSON.stringify(payload.detail);
+            }
+          } catch (_err) {
+            // ignore
+          }
+          throw new Error(detail);
+        }
+        if (response.status === 204) {
+          return null;
+        }
+        return response.json();
+      }
+
+      function buildTaskQuery() {
+        const params = new URLSearchParams();
+        params.set("limit", "500");
+        for (const [key, value] of Object.entries(state.filters)) {
+          if (value) {
+            params.set(key, value);
+          }
+        }
+        return params.toString();
+      }
+
+      async function loadTasks() {
+        const payload = await request(`/board/tasks?${buildTaskQuery()}`);
+        state.tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+        renderFilters();
+        renderBoard();
+      }
+
+      function renderFilters() {
+        const agentSelect = document.getElementById("filter-agent");
+        const selected = state.filters.agent_id;
+        const currentValues = new Set(
+          Array.from(agentSelect.options)
+            .map((opt) => opt.value)
+            .filter(Boolean)
+        );
+        for (const task of state.tasks) {
+          const agent = String(task.agent_id || "").trim();
+          if (agent && !currentValues.has(agent)) {
+            currentValues.add(agent);
+            const option = document.createElement("option");
+            option.value = agent;
+            option.textContent = agent;
+            agentSelect.appendChild(option);
+          }
+        }
+        agentSelect.value = selected;
+      }
+
+      function relativeTime(iso) {
+        const ts = Date.parse(iso || "");
+        if (!Number.isFinite(ts)) {
+          return "unknown";
+        }
+        const deltaS = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+        if (deltaS < 60) return `${deltaS}s ago`;
+        if (deltaS < 3600) return `${Math.floor(deltaS / 60)}m ago`;
+        if (deltaS < 86400) return `${Math.floor(deltaS / 3600)}h ago`;
+        return `${Math.floor(deltaS / 86400)}d ago`;
+      }
+
+      function createTaskCard(task) {
+        const card = document.createElement("article");
+        card.className = "task-card";
+        card.draggable = true;
+        card.dataset.taskId = task.id;
+
+        card.addEventListener("dragstart", () => {
+          card.classList.add("dragging");
+        });
+
+        card.addEventListener("dragend", () => {
+          card.classList.remove("dragging");
+        });
+
+        card.innerHTML = `
+          <p class="task-title">${escapeHtml(task.title)}</p>
+          <div class="task-badges">
+            <span class="badge badge-priority-${escapeHtml(task.priority || "normal")}">${escapeHtml(task.priority || "normal")}</span>
+            <span class="badge">${escapeHtml(task.type || "chore")}</span>
+            <span class="badge badge-agent">${escapeHtml(task.agent_id || "unassigned")}</span>
+            <span class="badge badge-created">${escapeHtml(task.created_by || "human")}</span>
+          </div>
+          <div class="task-meta">updated ${escapeHtml(relativeTime(task.updated_at))}</div>
+          <div class="task-actions">
+            ${task.status !== "done" ? `<button class="btn-subtle" data-action="done" data-task-id="${escapeHtml(task.id)}">Complete</button>` : ""}
+            <button class="btn-subtle" data-action="edit" data-task-id="${escapeHtml(task.id)}">Edit</button>
+            <button class="btn-subtle" data-action="delete" data-task-id="${escapeHtml(task.id)}">Delete</button>
+          </div>
+        `;
+        return card;
+      }
+
+      function renderBoard() {
+        const grouped = { todo: [], in_progress: [], blocked: [], done: [] };
+        for (const task of state.tasks) {
+          const status = statusBuckets.includes(task.status) ? task.status : "todo";
+          grouped[status].push(task);
+        }
+
+        for (const status of statusBuckets) {
+          const list = document.getElementById(`list-${status}`);
+          const count = document.getElementById(`count-${status}`);
+          count.textContent = String(grouped[status].length);
+          list.innerHTML = "";
+          if (!grouped[status].length) {
+            list.innerHTML = `<p class="empty">No tasks</p>`;
+            continue;
+          }
+          grouped[status]
+            .sort((a, b) => Date.parse(b.updated_at || "") - Date.parse(a.updated_at || ""))
+            .forEach((task) => list.appendChild(createTaskCard(task)));
+        }
+
+        document.getElementById("task-count").textContent = `${state.tasks.length} tasks`;
+      }
+
+      function renderSuggestions() {
+        const list = document.getElementById("suggestion-list");
+        if (!state.suggestions.length) {
+          list.innerHTML = '<p class="empty">No suggestions yet.</p>';
+          return;
+        }
+        list.innerHTML = state.suggestions
+          .slice(0, 12)
+          .map(
+            (item) => `
+              <article class="suggestion-card">
+                <strong>${escapeHtml(item.agent_id || "agent")}: ${escapeHtml(item.kind || "note")}</strong>
+                <div>${escapeHtml(item.message || "")}</div>
+              </article>
+            `
+          )
+          .join("");
+      }
+
+      async function updateTask(taskId, payload) {
+        await request(`/tasks/${encodeURIComponent(taskId)}`, {
+          method: "PUT",
+          body: JSON.stringify(payload),
         });
       }
 
-      function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+      async function completeTask(taskId) {
+        await request(`/tasks/${encodeURIComponent(taskId)}/complete`, {
+          method: "POST",
+          body: JSON.stringify({}),
+        });
       }
 
-      fetchTasks();
-      // Auto-refresh every 5 seconds
-      setInterval(fetchTasks, 5000);
+      async function deleteTask(taskId) {
+        await request(`/tasks/${encodeURIComponent(taskId)}`, { method: "DELETE" });
+      }
+
+      function wireColumnDnD() {
+        document.querySelectorAll(".column").forEach((column) => {
+          const status = column.dataset.status;
+          column.addEventListener("dragover", (event) => {
+            event.preventDefault();
+          });
+          column.addEventListener("drop", async (event) => {
+            event.preventDefault();
+            const card = document.querySelector(".task-card.dragging");
+            if (!card) return;
+            const taskId = card.dataset.taskId;
+            if (!taskId) return;
+            try {
+              await updateTask(taskId, { status });
+              await loadTasks();
+            } catch (err) {
+              alert(err instanceof Error ? err.message : String(err));
+            }
+          });
+        });
+      }
+
+      function wireActions() {
+        document.body.addEventListener("click", async (event) => {
+          const target = event.target;
+          if (!(target instanceof HTMLElement)) return;
+          const action = target.dataset.action;
+          const taskId = target.dataset.taskId;
+          if (!action || !taskId) return;
+
+          try {
+            if (action === "done") {
+              await completeTask(taskId);
+            } else if (action === "delete") {
+              await deleteTask(taskId);
+            } else if (action === "edit") {
+              const current = state.tasks.find((item) => item.id === taskId);
+              if (!current) return;
+              const nextTitle = window.prompt("Edit task title", current.title || "");
+              if (!nextTitle || !nextTitle.trim()) return;
+              await updateTask(taskId, { title: nextTitle.trim() });
+            }
+            await loadTasks();
+          } catch (err) {
+            alert(err instanceof Error ? err.message : String(err));
+          }
+        });
+      }
+
+      function connectStream() {
+        if (state.eventSource) {
+          state.eventSource.close();
+        }
+        const pill = document.getElementById("live-status");
+        const source = new EventSource("/board/stream");
+        state.eventSource = source;
+
+        source.onopen = () => {
+          pill.textContent = "SSE: connected";
+        };
+
+        source.onerror = () => {
+          pill.textContent = "SSE: reconnecting";
+        };
+
+        source.onmessage = (message) => {
+          try {
+            const payload = JSON.parse(message.data);
+            if (!payload || typeof payload !== "object") return;
+            if (payload.type === "heartbeat_review") {
+              const suggestions = Array.isArray(payload.suggestions) ? payload.suggestions : [];
+              const stamped = suggestions.map((item) => ({
+                ...item,
+                agent_id: payload.agent_id,
+                seen_at: payload.timestamp,
+              }));
+              state.suggestions = [...stamped, ...state.suggestions].slice(0, 40);
+              renderSuggestions();
+              return;
+            }
+            if (String(payload.type || "").startsWith("board_task_")) {
+              loadTasks();
+            }
+          } catch (_err) {
+            // ignore malformed events
+          }
+        };
+      }
+
+      function wireFilters() {
+        const mapping = {
+          "filter-agent": "agent_id",
+          "filter-priority": "priority",
+          "filter-type": "type",
+          "filter-created-by": "created_by",
+        };
+        for (const [id, key] of Object.entries(mapping)) {
+          const node = document.getElementById(id);
+          node.addEventListener("change", () => {
+            state.filters[key] = node.value || "";
+            loadTasks();
+          });
+        }
+      }
+
+      function wireModal() {
+        const modal = document.getElementById("task-modal");
+        const form = document.getElementById("task-form");
+        document.getElementById("add-task-btn").addEventListener("click", () => {
+          modal.classList.add("open");
+        });
+        document.getElementById("cancel-task-btn").addEventListener("click", () => {
+          modal.classList.remove("open");
+        });
+        modal.addEventListener("click", (event) => {
+          if (event.target === modal) {
+            modal.classList.remove("open");
+          }
+        });
+
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const data = new FormData(form);
+          const payload = {
+            title: String(data.get("title") || "").trim(),
+            type: String(data.get("type") || "chore"),
+            priority: String(data.get("priority") || "normal"),
+            agent_id: String(data.get("agent_id") || "").trim() || null,
+            created_by: String(data.get("created_by") || "human"),
+            metadata: {},
+          };
+          if (!payload.title) {
+            alert("Title is required");
+            return;
+          }
+          try {
+            await request("/tasks", { method: "POST", body: JSON.stringify(payload) });
+            form.reset();
+            modal.classList.remove("open");
+            await loadTasks();
+          } catch (err) {
+            alert(err instanceof Error ? err.message : String(err));
+          }
+        });
+      }
+
+      async function init() {
+        wireFilters();
+        wireColumnDnD();
+        wireActions();
+        wireModal();
+        document.getElementById("refresh-btn").addEventListener("click", () => loadTasks());
+        connectStream();
+        await loadTasks();
+        renderSuggestions();
+      }
+
+      init();
     </script>
   </body>
 </html>

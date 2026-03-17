@@ -41,13 +41,8 @@ from g3lobster.pool.tmux_spawn import TmuxSpawner
 logger = logging.getLogger(__name__)
 
 
-def _ensure_delegation_mcp_config(workspace_dir: str, server_port: int) -> None:
-    """Auto-register the delegation MCP server in Gemini CLI workspace settings.
-
-    Writes (or merges) a ``g3lobster-delegation`` entry into
-    ``<workspace>/.gemini/settings.json`` so that Gemini CLI can launch the
-    delegation stdio server with the correct ``--base-url``.
-    """
+def _load_gemini_settings(workspace_dir: str) -> tuple[Path, dict]:
+    """Load Gemini CLI workspace settings (or return an empty baseline)."""
     gemini_dir = Path(workspace_dir) / ".gemini"
     gemini_dir.mkdir(parents=True, exist_ok=True)
     settings_path = gemini_dir / "settings.json"
@@ -59,6 +54,18 @@ def _ensure_delegation_mcp_config(workspace_dir: str, server_port: int) -> None:
         except (json.JSONDecodeError, OSError):
             pass
 
+    return settings_path, settings
+
+
+def _write_gemini_settings(settings_path: Path, settings: dict) -> None:
+    settings_path.write_text(
+        json.dumps(settings, indent=2) + "\n", encoding="utf-8"
+    )
+
+
+def _ensure_delegation_mcp_config(workspace_dir: str, server_port: int) -> None:
+    """Auto-register the delegation MCP server in Gemini CLI workspace settings."""
+    settings_path, settings = _load_gemini_settings(workspace_dir)
     mcp_servers = settings.setdefault("mcpServers", {})
     base_url = f"http://127.0.0.1:{server_port}"
 
@@ -71,12 +78,43 @@ def _ensure_delegation_mcp_config(workspace_dir: str, server_port: int) -> None:
             base_url,
         ],
     }
+    mcp_servers["g3lobster-tasks"] = {
+        "command": sys.executable,
+        "args": [
+            "-m",
+            "g3lobster.mcp.tasks_server",
+            "--base-url",
+            base_url,
+        ],
+    }
 
-    settings_path.write_text(
-        json.dumps(settings, indent=2) + "\n", encoding="utf-8"
-    )
+    _write_gemini_settings(settings_path, settings)
     logger.info(
-        "Registered delegation MCP server in %s (base_url=%s)",
+        "Registered built-in MCP servers in %s (base_url=%s)",
+        settings_path,
+        base_url,
+    )
+
+
+def _ensure_cron_mcp_config(workspace_dir: str, server_port: int) -> None:
+    """Auto-register the cron MCP server in Gemini CLI workspace settings."""
+    settings_path, settings = _load_gemini_settings(workspace_dir)
+    mcp_servers = settings.setdefault("mcpServers", {})
+    base_url = f"http://127.0.0.1:{server_port}"
+
+    mcp_servers["g3lobster-cron"] = {
+        "command": sys.executable,
+        "args": [
+            "-m",
+            "g3lobster.mcp.cron_server",
+            "--base-url",
+            base_url,
+        ],
+    }
+
+    _write_gemini_settings(settings_path, settings)
+    logger.info(
+        "Registered cron MCP server in %s (base_url=%s)",
         settings_path,
         base_url,
     )
@@ -87,10 +125,15 @@ def build_runtime(config: AppConfig):
         workspace_dir=config.gemini.workspace_dir,
         server_port=config.server.port,
     )
+    _ensure_cron_mcp_config(
+        workspace_dir=config.gemini.workspace_dir,
+        server_port=config.server.port,
+    )
 
     mcp_loader = MCPConfigLoader(config_dir=config.mcp.config_dir)
     mcp_manager = MCPManager(loader=mcp_loader)
     global_memory_manager = GlobalMemoryManager(config.agents.data_dir)
+    board_store = None
     event_bus = EventBus()
 
     def process_factory(model_name: str, agent_id: str = "") -> GeminiProcess:
@@ -117,6 +160,8 @@ def build_runtime(config: AppConfig):
             memory_manager=memory_manager,
             context_builder=context_builder,
             default_mcp_servers=persona.mcp_servers or config.mcp.default_servers,
+            board_store=board_store,
+            event_bus=event_bus,
             heartbeat_enabled=heartbeat_enabled,
             heartbeat_interval_s=heartbeat_interval_s,
         )
@@ -315,7 +360,6 @@ def build_runtime(config: AppConfig):
     registry.chat_bridge = bridge_manager
 
     # Task board
-    board_store = None
     sheets_sync = None
     if config.tasks.enabled:
         from g3lobster.board.store import BoardStore

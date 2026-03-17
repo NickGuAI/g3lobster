@@ -9,6 +9,7 @@ import pytest
 from g3lobster.mcp.delegation_server import DEFAULT_BASE_URL, DelegationMCPHandler
 from g3lobster.mcp.loader import MCPConfigLoader
 from g3lobster.mcp.manager import MCPManager
+from g3lobster.mcp.tasks_server import TasksMCPHandler
 
 
 def test_mcp_loader_substitution_and_patterns(tmp_path) -> None:
@@ -203,6 +204,59 @@ def test_delegation_handler_parse_args_optional_parent_id() -> None:
     assert args.base_url == "http://localhost:9999"
 
 
+def test_tasks_handler_requires_agent_identity() -> None:
+    handler = TasksMCPHandler(agent_id="")
+    resp = handler.handle_request({
+        "method": "tools/call",
+        "id": 100,
+        "params": {"name": "list_tasks", "arguments": {}},
+    })
+    result = resp["result"]
+    assert result["isError"] is True
+    assert "G3LOBSTER_AGENT_ID" in result["content"][0]["text"]
+
+
+def test_tasks_handler_enforces_self_scoping() -> None:
+    handler = TasksMCPHandler(agent_id="alpha")
+
+    def fake_api_call(method, path, body=None, timeout_s=30):
+        if method == "GET":
+            return {"id": "task-1", "agent_id": "beta"}
+        raise AssertionError("unexpected API call")
+
+    handler._api_call = fake_api_call
+
+    resp = handler.handle_request({
+        "method": "tools/call",
+        "id": 101,
+        "params": {"name": "delete_task", "arguments": {"task_id": "task-1"}},
+    })
+    result = resp["result"]
+    assert result["isError"] is True
+    assert "another agent" in result["content"][0]["text"]
+
+
+def test_tasks_handler_list_injects_agent_filter() -> None:
+    handler = TasksMCPHandler(agent_id="alpha")
+    captured = {}
+
+    def fake_api_call(method, path, body=None, timeout_s=30):
+        captured["method"] = method
+        captured["path"] = path
+        return []
+
+    handler._api_call = fake_api_call
+    resp = handler.handle_request({
+        "method": "tools/call",
+        "id": 102,
+        "params": {"name": "list_tasks", "arguments": {"status": "todo", "limit": 5}},
+    })
+    assert "result" in resp
+    assert captured["method"] == "GET"
+    assert "agent_id=alpha" in captured["path"]
+    assert "status=todo" in captured["path"]
+
+
 # --- P1: DEFAULT_BASE_URL ---
 
 
@@ -247,6 +301,43 @@ tool_patterns:
     assert "list_agents" in patterns["g3lobster-delegation"]
 
 
+def test_cron_yaml_loadable(tmp_path) -> None:
+    """Cron MCP config is valid and loadable by MCPConfigLoader."""
+    config_dir = tmp_path / "mcp"
+    config_dir.mkdir()
+    (config_dir / "cron.yaml").write_text(
+        """\
+name: g3lobster-cron
+enabled: true
+transport:
+  type: stdio
+  command: python
+  args:
+    - -m
+    - g3lobster.mcp.cron_server
+description: Agent-scoped cron management tools
+tool_patterns:
+  - list_cron_jobs
+  - create_cron_job
+  - update_cron_job
+  - delete_cron_job
+  - run_cron_job
+  - get_cron_history
+""",
+        encoding="utf-8",
+    )
+
+    loader = MCPConfigLoader(str(config_dir))
+    configs = loader.load_all()
+
+    assert "g3lobster-cron" in configs
+    assert configs["g3lobster-cron"]["transport"]["type"] == "stdio"
+    patterns = loader.get_tool_patterns()
+    assert "g3lobster-cron" in patterns
+    assert "create_cron_job" in patterns["g3lobster-cron"]
+    assert "get_cron_history" in patterns["g3lobster-cron"]
+
+
 def test_ensure_delegation_mcp_config_creates_settings(tmp_path) -> None:
     """P0: Auto-registration creates correct Gemini CLI settings."""
     from g3lobster.main import _ensure_delegation_mcp_config
@@ -261,9 +352,32 @@ def test_ensure_delegation_mcp_config_creates_settings(tmp_path) -> None:
 
     settings = json.loads(settings_path.read_text(encoding="utf-8"))
     assert "g3lobster-delegation" in settings["mcpServers"]
+    assert "g3lobster-tasks" in settings["mcpServers"]
 
     server_config = settings["mcpServers"]["g3lobster-delegation"]
     assert server_config["args"][-1] == "http://127.0.0.1:40000"
+    assert "--base-url" in server_config["args"]
+    tasks_server_config = settings["mcpServers"]["g3lobster-tasks"]
+    assert tasks_server_config["args"][-1] == "http://127.0.0.1:40000"
+    assert tasks_server_config["args"][:2] == ["-m", "g3lobster.mcp.tasks_server"]
+
+
+def test_ensure_cron_mcp_config_creates_settings(tmp_path) -> None:
+    from g3lobster.main import _ensure_cron_mcp_config
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    _ensure_cron_mcp_config(workspace_dir=str(workspace), server_port=41000)
+
+    settings_path = workspace / ".gemini" / "settings.json"
+    assert settings_path.exists()
+
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert "g3lobster-cron" in settings["mcpServers"]
+
+    server_config = settings["mcpServers"]["g3lobster-cron"]
+    assert server_config["args"][-1] == "http://127.0.0.1:41000"
     assert "--base-url" in server_config["args"]
 
 
@@ -291,6 +405,31 @@ def test_ensure_delegation_mcp_config_preserves_existing(tmp_path) -> None:
     # Delegation entry added
     assert "g3lobster-delegation" in settings["mcpServers"]
     assert settings["mcpServers"]["g3lobster-delegation"]["args"][-1] == "http://127.0.0.1:20001"
+    assert "g3lobster-tasks" in settings["mcpServers"]
+    assert settings["mcpServers"]["g3lobster-tasks"]["args"][-1] == "http://127.0.0.1:20001"
+
+
+def test_ensure_cron_mcp_config_preserves_existing(tmp_path) -> None:
+    from g3lobster.main import _ensure_cron_mcp_config
+
+    gemini_dir = tmp_path / ".gemini"
+    gemini_dir.mkdir()
+    settings_path = gemini_dir / "settings.json"
+    settings_path.write_text(
+        json.dumps({
+            "mcpServers": {"my-custom-server": {"command": "node", "args": ["server.js"]}},
+            "otherSetting": True,
+        }),
+        encoding="utf-8",
+    )
+
+    _ensure_cron_mcp_config(workspace_dir=str(tmp_path), server_port=20001)
+
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert "my-custom-server" in settings["mcpServers"]
+    assert settings["otherSetting"] is True
+    assert "g3lobster-cron" in settings["mcpServers"]
+    assert settings["mcpServers"]["g3lobster-cron"]["args"][-1] == "http://127.0.0.1:20001"
 
 
 def test_skill_mcp_configs_loadable_from_repo() -> None:
@@ -298,7 +437,6 @@ def test_skill_mcp_configs_loadable_from_repo() -> None:
     loader = MCPConfigLoader(str(config_dir))
     configs = loader.load_all(
         env_vars={
-            "G3LOBSTER_TASKS_MCP_URL": "http://example.test/tasks",
             "G3LOBSTER_SUBAGENTS_MCP_URL": "http://example.test/subagents",
             "G3LOBSTER_MEMORY_MCP_URL": "http://example.test/memory",
         }
@@ -307,13 +445,27 @@ def test_skill_mcp_configs_loadable_from_repo() -> None:
     assert "g3lobster-tasks" in configs
     assert "g3lobster-subagents" in configs
     assert "g3lobster-memory" in configs
+    assert "g3lobster-cron" in configs
     patterns = loader.get_tool_patterns(
         env_vars={
-            "G3LOBSTER_TASKS_MCP_URL": "http://example.test/tasks",
             "G3LOBSTER_SUBAGENTS_MCP_URL": "http://example.test/subagents",
             "G3LOBSTER_MEMORY_MCP_URL": "http://example.test/memory",
         }
     )
-    assert patterns["g3lobster-tasks"] == ["g3lobster__tasks__*"]
+    assert patterns["g3lobster-tasks"] == [
+        "create_task",
+        "update_task",
+        "complete_task",
+        "list_tasks",
+        "delete_task",
+    ]
     assert patterns["g3lobster-subagents"] == ["g3lobster__subagents__*"]
     assert patterns["g3lobster-memory"] == ["g3lobster__memory__*"]
+    assert patterns["g3lobster-cron"] == [
+        "list_cron_jobs",
+        "create_cron_job",
+        "update_cron_job",
+        "delete_cron_job",
+        "run_cron_job",
+        "get_cron_history",
+    ]
