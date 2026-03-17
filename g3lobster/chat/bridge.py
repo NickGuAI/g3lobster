@@ -49,22 +49,6 @@ def _parse_ts(ts: str) -> datetime:
         return _EPOCH
 
 
-def _tool_name_for_display(event_data: Dict[str, object]) -> str:
-    """Extract a displayable tool name across Gemini CLI schema variants."""
-    for key in ("tool_name", "toolName", "tool", "name"):
-        value = event_data.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
-
-
-def _format_progress_text(persona, activity: str) -> str:
-    activity_text = activity.strip()
-    if not activity_text:
-        return f"{persona.emoji} _{persona.name} is thinking..._"
-    return f"{persona.emoji} _{persona.name} is doing {activity_text}..._"
-
-
 def _resolve_task_timeout_s(persona: object, registry: object) -> Optional[float]:
     timeout_s = getattr(persona, "response_timeout_s", None)
     if timeout_s is None:
@@ -468,6 +452,7 @@ class ChatBridge:
         final_result: Optional[str] = None
         final_error: Optional[str] = None
         _first_tool_use = False
+        heartbeat_ticks = 0
 
         async for event in runtime.assign_stream(task):
             stream_events.append(event)
@@ -480,34 +465,26 @@ class ChatBridge:
                     "text": event.text or None,
                 })
 
-            if event.event_type == StreamEventType.TOOL_USE:
-                # 🔥 — generating (first tool use only)
+            if event.event_type in (StreamEventType.TOOL_USE, StreamEventType.TOOL_RESULT, StreamEventType.MESSAGE):
+                # 🔥 — generating (first tool use/message only)
                 if not _first_tool_use and user_message_name:
                     _first_tool_use = True
                     reaction_name = await self.transition_reaction(
                         user_message_name, reaction_name, "🔥"
                     )
-                tool_name = _tool_name_for_display(event.data)
-                progress_text = _format_progress_text(persona, tool_name)
-                if thinking_name and progress_text != last_progress_text:
-                    await self.update_message(thinking_name, progress_text)
-                    last_progress_text = progress_text
-                    last_update_time = time.monotonic()
-            elif event.event_type == StreamEventType.MESSAGE:
-                # 🔥 — generating (first message event, if no tool use triggered it)
-                if not _first_tool_use and user_message_name:
-                    _first_tool_use = True
-                    reaction_name = await self.transition_reaction(
-                        user_message_name, reaction_name, "🔥"
-                    )
-                if event.text:
+                
+                if event.event_type == StreamEventType.MESSAGE and event.text:
                     accumulated_text += event.text
-                    now = time.monotonic()
-                    if thinking_name and now - last_update_time >= self.stream_update_interval_s:
-                        progress_text = f"{persona.emoji} {persona.name}: {accumulated_text}"
+
+                now = time.monotonic()
+                if thinking_name and now - last_update_time >= self.stream_update_interval_s:
+                    heartbeat_ticks += 1
+                    stars = "*" * ((heartbeat_ticks % 5) + 1)
+                    progress_text = f"{persona.emoji} ⏳ Thinking{stars}"
+                    if progress_text != last_progress_text:
                         await self.update_message(thinking_name, progress_text)
                         last_progress_text = progress_text
-                        last_update_time = now
+                    last_update_time = now
             elif event.event_type == StreamEventType.RESULT:
                 if event.data.get("status") == "error":
                     error_data = event.data.get("error") or {}

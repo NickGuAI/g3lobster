@@ -21,8 +21,8 @@ mcp:
   - '*'
 chat:
   enabled: true
-  space_id: spaces/AAQAkv5tdu8
-  space_name: myspace
+  space_id: spaces/YOUR_SPACE_ID
+  space_name: your-space-name
   poll_interval_s: 2
   concierge_enabled: true
   concierge_agent_id: concierge
@@ -35,7 +35,7 @@ server:
   port: 40000
 alerts:
   enabled: false
-  chat_space_id: ''
+  chat_space_id: spaces/YOUR_SPACE_ID
   webhook_url: ''
   email_address: ''
   min_severity: warning

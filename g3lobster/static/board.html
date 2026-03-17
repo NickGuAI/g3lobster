@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>g3lobster Kanban Board</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Roboto+Mono:wght@400&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/ui/css/zen.css" />
+    <style>
+      body {
+        background: #0f0f0f;
+        color: #e0e0e0;
+        font-family: 'Roboto', sans-serif;
+        margin: 0;
+        padding: 20px;
+      }
+      .board {
+        display: flex;
+        gap: 20px;
+        overflow-x: auto;
+        padding-bottom: 20px;
+      }
+      .column {
+        background: #1a1a1a;
+        border-radius: 8px;
+        min-width: 300px;
+        max-width: 350px;
+        display: flex;
+        flex-direction: column;
+        max-height: calc(100vh - 100px);
+      }
+      .column-header {
+        padding: 15px;
+        background: #252525;
+        border-radius: 8px 8px 0 0;
+        font-weight: 700;
+        text-transform: uppercase;
+        font-size: 0.9rem;
+        letter-spacing: 0.05rem;
+        border-bottom: 2px solid #333;
+      }
+      .task-list {
+        padding: 10px;
+        overflow-y: auto;
+        flex-grow: 1;
+      }
+      .task-card {
+        background: #2a2a2a;
+        border-radius: 6px;
+        padding: 12px;
+        margin-bottom: 10px;
+        border-left: 4px solid #444;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        cursor: pointer;
+        transition: transform 0.1s;
+      }
+      .task-card:hover {
+        transform: translateY(-2px);
+        background: #333;
+      }
+      .task-prompt {
+        font-size: 0.95rem;
+        margin-bottom: 8px;
+        line-height: 1.4;
+      }
+      .task-meta {
+        font-size: 0.75rem;
+        color: #888;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .agent-tag {
+        background: #3d3d3d;
+        color: #ccc;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-family: 'Roboto Mono', monospace;
+      }
+
+      /* Status colors */
+      .status-pending { border-left-color: #f1c40f; }
+      .status-running { border-left-color: #3498db; }
+      .status-completed { border-left-color: #2ecc71; }
+      .status-failed { border-left-color: #e74c3c; }
+      .status-canceled { border-left-color: #95a5a6; }
+
+      header {
+        margin-bottom: 30px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 1.8rem;
+      }
+      .refresh-btn {
+        background: #3498db;
+        color: white;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: 500;
+        margin-top: 10px;
+      }
+      .refresh-btn:hover { background: #2980b9; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Task Kanban Board</h1>
+      <button class="refresh-btn" onclick="fetchTasks()">SMASH TO REFRESH!!!</button>
+    </header>
+
+    <div class="board">
+      <div class="column" id="col-pending">
+        <div class="column-header">Pending</div>
+        <div class="task-list"></div>
+      </div>
+      <div class="column" id="col-running">
+        <div class="column-header">Running</div>
+        <div class="task-list"></div>
+      </div>
+      <div class="column" id="col-completed">
+        <div class="column-header">Completed</div>
+        <div class="task-list"></div>
+      </div>
+      <div class="column" id="col-terminal">
+        <div class="column-header">Failed / Canceled</div>
+        <div class="task-list"></div>
+      </div>
+    </div>
+
+    <script>
+      async function fetchTasks() {
+        try {
+          // Get the API key from some standard place if possible, 
+          // but for /ui it should be exempt if configured.
+          const response = await fetch('/board/tasks');
+          if (!response.ok) throw new Error('SMASH FAILED: ' + response.statusText);
+          const data = await response.json();
+          renderBoard(data.tasks);
+        } catch (err) {
+          console.error(err);
+          alert(err.message);
+        }
+      }
+
+      function renderBoard(tasks) {
+        const cols = {
+          pending: document.querySelector('#col-pending .task-list'),
+          running: document.querySelector('#col-running .task-list'),
+          completed: document.querySelector('#col-completed .task-list'),
+          terminal: document.querySelector('#col-terminal .task-list')
+        };
+
+        // Clear columns
+        Object.values(cols).forEach(el => el.innerHTML = '');
+
+        tasks.forEach(task => {
+          const card = document.createElement('div');
+          card.className = `task-card status-${task.status}`;
+          
+          let targetCol = cols.terminal;
+          if (task.status === 'pending') targetCol = cols.pending;
+          else if (task.status === 'running') targetCol = cols.running;
+          else if (task.status === 'completed') targetCol = cols.completed;
+
+          card.innerHTML = `
+            <div class="task-prompt">${escapeHtml(task.prompt)}</div>
+            <div class="task-meta">
+              <span class="agent-tag">${task.agent_id || 'unknown'}</span>
+              <span>${new Date(task.created_at * 1000).toLocaleTimeString()}</span>
+            </div>
+          `;
+          targetCol.appendChild(card);
+        });
+      }
+
+      function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+      }
+
+      fetchTasks();
+      // Auto-refresh every 5 seconds
+      setInterval(fetchTasks, 5000);
+    </script>
+  </body>
+</html>
