@@ -370,6 +370,10 @@ class AgentRegistry:
 
         setattr(agent, "heartbeat_space_sender", _heartbeat_space_sender)
 
+        # Wake message posted to space at the start of each heartbeat tick.
+        wake_msg = f"{persona.emoji} *{persona.name}* is awake — checking in now..."
+        setattr(agent, "heartbeat_wake_message", wake_msg)
+
         if hasattr(agent, "configure_heartbeat"):
             agent.configure_heartbeat(
                 enabled=persona.heartbeat_enabled,

@@ -1,5 +1,7 @@
 """Persistent markdown + JSONL memory management."""
 
+from __future__ import annotations
+
 # Seeded into every new agent's PROCEDURES.md on first init.
 # Uses permanent weight (10) so these are always injected into context.
 DEFAULT_PROCEDURES = """\
@@ -60,8 +62,6 @@ Steps:
 - Write a brief status update (3-5 sentences): what you accomplished, what is next, any blockers
 - Begin your status message with the emoji 📋 followed by Status Update:
 """
-
-from __future__ import annotations
 
 import re
 import threading

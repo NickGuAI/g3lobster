@@ -84,6 +84,7 @@ class GeminiAgent:
         self.heartbeat_event_publisher = heartbeat_event_publisher
         self.heartbeat_prompt_provider: Optional[Callable[[], object]] = None
         self.heartbeat_space_sender: Optional[Callable[[str], object]] = None
+        self.heartbeat_wake_message: Optional[str] = None
         self._heartbeat_task: Optional[asyncio.Task] = None
 
     def _persist_terminal_task(self, task: Task) -> None:
@@ -224,6 +225,16 @@ class GeminiAgent:
 
         if not prompt:
             return
+
+        # 3. Post wake message to the space before doing any work.
+        sender = self.heartbeat_space_sender
+        if callable(sender) and self.heartbeat_wake_message:
+            try:
+                result = sender(self.heartbeat_wake_message)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                logger.exception("Agent %s heartbeat wake message failed", self.id)
 
         self.state = AgentState.BUSY
         try:
