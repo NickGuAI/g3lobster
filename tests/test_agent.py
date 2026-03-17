@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from g3lobster.pool.agent import GeminiAgent
@@ -81,3 +83,67 @@ async def test_agent_assign_passes_session_id_to_process(memory_manager, mcp_man
     await agent.assign(task)
 
     assert process.session_ids == ["delegation-abc123"]
+
+
+@pytest.mark.asyncio
+async def test_agent_heartbeat_loop_publishes_reviews(memory_manager, mcp_manager, context_builder) -> None:
+    process = FakeProcess("done")
+    published = []
+
+    async def provider():
+        return {
+            "type": "heartbeat_review",
+            "summary": "Heartbeat check complete.",
+            "suggestions": [],
+            "stats": {"pending": 0, "in_progress": 0, "blocked": 0, "overdue": 0},
+        }
+
+    agent = GeminiAgent(
+        agent_id="agent-0",
+        process_factory=lambda: process,
+        mcp_manager=mcp_manager,
+        memory_manager=memory_manager,
+        context_builder=context_builder,
+        heartbeat_interval_s=0.05,
+        heartbeat_review_provider=provider,
+        heartbeat_event_publisher=lambda agent_id, event: published.append((agent_id, event)),
+    )
+    await agent.start()
+    await asyncio.sleep(0.14)
+    await agent.stop()
+
+    assert published
+    first_agent_id, first_event = published[0]
+    assert first_agent_id == "agent-0"
+    assert first_event["type"] == "heartbeat_review"
+    assert "timestamp" in first_event
+
+
+@pytest.mark.asyncio
+async def test_agent_heartbeat_loop_stops_with_agent(memory_manager, mcp_manager, context_builder) -> None:
+    process = FakeProcess("done")
+    published = []
+
+    agent = GeminiAgent(
+        agent_id="agent-0",
+        process_factory=lambda: process,
+        mcp_manager=mcp_manager,
+        memory_manager=memory_manager,
+        context_builder=context_builder,
+        heartbeat_interval_s=0.05,
+        heartbeat_review_provider=lambda: {
+            "type": "heartbeat_review",
+            "summary": "ok",
+            "suggestions": [],
+            "stats": {},
+        },
+        heartbeat_event_publisher=lambda _agent_id, event: published.append(event),
+    )
+    await agent.start()
+    await asyncio.sleep(0.08)
+    await agent.stop()
+
+    published_count_after_stop = len(published)
+    await asyncio.sleep(0.08)
+    assert len(published) == published_count_after_stop
+    assert agent.state == AgentState.STOPPED

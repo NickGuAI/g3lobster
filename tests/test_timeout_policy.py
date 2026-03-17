@@ -310,12 +310,58 @@ def test_persona_response_timeout_roundtrip(tmp_path: Path) -> None:
             id="luna",
             name="Luna",
             response_timeout_s=0,
+            heartbeat_enabled=False,
+            heartbeat_interval_s=123.0,
         ),
     )
 
     loaded = load_persona(data_dir, "luna")
     assert loaded is not None
     assert loaded.response_timeout_s == 0.0
+    assert loaded.heartbeat_enabled is False
+    assert loaded.heartbeat_interval_s == 123.0
+
+
+def test_health_inspector_builds_heartbeat_review_suggestions() -> None:
+    now = time.time()
+    inspector = HealthInspector()
+
+    stale = Task(prompt="Backlog cleanup", session_id="s1", agent_id="agent-1")
+    stale.status = TaskStatus.PENDING
+    stale.created_at = now - 9000
+
+    blocked = Task(prompt="Ship release", session_id="s2", agent_id="agent-1")
+    blocked.status = TaskStatus.RUNNING
+    blocked.started_at = now - 5400
+    blocked.error = "Waiting for human approval from release manager"
+
+    recurring_a = Task(prompt="Prepare weekly report", session_id="s3", agent_id="agent-1")
+    recurring_a.status = TaskStatus.COMPLETED
+    recurring_b = Task(prompt="Prepare weekly report", session_id="s4", agent_id="agent-1")
+    recurring_b.status = TaskStatus.COMPLETED
+    recurring_c = Task(prompt="Prepare weekly report", session_id="s5", agent_id="agent-1")
+    recurring_c.status = TaskStatus.COMPLETED
+
+    review = inspector.build_heartbeat_review(
+        agent_id="agent-1",
+        tasks=[stale, blocked, recurring_a, recurring_b, recurring_c],
+        goals=[
+            "- Keep backlog current and triaged",
+            "- Confirm release blockers daily",
+            "- Publish weekly report",
+            "- Track escalations",
+            "- Audit recurring operations",
+        ],
+        now=now,
+    )
+
+    categories = {item.category for item in review.suggestions}
+    assert "stale_or_overdue" in categories
+    assert "blocked_human_input" in categories
+    assert "proactive_task" in categories
+    assert "cron_candidate" in categories
+    assert review.stats["overdue"] >= 1
+    assert review.stats["blocked"] >= 1
 
 
 def test_env_override_zero_disables_response_timeout(tmp_path: Path, monkeypatch) -> None:

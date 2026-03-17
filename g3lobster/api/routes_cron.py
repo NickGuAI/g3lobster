@@ -28,6 +28,7 @@ class CronTaskUpdateRequest(BaseModel):
     schedule: Optional[str] = None
     instruction: Optional[str] = None
     enabled: Optional[bool] = None
+    dm_target: Optional[str] = None
 
 
 class CronValidateRequest(BaseModel):
@@ -134,14 +135,13 @@ async def create_cron_task(agent_id: str, payload: CronTaskCreateRequest, reques
         return asdict(task)
 
     store = _get_store(request)
-    task = store.add_task(agent_id, payload.schedule, payload.instruction)
-    if (not payload.enabled) or payload.dm_target is not None:
-        task = store.update_task(
-            agent_id,
-            task.id,
-            enabled=payload.enabled,
-            dm_target=payload.dm_target,
-        ) or task
+    task = store.add_task(
+        agent_id,
+        payload.schedule,
+        payload.instruction,
+        enabled=payload.enabled,
+        dm_target=payload.dm_target,
+    )
     _reload_manager(request)
     _audit_agent_fallback(
         context,
@@ -176,7 +176,7 @@ async def update_cron_task(agent_id: str, task_id: str, payload: CronTaskUpdateR
         return asdict(task)
 
     store = _get_store(request)
-    updates = payload.model_dump(exclude_none=True)
+    updates = payload.model_dump(exclude_unset=True)
     task = store.update_task(agent_id, task_id, **updates)
     if task is None:
         raise HTTPException(status_code=404, detail="Cron task not found")

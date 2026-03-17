@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import inspect
+import logging
 import time
+from datetime import datetime, timezone
 from typing import Callable, List, Optional
 
-from g3lobster.cli.parser import clean_text, split_reasoning, strip_reasoning
+from g3lobster.cli.parser import clean_text, split_reasoning
 from g3lobster.memory.context import ContextBuilder
 from g3lobster.memory.manager import MemoryManager
 from g3lobster.mcp.manager import MCPManager
 from g3lobster.pool.types import AgentState
 from g3lobster.tasks.types import Task, TaskStatus, TaskStore
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_timeout(timeout_s: Optional[float]) -> Optional[float]:
@@ -20,6 +27,13 @@ def _normalize_timeout(timeout_s: Optional[float]) -> Optional[float]:
     if timeout_value <= 0:
         return None
     return timeout_value
+
+
+def _normalize_heartbeat_interval(interval_s: float) -> float:
+    value = float(interval_s)
+    if value <= 0:
+        raise ValueError("heartbeat_interval_s must be > 0")
+    return value
 
 
 class GeminiAgent:
@@ -35,6 +49,10 @@ class GeminiAgent:
         default_mcp_servers: Optional[List[str]] = None,
         task_store: Optional[TaskStore] = None,
         subagent_spawner: Optional[object] = None,
+        heartbeat_enabled: bool = True,
+        heartbeat_interval_s: float = 300.0,
+        heartbeat_review_provider: Optional[Callable[[], object]] = None,
+        heartbeat_event_publisher: Optional[Callable[[str, dict], None]] = None,
     ):
         self.id = agent_id
         self.state = AgentState.STARTING
@@ -50,6 +68,11 @@ class GeminiAgent:
         self.busy_since: Optional[float] = None
         self.task_store = task_store
         self.subagent_spawner = subagent_spawner
+        self.heartbeat_enabled = bool(heartbeat_enabled)
+        self.heartbeat_interval_s = _normalize_heartbeat_interval(heartbeat_interval_s)
+        self.heartbeat_review_provider = heartbeat_review_provider
+        self.heartbeat_event_publisher = heartbeat_event_publisher
+        self._heartbeat_task: Optional[asyncio.Task] = None
 
     def _persist_terminal_task(self, task: Task) -> None:
         if not self.task_store:
@@ -75,14 +98,108 @@ class GeminiAgent:
         self.process = self._process_factory()
         await self.process.spawn(mcp_server_names=self.mcp_servers)
         self.state = AgentState.IDLE
+        self._start_heartbeat_loop()
 
     def is_alive(self) -> bool:
         return bool(self.process and self.process.is_alive())
 
     async def stop(self) -> None:
+        await self._stop_heartbeat_loop()
         if self.process:
             await self.process.kill()
         self.state = AgentState.STOPPED
+
+    def set_heartbeat_review_provider(self, provider: Optional[Callable[[], object]]) -> None:
+        self.heartbeat_review_provider = provider
+
+    def set_heartbeat_event_publisher(self, publisher: Optional[Callable[[str, dict], None]]) -> None:
+        self.heartbeat_event_publisher = publisher
+
+    def configure_heartbeat(
+        self,
+        *,
+        enabled: Optional[bool] = None,
+        interval_s: Optional[float] = None,
+    ) -> None:
+        was_enabled = self.heartbeat_enabled
+        restart_loop = False
+        if enabled is not None:
+            self.heartbeat_enabled = bool(enabled)
+        if interval_s is not None:
+            normalized = _normalize_heartbeat_interval(interval_s)
+            restart_loop = normalized != self.heartbeat_interval_s
+            self.heartbeat_interval_s = normalized
+
+        if not self.heartbeat_enabled:
+            if self._heartbeat_task and not self._heartbeat_task.done():
+                self._heartbeat_task.cancel()
+            return
+        if self.is_alive():
+            should_restart = restart_loop or (enabled is not None and self.heartbeat_enabled and not was_enabled)
+            self._start_heartbeat_loop(restart=should_restart)
+
+    def _start_heartbeat_loop(self, *, restart: bool = False) -> None:
+        if not self.heartbeat_enabled:
+            return
+        if self._heartbeat_task and not self._heartbeat_task.done():
+            if not restart:
+                return
+            self._heartbeat_task.cancel()
+        self._heartbeat_task = asyncio.create_task(
+            self._heartbeat_loop(),
+            name=f"g3lobster-heartbeat-{self.id}",
+        )
+
+    async def _stop_heartbeat_loop(self) -> None:
+        if not self._heartbeat_task:
+            return
+        self._heartbeat_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._heartbeat_task
+        self._heartbeat_task = None
+
+    async def _heartbeat_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(self.heartbeat_interval_s)
+                if not self.heartbeat_enabled:
+                    continue
+                await self._run_heartbeat_tick()
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # pragma: no cover - defensive path
+            logger.exception("Agent %s heartbeat loop failed", self.id)
+
+    async def _run_heartbeat_tick(self) -> None:
+        provider = self.heartbeat_review_provider
+        if not callable(provider):
+            return
+        try:
+            payload = provider()
+            if inspect.isawaitable(payload):
+                payload = await payload
+        except Exception:
+            logger.exception("Agent %s heartbeat review provider failed", self.id)
+            return
+        if payload is None:
+            return
+        if hasattr(payload, "as_event"):
+            payload = payload.as_event(self.id)
+        if not isinstance(payload, dict):
+            logger.warning("Agent %s heartbeat provider returned unsupported payload", self.id)
+            return
+
+        event = dict(payload)
+        event.setdefault("type", "heartbeat_review")
+        event.setdefault("timestamp", datetime.now(tz=timezone.utc).isoformat())
+
+        publisher = self.heartbeat_event_publisher
+        if not callable(publisher):
+            return
+        try:
+            publisher(self.id, event)
+        except Exception:
+            logger.exception("Agent %s heartbeat event publish failed", self.id)
 
     async def assign(self, task: Task) -> Task:
         if self.state not in {AgentState.IDLE, AgentState.BUSY}:

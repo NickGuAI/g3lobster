@@ -13,8 +13,15 @@ logger = logging.getLogger(__name__)
 class EventBus:
     """Per-agent pub/sub using asyncio.Queue per subscriber."""
 
+    _latest: "EventBus | None" = None
+
     def __init__(self) -> None:
         self._subscribers: Dict[str, list[asyncio.Queue]] = {}
+        EventBus._latest = self
+
+    @classmethod
+    def latest(cls) -> "EventBus | None":
+        return cls._latest
 
     def publish(self, agent_id: str, event: dict) -> None:
         """Publish an event to all subscribers for the given agent."""
@@ -26,6 +33,26 @@ class EventBus:
                 queue.put_nowait(event)
             except asyncio.QueueFull:
                 logger.debug("Dropping event for agent %s — subscriber queue full", agent_id)
+
+    def publish_heartbeat_review(
+        self,
+        agent_id: str,
+        *,
+        timestamp: str,
+        summary: str,
+        suggestions: list[dict],
+        stats: dict,
+    ) -> None:
+        self.publish(
+            agent_id,
+            {
+                "type": "heartbeat_review",
+                "timestamp": timestamp,
+                "summary": summary,
+                "suggestions": suggestions,
+                "stats": stats,
+            },
+        )
 
     @asynccontextmanager
     async def subscribe(self, agent_id: str, max_queue: int = 256) -> AsyncIterator[asyncio.Queue]:

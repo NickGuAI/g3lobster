@@ -133,7 +133,14 @@ class CronStore:
                 return task
         return None
 
-    def add_task(self, agent_id: str, schedule: str, instruction: str) -> CronTask:
+    def add_task(
+        self,
+        agent_id: str,
+        schedule: str,
+        instruction: str,
+        enabled: bool = True,
+        dm_target: Optional[str] = None,
+    ) -> CronTask:
         schedule = schedule.strip()
         self.validate_schedule(schedule)
         tasks = self._read_tasks(agent_id)
@@ -142,6 +149,8 @@ class CronStore:
             agent_id=agent_id,
             schedule=schedule,
             instruction=instruction.strip(),
+            enabled=bool(enabled),
+            dm_target=(dm_target.strip() if isinstance(dm_target, str) and dm_target.strip() else None),
         )
         tasks.append(task)
         self._write_tasks(agent_id, tasks)
@@ -156,6 +165,12 @@ class CronStore:
                 allowed = {"schedule", "instruction", "enabled", "last_run", "next_run", "dm_target"}
                 for key, value in kwargs.items():
                     if key in allowed:
+                        if key == "schedule" and isinstance(value, str):
+                            value = value.strip()
+                        elif key == "instruction" and isinstance(value, str):
+                            value = value.strip()
+                        elif key == "dm_target" and isinstance(value, str):
+                            value = value.strip() or None
                         setattr(tasks[i], key, value)
                 self._write_tasks(agent_id, tasks)
                 return tasks[i]

@@ -15,10 +15,11 @@ def test_cron_store_crud(tmp_path: Path):
     assert store.list_tasks(agent_id) == []
 
     # Add a task
-    task = store.add_task(agent_id, "0 9 * * *", "check email")
+    task = store.add_task(agent_id, "0 9 * * *", "check email", enabled=False, dm_target="nick@example.com")
     assert task.schedule == "0 9 * * *"
     assert task.instruction == "check email"
-    assert task.enabled is True
+    assert task.enabled is False
+    assert task.dm_target == "nick@example.com"
 
     # List tasks
     tasks = store.list_tasks(agent_id)
@@ -31,10 +32,19 @@ def test_cron_store_crud(tmp_path: Path):
     assert fetched.instruction == "check email"
 
     # Update task
-    updated = store.update_task(agent_id, task.id, schedule="*/5 * * * *", instruction="check slack")
+    updated = store.update_task(
+        agent_id,
+        task.id,
+        schedule="*/5 * * * *",
+        instruction="check slack",
+        enabled=True,
+        dm_target=None,
+    )
     assert updated is not None
     assert updated.schedule == "*/5 * * * *"
     assert updated.instruction == "check slack"
+    assert updated.enabled is True
+    assert updated.dm_target is None
 
     # Update non-existent
     assert store.update_task(agent_id, "no-such-id") is None
@@ -85,33 +95,68 @@ def test_cron_store_invalid_agent_id(tmp_path: Path):
 
 def test_cron_api_routes(tmp_path: Path):
     """Test cron REST endpoints via TestClient."""
+    from types import SimpleNamespace
+
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
     from g3lobster.api.routes_cron import router
     from g3lobster.cron.store import CronStore
+    from g3lobster.tasks.types import TaskStatus
+
+    class FakeRuntime:
+        async def assign(self, _task):
+            return SimpleNamespace(status=TaskStatus.COMPLETED, result="daily standup sent", error=None)
+
+    class FakeRegistry:
+        def __init__(self):
+            self.runtime = FakeRuntime()
+
+        def get_agent(self, _agent_id: str):
+            return self.runtime
+
+        async def start_agent(self, _agent_id: str) -> bool:
+            return True
 
     app = FastAPI()
     app.include_router(router)
     store = CronStore(data_dir=str(tmp_path))
     app.state.cron_store = store
     app.state.cron_manager = None
+    app.state.registry = FakeRegistry()
 
     # Ensure agent dir exists for the store
     (tmp_path / "my-agent").mkdir()
 
     with TestClient(app) as client:
+        # Validate schedule (valid + invalid)
+        resp = client.post("/agents/_cron/validate", json={"schedule": "0 9 * * 1-5"})
+        if resp.status_code == 200:
+            assert resp.json()["valid"] is True
+            assert "next_run" in resp.json()
+        else:
+            assert resp.status_code == 503
+            assert "apscheduler" in resp.json()["detail"]
+
+        resp = client.post("/agents/_cron/validate", json={"schedule": "not-a-cron"})
+        if resp.status_code == 200:
+            assert resp.json()["valid"] is False
+        else:
+            assert resp.status_code == 503
+            assert "apscheduler" in resp.json()["detail"]
+
         # Create
         resp = client.post("/agents/my-agent/crons", json={
             "schedule": "0 9 * * *",
             "instruction": "daily standup",
-            "enabled": False,
             "dm_target": "nick@example.com",
+            "enabled": False,
         })
         assert resp.status_code == 201
-        task_id = resp.json()["id"]
-        assert resp.json()["enabled"] is False
-        assert resp.json()["dm_target"] == "nick@example.com"
+        created = resp.json()
+        task_id = created["id"]
+        assert created["dm_target"] == "nick@example.com"
+        assert created["enabled"] is False
 
         # List
         resp = client.get("/agents/my-agent/crons")
@@ -121,18 +166,35 @@ def test_cron_api_routes(tmp_path: Path):
         # Update
         resp = client.put(f"/agents/my-agent/crons/{task_id}", json={
             "schedule": "0 10 * * *",
+            "enabled": True,
+            "dm_target": "alerts@example.com",
         })
         assert resp.status_code == 200
         assert resp.json()["schedule"] == "0 10 * * *"
+        assert resp.json()["dm_target"] == "alerts@example.com"
+        assert resp.json()["enabled"] is True
+
+        # Clear dm_target explicitly with null
+        resp = client.put(f"/agents/my-agent/crons/{task_id}", json={"dm_target": None})
+        assert resp.status_code == 200
+        assert resp.json()["dm_target"] is None
 
         # Update non-existent
         resp = client.put("/agents/my-agent/crons/bad-id", json={"enabled": False})
         assert resp.status_code == 404
 
-        # History (empty)
+        # Manual run + history
+        resp = client.post(f"/agents/my-agent/crons/{task_id}/run")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "completed"
+        assert "daily standup sent" in resp.json()["result_preview"]
+
         resp = client.get(f"/agents/my-agent/crons/{task_id}/history")
         assert resp.status_code == 200
-        assert resp.json()["runs"] == []
+        runs = resp.json()["runs"]
+        assert len(runs) == 1
+        assert runs[0]["status"] == "completed"
+        assert "daily standup sent" in runs[0]["result_preview"]
 
         # Delete
         resp = client.delete(f"/agents/my-agent/crons/{task_id}")
